@@ -37,7 +37,7 @@ mod tests {
 
     #[test]
     fn tokenizes_single_character_tokens() {
-        let src = "{}()=-<";
+        let src = "{}()=->";
 
         let tokens = tokenize(src).unwrap();
 

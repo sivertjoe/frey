@@ -16,6 +16,9 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, Error> {
             '\n' => {
                 cursor.bump();
             }
+            ';' => {
+                tokens.push(cursor.single(TokenKind::Semicolon));
+            }
             '{' => {
                 tokens.push(cursor.single(TokenKind::LeftBrace));
             }

@@ -77,12 +77,25 @@ impl<'a> Cursor<'a> {
     pub fn int(&mut self) -> Result<Token, Error> {
         let start = self.position();
 
-        let raw = self.take_while(|ch| ch.is_ascii_digit());
+        let digits = self.take_while(|ch| ch.is_ascii_digit()).to_string();
+
+        if self.peek().is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_') {
+            let suffix = self
+                .take_while(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+                .to_string();
+            return Err(Error {
+                kind: ErrorKind::InvalidIntegerSuffix(suffix),
+                span: Span {
+                    start,
+                    end: self.position(),
+                },
+            });
+        }
 
         // @TODO: handle long later
-        let Ok(value) = raw.parse::<i32>() else {
+        let Ok(value) = digits.parse::<i32>() else {
             return Err(Error {
-                kind: ErrorKind::InvalidInt(raw.to_string()),
+                kind: ErrorKind::InvalidInt(digits),
                 span: Span {
                     start,
                     end: self.position(),

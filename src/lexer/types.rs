@@ -35,6 +35,8 @@ pub enum TokenKind {
 
     Literal(Literal),
 
+    Semicolon,
+
     Eof,
 }
 
