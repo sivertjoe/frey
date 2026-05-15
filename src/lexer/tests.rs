@@ -79,7 +79,7 @@ mod tests {
 
     #[test]
     fn tokenizes_keywords() {
-        let src = "let int";
+        let src = "let Int return";
 
         let tokens = tokenize(src).unwrap();
 
@@ -94,7 +94,11 @@ mod tests {
                     kind: TokenKind::Int,
                     span: span(4, 1, 5, 7, 1, 8),
                 },
-                eof(7, 1, 8),
+                Token {
+                    kind: TokenKind::Return,
+                    span: span(8, 1, 9, 14, 1, 15),
+                },
+                eof(14, 1, 15),
             ]
         );
     }
@@ -157,7 +161,7 @@ mod tests {
 
     #[test]
     fn ignores_spaces_tabs_and_carriage_returns() {
-        let src = "let\t\r int";
+        let src = "let\t\r Int";
 
         let tokens = tokenize(src).unwrap();
 
@@ -179,7 +183,7 @@ mod tests {
 
     #[test]
     fn tracks_lines_and_columns() {
-        let src = "let x\nint y";
+        let src = "let x\nInt y";
 
         let tokens = tokenize(src).unwrap();
 
@@ -209,7 +213,7 @@ mod tests {
 
     #[test]
     fn tokenizes_small_declaration() {
-        let src = "let int x = 42";
+        let src = "let Int x = 42";
 
         let tokens = tokenize(src).unwrap();
 

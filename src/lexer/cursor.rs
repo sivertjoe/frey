@@ -118,7 +118,8 @@ impl<'a> Cursor<'a> {
 
         let kind = match raw {
             "let" => TokenKind::Let,
-            "int" => TokenKind::Int,
+            "Int" => TokenKind::Int,
+            "return" => TokenKind::Return,
             _ => TokenKind::Identifier(raw.to_string()),
         };
 

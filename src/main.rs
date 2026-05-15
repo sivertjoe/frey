@@ -1,3 +1,4 @@
+mod ast;
 mod lexer;
 
 use lexer::types::Span;
@@ -16,7 +17,15 @@ fn main() {
         }
     };
 
-    //println!("{:#?}", tokens);
+    let ast = match ast::parse(tokens) {
+        Ok(program) => program,
+        Err(err) => {
+            report(&file, &src, err.span, &err.kind.to_string());
+            std::process::exit(1);
+        }
+    };
+
+    println!("{:#?}", ast);
 }
 
 fn report(file: &str, src: &str, span: Span, message: &str) {
