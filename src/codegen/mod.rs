@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
+use inkwell::targets::TargetTriple;
 use inkwell::values::{FunctionValue, PointerValue};
 
 use crate::hir::types::{LocalId, Program};
@@ -24,9 +25,10 @@ pub struct Codegen<'ctx> {
 
 impl<'ctx> Codegen<'ctx> {
     pub fn new(context: &'ctx Context, module_name: &str) -> Self {
+        let module = context.create_module(module_name);
         Self {
             context,
-            module: context.create_module(module_name),
+            module,
             builder: context.create_builder(),
             locals: HashMap::new(),
             functions: HashMap::new(),
@@ -46,10 +48,6 @@ impl<'ctx> Codegen<'ctx> {
     pub fn module_ir(&self) -> String {
         self.module.print_to_string().to_string()
     }
-
-    pub fn module(&self) -> &Module<'ctx> {
-        &self.module
-    }
 }
 
 pub fn compile(program: Program) -> Result<String, Error> {
@@ -57,4 +55,14 @@ pub fn compile(program: Program) -> Result<String, Error> {
     let mut codegen = Codegen::new(&context, "frey");
     codegen.lower(program)?;
     Ok(codegen.module_ir())
+}
+
+fn host_triple() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "x86_64-pc-windows-msvc"
+    } else if cfg!(target_os = "macos") {
+        "x86_64-apple-darwin"
+    } else {
+        "x86_64-unknown-linux-gnu"
+    }
 }

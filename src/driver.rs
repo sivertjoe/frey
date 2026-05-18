@@ -10,10 +10,8 @@ use crate::hir::Program;
 pub enum Error {
     Codegen(codegen::Error),
     Io(std::io::Error),
-    LlcNotFound,
-    LlcFailed { code: Option<i32> },
-    LinkerNotFound,
-    LinkerFailed { command: String, code: Option<i32> },
+    ClangNotFound,
+    ClangFailed { code: Option<i32> },
 }
 
 impl From<codegen::Error> for Error {
@@ -33,18 +31,10 @@ impl std::fmt::Display for Error {
         match self {
             Error::Codegen(e) => write!(f, "codegen: {e}"),
             Error::Io(e) => write!(f, "io: {e}"),
-            Error::LlcNotFound => write!(f, "`llc` not found on PATH"),
-            Error::LlcFailed { code } => match code {
-                Some(c) => write!(f, "llc exited with status {c}"),
-                None => write!(f, "llc terminated by signal"),
-            },
-            Error::LinkerNotFound => write!(
-                f,
-                "no C compiler found on PATH (looked for $CC, cc, clang, gcc)"
-            ),
-            Error::LinkerFailed { command, code } => match code {
-                Some(c) => write!(f, "linker `{command}` exited with status {c}"),
-                None => write!(f, "linker `{command}` terminated by signal"),
+            Error::ClangNotFound => write!(f, "`clang` not found on PATH"),
+            Error::ClangFailed { code } => match code {
+                Some(c) => write!(f, "clang exited with status {c}"),
+                None => write!(f, "clang terminated by signal"),
             },
         }
     }
@@ -60,54 +50,30 @@ pub fn build(program: Program, output_path: &Path) -> Result<(), Error> {
     let ir_path = output_path.with_extension("ll");
     std::fs::write(&ir_path, codegen.module_ir())?;
 
-    let object_path = output_path.with_extension("o");
-    let llc = find_llc().ok_or(Error::LlcNotFound)?;
-    let llc_status = Command::new(&llc)
-        .arg(&ir_path)
-        .arg("-filetype=obj")
-        .arg("-o")
-        .arg(&object_path)
-        .status()?;
-    if !llc_status.success() {
-        return Err(Error::LlcFailed {
-            code: llc_status.code(),
-        });
+    if Command::new("clang").arg("--version").output().is_err() {
+        return Err(Error::ClangNotFound);
     }
 
-    let linker = find_linker().ok_or(Error::LinkerNotFound)?;
-    let status = Command::new(&linker)
-        .arg(&object_path)
+    let mut cmd = Command::new("clang");
+
+    #[cfg(target_os = "windows")]
+    if let Some(tool) =
+        cc::windows_registry::find_tool("x86_64-pc-windows-msvc", "cl.exe")
+    {
+        for (k, v) in tool.env() {
+            cmd.env(k, v);
+        }
+    }
+
+    let status = cmd
+        .arg("-Wno-override-module")
+        .arg(&ir_path)
         .arg("-o")
         .arg(output_path)
         .status()?;
     if !status.success() {
-        return Err(Error::LinkerFailed {
-            command: linker,
-            code: status.code(),
-        });
+        return Err(Error::ClangFailed { code: status.code() });
     }
 
     Ok(())
-}
-
-fn find_llc() -> Option<String> {
-    if let Ok(llc) = std::env::var("LLC") {
-        return Some(llc);
-    }
-    if Command::new("llc").arg("--version").output().is_ok() {
-        return Some("llc".to_string());
-    }
-    None
-}
-
-fn find_linker() -> Option<String> {
-    if let Ok(cc) = std::env::var("CC") {
-        return Some(cc);
-    }
-    for candidate in ["cc", "clang", "gcc"] {
-        if Command::new(candidate).arg("--version").output().is_ok() {
-            return Some(candidate.to_string());
-        }
-    }
-    None
 }
