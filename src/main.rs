@@ -1,6 +1,10 @@
 mod ast;
+mod codegen;
+mod driver;
 mod hir;
 mod lexer;
+
+use std::path::PathBuf;
 
 use lexer::types::Span;
 
@@ -34,7 +38,24 @@ fn main() {
         }
     };
 
-    println!("{:#?}", hir);
+    let output_path = output_path_for(&file);
+    if let Err(err) = driver::build(hir, &output_path) {
+        eprintln!("error: {err}");
+        std::process::exit(1);
+    }
+}
+
+fn output_path_for(input: &str) -> PathBuf {
+    let stem = PathBuf::from(input)
+        .file_stem()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("out"));
+    let ext = std::env::consts::EXE_EXTENSION;
+    if ext.is_empty() {
+        stem
+    } else {
+        stem.with_extension(ext)
+    }
 }
 
 fn report(file: &str, src: &str, span: Span, message: &str) {
