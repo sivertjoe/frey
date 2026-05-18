@@ -1,4 +1,5 @@
 mod ast;
+mod hir;
 mod lexer;
 
 use lexer::types::Span;
@@ -25,7 +26,15 @@ fn main() {
         }
     };
 
-    println!("{:#?}", ast);
+    let hir = match hir::lower(ast) {
+        Ok(program) => program,
+        Err(err) => {
+            report(&file, &src, err.span, &err.kind.to_string());
+            std::process::exit(1);
+        }
+    };
+
+    println!("{:#?}", hir);
 }
 
 fn report(file: &str, src: &str, span: Span, message: &str) {

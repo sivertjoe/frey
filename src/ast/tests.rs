@@ -30,6 +30,71 @@ mod tests {
     }
 
     #[test]
+    fn parses_function_type_with_params() {
+        let ty = parser("(Int, Int) -> Int").parse_type().unwrap();
+        let TypeExprKind::Function { params, return_ty } = ty.kind else {
+            panic!("expected function type");
+        };
+        assert_eq!(params.len(), 2);
+        assert!(matches!(params[0].kind, TypeExprKind::Int));
+        assert!(matches!(params[1].kind, TypeExprKind::Int));
+        assert!(matches!(return_ty.kind, TypeExprKind::Int));
+    }
+
+    #[test]
+    fn parses_function_literal_with_named_params() {
+        let expr = parser("(x: Int, y: Int) -> Int { return 0; }")
+            .parse_expr()
+            .unwrap();
+        let ExprKind::Function {
+            params,
+            return_ty,
+            ..
+        } = expr.kind
+        else {
+            panic!("expected function literal");
+        };
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0].name, "x");
+        assert!(matches!(params[0].ty.kind, TypeExprKind::Int));
+        assert_eq!(params[1].name, "y");
+        assert!(matches!(params[1].ty.kind, TypeExprKind::Int));
+        assert!(matches!(return_ty.kind, TypeExprKind::Int));
+    }
+
+    #[test]
+    fn parses_function_literal_with_higher_order_param() {
+        // param type is itself a function type
+        let expr = parser("(f: (Int) -> Int) -> Int { return 0; }")
+            .parse_expr()
+            .unwrap();
+        let ExprKind::Function { params, .. } = expr.kind else {
+            panic!("expected function literal");
+        };
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].name, "f");
+        let TypeExprKind::Function {
+            params: inner_params,
+            return_ty,
+        } = &params[0].ty.kind
+        else {
+            panic!("expected function type for param");
+        };
+        assert_eq!(inner_params.len(), 1);
+        assert!(matches!(inner_params[0].kind, TypeExprKind::Int));
+        assert!(matches!(return_ty.kind, TypeExprKind::Int));
+    }
+
+    #[test]
+    fn param_missing_colon_is_error() {
+        let err = parser("(x Int) -> Int { return 0; }")
+            .parse_expr()
+            .unwrap_err();
+        let msg = err.kind.to_string();
+        assert!(msg.contains("`:`"), "got: {msg}");
+    }
+
+    #[test]
     fn parses_nested_function_type() {
         let ty = parser("() -> () -> Int").parse_type().unwrap();
         let TypeExprKind::Function { return_ty, .. } = ty.kind else {
@@ -50,6 +115,40 @@ mod tests {
         let err = parser("=").parse_type().unwrap_err();
         let msg = err.kind.to_string();
         assert!(msg.contains("expected type"), "got: {msg}");
+    }
+
+    #[test]
+    fn parses_identifier_expression() {
+        let expr = parser("x").parse_expr().unwrap();
+        let ExprKind::Identifier(name) = expr.kind else {
+            panic!("expected identifier expression");
+        };
+        assert_eq!(name, "x");
+    }
+
+    #[test]
+    fn parses_return_of_identifier() {
+        let block = parser("{ return x; }").parse_block().unwrap();
+        let BlockItem::Statement(stmt) = &block.items[0] else {
+            panic!("expected statement");
+        };
+        let StatementKind::Return(expr) = &stmt.kind else {
+            panic!("expected return");
+        };
+        let ExprKind::Identifier(name) = &expr.kind else {
+            panic!("expected identifier in return");
+        };
+        assert_eq!(name, "x");
+    }
+
+    #[test]
+    fn parses_declaration_with_identifier_value() {
+        let decl = parser("let y = x;").parse_declaration().unwrap();
+        assert_eq!(decl.name, "y");
+        let ExprKind::Identifier(name) = &decl.value.kind else {
+            panic!("expected identifier value");
+        };
+        assert_eq!(name, "x");
     }
 
     #[test]
@@ -233,13 +332,59 @@ mod tests {
         assert!(params.is_empty());
         assert!(matches!(return_ty.kind, TypeExprKind::Int));
 
-        assert_eq!(body.items.len(), 1);
-        let BlockItem::Statement(stmt) = &body.items[0] else {
+        // `{ 0 }` — `0` is the tail expression, not a regular item.
+        assert!(body.items.is_empty());
+        let tail = body.tail.as_ref().expect("expected tail expression");
+        assert!(matches!(tail.kind, ExprKind::Const(Const::Int(0))));
+    }
+
+    #[test]
+    fn parses_block_with_tail_only() {
+        let block = parser("{ 7 }").parse_block().unwrap();
+        assert!(block.items.is_empty());
+        let tail = block.tail.as_ref().expect("expected tail");
+        assert!(matches!(tail.kind, ExprKind::Const(Const::Int(7))));
+    }
+
+    #[test]
+    fn parses_block_with_statement_and_tail() {
+        // `let x = 1; x` — one declaration item, then `x` as tail
+        let block = parser("{ let x = 1; x }").parse_block().unwrap();
+        assert_eq!(block.items.len(), 1);
+        let BlockItem::Declaration(Declaration { name, .. }) = &block.items[0] else {
+            panic!("expected declaration");
+        };
+        assert_eq!(name, "x");
+
+        let tail = block.tail.as_ref().expect("expected tail");
+        let ExprKind::Identifier(tail_name) = &tail.kind else {
+            panic!("expected identifier as tail");
+        };
+        assert_eq!(tail_name, "x");
+    }
+
+    #[test]
+    fn parses_bare_expr_statement_with_semicolon() {
+        // `x;` — bare expression *with* `;` is a discard statement, not a tail.
+        let block = parser("{ x; }").parse_block().unwrap();
+        assert_eq!(block.items.len(), 1);
+        assert!(block.tail.is_none());
+        let BlockItem::Statement(stmt) = &block.items[0] else {
             panic!("expected statement");
         };
         let StatementKind::Expr(expr) = &stmt.kind else {
-            panic!("expected bare-expression statement");
+            panic!("expected expression statement");
         };
-        assert!(matches!(expr.kind, ExprKind::Const(Const::Int(0))));
+        assert!(matches!(expr.kind, ExprKind::Identifier(_)));
+    }
+
+    #[test]
+    fn rejects_two_consecutive_bare_expressions() {
+        // `0 a` — `0` is not followed by `;` or `}`, so it can't be a statement
+        // or a tail. Should error with `expected \`;\` or \`}\``.
+        let err = parser("{ 0 a }").parse_block().unwrap_err();
+        let msg = err.kind.to_string();
+        assert!(msg.contains("`;`"), "got: {msg}");
+        assert!(msg.contains("`}`"), "got: {msg}");
     }
 }

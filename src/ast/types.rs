@@ -52,6 +52,7 @@ pub struct Block {
     pub id: NodeId,
     pub span: Span,
     pub items: Vec<BlockItem>,
+    pub tail: Option<Box<Expr>>,
 }
 
 #[derive(Debug)]
@@ -81,6 +82,7 @@ pub struct Expr {
 #[derive(Debug)]
 pub enum ExprKind {
     Const(Const),
+    Identifier(String),
     Function {
         params: Vec<Param>,
         return_ty: TypeExpr,
@@ -99,9 +101,6 @@ pub struct Param {
 pub enum Const {
     Int(i32),
 }
-
-// Debug impls omit `id` and `span` to keep printed ASTs readable.
-// Wrapper types (TypeExpr, Statement, Expr) delegate directly to their `kind`.
 
 impl fmt::Debug for TypeExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -142,6 +141,7 @@ impl fmt::Debug for Block {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Block")
             .field("items", &self.items)
+            .field("tail", &self.tail)
             .finish()
     }
 }

@@ -37,7 +37,7 @@ mod tests {
 
     #[test]
     fn tokenizes_single_character_tokens() {
-        let src = "{}()=->";
+        let src = "{}()=->,:";
 
         let tokens = tokenize(src).unwrap();
 
@@ -72,7 +72,15 @@ mod tests {
                     kind: TokenKind::GreaterThan,
                     span: span(6, 1, 7, 7, 1, 8),
                 },
-                eof(7, 1, 8),
+                Token {
+                    kind: TokenKind::Comma,
+                    span: span(7, 1, 8, 8, 1, 9),
+                },
+                Token {
+                    kind: TokenKind::Colon,
+                    span: span(8, 1, 9, 9, 1, 10),
+                },
+                eof(9, 1, 10),
             ]
         );
     }

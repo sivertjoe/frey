@@ -1,12 +1,13 @@
 use crate::{
-    ast::{error::Error, parser::Parser, types::Program},
+    ast::{error::Error, parser::Parser},
     lexer::types::Token,
 };
+
+pub use types::*;
 
 pub mod error;
 mod parser;
 mod token_iter;
-pub mod ty;
 pub mod types;
 
 pub fn parse(tokens: Vec<Token>) -> Result<Program, Error> {

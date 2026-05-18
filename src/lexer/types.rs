@@ -46,6 +46,8 @@ pub enum TokenKind {
     Literal(Literal),
 
     Semicolon,
+    Comma,
+    Colon,
 
     Eof,
 }
@@ -70,6 +72,8 @@ impl std::fmt::Display for TokenKind {
             TokenKind::GreaterThan => write!(f, "`>`"),
             TokenKind::Literal(lit) => write!(f, "{lit}"),
             TokenKind::Semicolon => write!(f, "`;`"),
+            TokenKind::Comma => write!(f, "`,`"),
+            TokenKind::Colon => write!(f, "`:`"),
             TokenKind::Return => write!(f, "`return`"),
 
             TokenKind::Eof => write!(f, "end of input"),

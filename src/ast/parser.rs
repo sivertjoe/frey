@@ -10,25 +10,30 @@ This should turn into
 program ::= { <declaration> }
 declaration ::= "let" <ident> "=" <expr>
 
-block ::= "{" { <block-item> } "}"
+block ::= "{" { <block-item> } [<expr>] "}"
 block-item ::=
-    <statement>
+    <declaration>
+    | <statement>
 
 statement ::=
     "return" <expr> ";"
-    <expr>
+    | <expr> ";"
 
 <expr> ::=
     <const>
+    | <ident>
     | <function-literal>
 
-<function-literal> ::= "(" ")" "->" <type> <block>
+<function-literal> ::= "(" [<params>] ")" "->" <type> <block>
+<params> ::= <param> { "," <param> }
+<param>  ::= <ident> ":" <type>
 
 <type> ::=
     "Int"
     | <function-type>
 
-<function-type> ::= "(" ")" "->" <type>
+<function-type> ::= "(" [<type-list>] ")" "->" <type>
+<type-list> ::= <type> { "," <type> }
 */
 
 use crate::{
@@ -36,8 +41,8 @@ use crate::{
         error::Error,
         token_iter::TokenIter,
         types::{
-            Block, BlockItem, Const, Declaration, Expr, ExprKind, NodeIdGen, Program, Statement,
-            StatementKind, TypeExpr, TypeExprKind,
+            Block, BlockItem, Const, Declaration, Expr, ExprKind, NodeIdGen, Param, Program,
+            Statement, StatementKind, TypeExpr, TypeExprKind,
         },
     },
     lexer::types::{Literal, Token, TokenKind},
@@ -112,16 +117,22 @@ impl Parser {
 
     pub(super) fn parse_function_type(&mut self) -> Result<TypeExpr, Error> {
         let left = self.expect(TokenKind::LeftParen)?.span;
+
+        let mut params = Vec::new();
+        while !matches!(self.iter.peek(), Some(t) if t.kind == TokenKind::RightParen) {
+            if !params.is_empty() {
+                self.expect(TokenKind::Comma)?;
+            }
+            params.push(self.parse_type()?);
+        }
+
         self.expect(TokenKind::RightParen)?;
         self.expect(TokenKind::Minus)?;
         self.expect(TokenKind::GreaterThan)?;
         let return_ty = Box::new(self.parse_type()?);
 
         let span = left.join(return_ty.span);
-        let kind = TypeExprKind::Function {
-            params: Vec::new(),
-            return_ty,
-        };
+        let kind = TypeExprKind::Function { params, return_ty };
         Ok(TypeExpr {
             id: self.id_gen.fresh(),
             span,
@@ -129,39 +140,66 @@ impl Parser {
         })
     }
 
-    pub(super) fn parse_block_item(&mut self) -> Result<BlockItem, Error> {
-        match &self.iter.peek().expect("lexer emits eof").kind {
-            TokenKind::Return => {
-                let start = self.expect(TokenKind::Return)?.span;
-                let expr = self.parse_expr()?;
-                let end = self.expect(TokenKind::Semicolon)?.span;
-                Ok(BlockItem::Statement(Statement {
-                    id: self.id_gen.fresh(),
-                    span: start.join(end),
-                    kind: StatementKind::Return(expr),
-                }))
-            }
-            TokenKind::Let => {
-                let decl = self.parse_declaration()?;
-                Ok(BlockItem::Declaration(decl))
-            }
-            _ => {
-                let expr = self.parse_expr()?;
-                Ok(BlockItem::Statement(Statement {
-                    id: self.id_gen.fresh(),
-                    span: expr.span,
-                    kind: StatementKind::Expr(expr),
-                }))
-            }
-        }
+    pub(super) fn parse_param(&mut self) -> Result<Param, Error> {
+        let start = self.iter.peek().expect("lexer emits eof").span;
+        let name = self.ident()?;
+        self.expect(TokenKind::Colon)?;
+        let ty = self.parse_type()?;
+        let span = start.join(ty.span);
+        Ok(Param {
+            id: self.id_gen.fresh(),
+            span,
+            name,
+            ty,
+        })
     }
 
     pub(super) fn parse_block(&mut self) -> Result<Block, Error> {
         let left = self.expect(TokenKind::LeftBrace)?.span;
         let mut items = Vec::new();
+        let mut tail = None;
 
-        while !matches!(self.iter.peek(), Some(tok) if tok.kind == TokenKind::RightBrace) {
-            items.push(self.parse_block_item()?);
+        while !matches!(self.iter.peek(), Some(t) if t.kind == TokenKind::RightBrace) {
+            match &self.iter.peek().expect("lexer emits eof").kind {
+                TokenKind::Let => {
+                    let decl = self.parse_declaration()?;
+                    items.push(BlockItem::Declaration(decl));
+                }
+                TokenKind::Return => {
+                    let start = self.expect(TokenKind::Return)?.span;
+                    let expr = self.parse_expr()?;
+                    let end = self.expect(TokenKind::Semicolon)?.span;
+                    items.push(BlockItem::Statement(Statement {
+                        id: self.id_gen.fresh(),
+                        span: start.join(end),
+                        kind: StatementKind::Return(expr),
+                    }));
+                }
+                _ => {
+                    // Bare expression: either followed by `;` (statement)
+                    // or `}` (this is the block's tail expression).
+                    let expr = self.parse_expr()?;
+                    let after_kind = self.iter.peek().expect("lexer emits eof").kind.clone();
+                    match after_kind {
+                        TokenKind::Semicolon => {
+                            let end = self.expect(TokenKind::Semicolon)?.span;
+                            items.push(BlockItem::Statement(Statement {
+                                id: self.id_gen.fresh(),
+                                span: expr.span.join(end),
+                                kind: StatementKind::Expr(expr),
+                            }));
+                        }
+                        TokenKind::RightBrace => {
+                            tail = Some(Box::new(expr));
+                            break;
+                        }
+                        _ => {
+                            let next = self.iter.peek().expect("lexer emits eof");
+                            return Err(Error::unexpected(next, "`;` or `}`"));
+                        }
+                    }
+                }
+            }
         }
 
         let right = self.expect(TokenKind::RightBrace)?.span;
@@ -171,6 +209,7 @@ impl Parser {
             id: self.id_gen.fresh(),
             span,
             items,
+            tail,
         })
     }
 
@@ -188,8 +227,29 @@ impl Parser {
                     kind: ExprKind::Const(Const::Int(value)),
                 })
             }
+            TokenKind::Identifier(_) => {
+                let span = tok.span;
+                let consumed = self.iter.consume().unwrap();
+                let TokenKind::Identifier(name) = consumed.kind else {
+                    unreachable!("peek matched Identifier")
+                };
+                Ok(Expr {
+                    id: self.id_gen.fresh(),
+                    span,
+                    kind: ExprKind::Identifier(name),
+                })
+            }
             TokenKind::LeftParen => {
                 let left = self.expect(TokenKind::LeftParen)?;
+
+                let mut params = Vec::new();
+                while !matches!(self.iter.peek(), Some(t) if t.kind == TokenKind::RightParen) {
+                    if !params.is_empty() {
+                        self.expect(TokenKind::Comma)?;
+                    }
+                    params.push(self.parse_param()?);
+                }
+
                 self.expect(TokenKind::RightParen)?;
                 self.expect(TokenKind::Minus)?;
                 self.expect(TokenKind::GreaterThan)?;
@@ -198,7 +258,7 @@ impl Parser {
 
                 let span = left.span.join(body.span);
                 let kind = ExprKind::Function {
-                    params: Vec::new(),
+                    params,
                     return_ty,
                     body,
                 };
