@@ -28,8 +28,6 @@ impl Lower {
         }
     }
     pub fn lower_program(&mut self, p: ast::Program) -> Result<Program, Error> {
-        let mut decls = Vec::new();
-
         let span = p
             .declarations
             .first()
@@ -37,6 +35,11 @@ impl Lower {
             .span
             .join(p.declarations.last().unwrap().span);
 
+        for decl in &p.declarations {
+            self.pre_register_top_level(decl)?;
+        }
+
+        let mut decls = Vec::new();
         for decl in p.declarations {
             decls.push(self.lower_declaration(decl)?);
         }
@@ -47,8 +50,42 @@ impl Lower {
         })
     }
 
-    fn lower_declaration(&mut self, d: ast::Declaration) -> Result<Declaration, Error> {
+    fn pre_register_top_level(&mut self, d: &ast::Declaration) -> Result<(), Error> {
+        let ast::ExprKind::Function {
+            params, return_ty, ..
+        } = &d.value.kind
+        else {
+            return Ok(());
+        };
+
         if self.current_scope().contains_key(&d.name) {
+            return Err(Error {
+                span: d.span,
+                kind: ErrorKind::AlreadyDefined { name: d.name.clone() },
+            });
+        }
+
+        let param_tys = params
+            .iter()
+            .map(|p| self.lower_type(&p.ty))
+            .collect::<Result<Vec<_>, _>>()?;
+        let return_ty = Box::new(self.lower_type(return_ty)?);
+        let ty = Ty::Function {
+            params: param_tys,
+            return_ty,
+        };
+
+        let id = self.id_gen.fresh();
+        self.current_scope_mut().insert(d.name.clone(), id);
+        self.bindings.insert(id, ty);
+        Ok(())
+    }
+
+    fn lower_declaration(&mut self, d: ast::Declaration) -> Result<Declaration, Error> {
+        let pre_registered = matches!(d.value.kind, ast::ExprKind::Function { .. })
+            && self.current_scope().contains_key(&d.name);
+
+        if !pre_registered && self.current_scope().contains_key(&d.name) {
             return Err(Error {
                 span: d.span,
                 kind: ErrorKind::AlreadyDefined { name: d.name },
@@ -57,10 +94,15 @@ impl Lower {
 
         let value = self.lower_expr(d.value)?;
         let ty = value.ty.clone();
-        let id = self.id_gen.fresh();
 
-        self.current_scope_mut().insert(d.name.clone(), id);
-        self.bindings.insert(id, ty.clone());
+        let id = if pre_registered {
+            *self.current_scope().get(&d.name).unwrap()
+        } else {
+            let id = self.id_gen.fresh();
+            self.current_scope_mut().insert(d.name.clone(), id);
+            self.bindings.insert(id, ty.clone());
+            id
+        };
 
         Ok(Declaration {
             id,
@@ -102,14 +144,14 @@ impl Lower {
                 return_ty,
                 body,
             } => {
-                let return_ty = self.lower_type(return_ty)?;
+                let return_ty = self.lower_type(&return_ty)?;
 
                 self.enter_scope();
 
                 let mut hir_params = Vec::new();
                 let mut param_tys = Vec::new();
                 for p in params {
-                    let ty = self.lower_type(p.ty)?;
+                    let ty = self.lower_type(&p.ty)?;
                     let id = self.id_gen.fresh();
                     self.current_scope_mut().insert(p.name.clone(), id);
                     self.bindings.insert(id, ty.clone());
@@ -189,15 +231,15 @@ impl Lower {
         Ok(Statement { span: s.span, kind })
     }
 
-    fn lower_type(&mut self, t: ast::TypeExpr) -> Result<Ty, Error> {
-        match t.kind {
+    fn lower_type(&mut self, t: &ast::TypeExpr) -> Result<Ty, Error> {
+        match &t.kind {
             ast::TypeExprKind::Int => Ok(Ty::Int),
             ast::TypeExprKind::Function { params, return_ty } => {
                 let params = params
-                    .into_iter()
+                    .iter()
                     .map(|p| self.lower_type(p))
                     .collect::<Result<Vec<_>, _>>()?;
-                let return_ty = Box::new(self.lower_type(*return_ty)?);
+                let return_ty = Box::new(self.lower_type(return_ty)?);
                 Ok(Ty::Function { params, return_ty })
             }
         }

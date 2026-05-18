@@ -11,6 +11,9 @@ impl<'ctx> Codegen<'ctx> {
                 Ok(i32_ty.const_int(n as u64, true).into())
             }
             ExprKind::Local(id) => {
+                if let Some(func) = self.functions.get(&id) {
+                    return Ok(func.as_global_value().as_pointer_value().into());
+                }
                 let ptr = *self.locals.get(&id).expect("local binding exists");
                 let llvm_ty = self.lower_ty(&expr.ty);
                 Ok(self.builder.build_load(llvm_ty, ptr, "")?)
