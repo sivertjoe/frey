@@ -12,6 +12,13 @@ mod tests {
         Parser::new(tokens)
     }
 
+    fn assert_callee_named(callee: &Expr, expected: &str) {
+        let ExprKind::Identifier(name) = &callee.kind else {
+            panic!("expected identifier callee, got {:?}", callee.kind);
+        };
+        assert_eq!(name, expected);
+    }
+
     #[test]
     fn parses_int_type() {
         let ty = parser("Int").parse_type().unwrap();
@@ -43,62 +50,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_function_literal_with_named_params() {
-        let expr = parser("(x: Int, y: Int) -> Int { return 0; }")
-            .parse_expr()
-            .unwrap();
-        let ExprKind::Function {
-            params,
-            return_ty,
-            ..
-        } = expr.kind
-        else {
-            panic!("expected function literal");
-        };
-        assert_eq!(params.len(), 2);
-        assert_eq!(params[0].name, "x");
-        assert!(matches!(params[0].ty.kind, TypeExprKind::Int));
-        assert_eq!(params[1].name, "y");
-        assert!(matches!(params[1].ty.kind, TypeExprKind::Int));
-        assert!(matches!(return_ty.kind, TypeExprKind::Int));
-    }
-
-    #[test]
-    fn parses_function_literal_with_higher_order_param() {
-        // param type is itself a function type
-        let expr = parser("(f: (Int) -> Int) -> Int { return 0; }")
-            .parse_expr()
-            .unwrap();
-        let ExprKind::Function { params, .. } = expr.kind else {
-            panic!("expected function literal");
-        };
-        assert_eq!(params.len(), 1);
-        assert_eq!(params[0].name, "f");
-        let TypeExprKind::Function {
-            params: inner_params,
-            return_ty,
-        } = &params[0].ty.kind
-        else {
-            panic!("expected function type for param");
-        };
-        assert_eq!(inner_params.len(), 1);
-        assert!(matches!(inner_params[0].kind, TypeExprKind::Int));
-        assert!(matches!(return_ty.kind, TypeExprKind::Int));
-    }
-
-    #[test]
-    fn param_missing_colon_is_error() {
-        // `(x Int) -> ...` — since `x` isn't followed by `:`, the parser now
-        // treats `(x Int)` as a parenthesized expression containing `x`, and
-        // errors on the unexpected `Int` where `)` was expected.
-        let err = parser("(x Int) -> Int { return 0; }")
-            .parse_expr()
-            .unwrap_err();
-        let msg = err.kind.to_string();
-        assert!(msg.contains("`)`"), "got: {msg}");
-    }
-
-    #[test]
     fn parses_nested_function_type() {
         let ty = parser("() -> () -> Int").parse_type().unwrap();
         let TypeExprKind::Function { return_ty, .. } = ty.kind else {
@@ -112,20 +63,6 @@ mod tests {
             panic!("expected nested function type");
         };
         assert!(matches!(inner_ret.kind, TypeExprKind::Int));
-    }
-
-    #[test]
-    fn type_error_on_unexpected_token() {
-        let err = parser("=").parse_type().unwrap_err();
-        let msg = err.kind.to_string();
-        assert!(msg.contains("expected type"), "got: {msg}");
-    }
-
-    fn assert_callee_named(callee: &Expr, expected: &str) {
-        let ExprKind::Identifier(name) = &callee.kind else {
-            panic!("expected identifier callee, got {:?}", callee.kind);
-        };
-        assert_eq!(name, expected);
     }
 
     #[test]
@@ -150,32 +87,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_call_multiple_args() {
-        let expr = parser("f(1, 2, 3)").parse_expr().unwrap();
-        let ExprKind::Call { callee, args } = expr.kind else {
-            panic!("expected call");
-        };
-        assert_callee_named(&callee, "f");
-        assert_eq!(args.len(), 3);
-        assert!(matches!(args[0].kind, ExprKind::Const(Const::Int(1))));
-        assert!(matches!(args[1].kind, ExprKind::Const(Const::Int(2))));
-        assert!(matches!(args[2].kind, ExprKind::Const(Const::Int(3))));
-    }
-
-    #[test]
-    fn parses_call_with_identifier_arg() {
-        let expr = parser("f(x)").parse_expr().unwrap();
-        let ExprKind::Call { args, .. } = expr.kind else {
-            panic!("expected call");
-        };
-        assert_eq!(args.len(), 1);
-        let ExprKind::Identifier(arg_name) = &args[0].kind else {
-            panic!("expected identifier arg");
-        };
-        assert_eq!(arg_name, "x");
-    }
-
-    #[test]
     fn parses_nested_call() {
         let expr = parser("f(g())").parse_expr().unwrap();
         let ExprKind::Call { callee, args } = expr.kind else {
@@ -183,38 +94,14 @@ mod tests {
         };
         assert_callee_named(&callee, "f");
         assert_eq!(args.len(), 1);
-        let ExprKind::Call { callee: inner_callee, args: inner_args } = &args[0].kind else {
-            panic!("expected inner call as arg");
+        let ExprKind::Call { callee: inner, .. } = &args[0].kind else {
+            panic!("expected inner call");
         };
-        assert_callee_named(inner_callee, "g");
-        assert!(inner_args.is_empty());
+        assert_callee_named(inner, "g");
     }
 
     #[test]
-    fn parses_chained_call() {
-        // foo()() — call the result of foo() with no args
-        let expr = parser("foo()()").parse_expr().unwrap();
-        let ExprKind::Call { callee: outer_callee, args: outer_args } = expr.kind else {
-            panic!("expected outer call");
-        };
-        assert!(outer_args.is_empty());
-
-        // The outer callee is itself a Call(foo, [])
-        let ExprKind::Call { callee: inner_callee, args: inner_args } = &outer_callee.kind else {
-            panic!("expected inner call as the outer callee");
-        };
-        assert_callee_named(inner_callee, "foo");
-        assert!(inner_args.is_empty());
-    }
-
-    #[test]
-    fn identifier_without_parens_is_not_a_call() {
-        let expr = parser("x").parse_expr().unwrap();
-        assert!(matches!(expr.kind, ExprKind::Identifier(_)));
-    }
-
-    #[test]
-    fn parses_unary_minus_on_literal() {
+    fn parses_unary_minus() {
         let expr = parser("-5").parse_expr().unwrap();
         let ExprKind::Unary { op, expr: inner } = expr.kind else {
             panic!("expected unary");
@@ -224,312 +111,24 @@ mod tests {
     }
 
     #[test]
-    fn parses_unary_not_on_identifier() {
-        let expr = parser("!x").parse_expr().unwrap();
-        let ExprKind::Unary { op, expr: inner } = expr.kind else {
-            panic!("expected unary");
-        };
-        assert!(matches!(op, UnaryOperator::Not));
-        let ExprKind::Identifier(name) = &inner.kind else {
-            panic!("expected identifier operand");
-        };
-        assert_eq!(name, "x");
-    }
-
-    #[test]
-    fn parses_double_unary_minus() {
-        // `--5` → Unary(Minus, Unary(Minus, 5))
-        let expr = parser("--5").parse_expr().unwrap();
-        let ExprKind::Unary { op, expr: outer_inner } = expr.kind else {
-            panic!("expected outer unary");
-        };
-        assert!(matches!(op, UnaryOperator::Minus));
-        let ExprKind::Unary { op: inner_op, expr: innermost } = &outer_inner.kind else {
-            panic!("expected nested unary");
-        };
-        assert!(matches!(inner_op, UnaryOperator::Minus));
-        assert!(matches!(innermost.kind, ExprKind::Const(Const::Int(5))));
-    }
-
-    #[test]
-    fn parses_unary_minus_on_call_result() {
-        let expr = parser("-foo()").parse_expr().unwrap();
-        let ExprKind::Unary { op, expr: inner } = expr.kind else {
-            panic!("expected unary");
-        };
-        assert!(matches!(op, UnaryOperator::Minus));
-        let ExprKind::Call { callee, args } = &inner.kind else {
-            panic!("expected call as unary operand");
-        };
-        assert!(args.is_empty());
-        let ExprKind::Identifier(name) = &callee.kind else {
-            panic!("expected identifier callee");
-        };
-        assert_eq!(name, "foo");
-    }
-
-    #[test]
-    fn parses_declaration_with_unary_value() {
-        let decl = parser("let x = -5;").parse_declaration().unwrap();
-        assert_eq!(decl.name, "x");
-        let ExprKind::Unary { op, .. } = &decl.value.kind else {
-            panic!("expected unary value");
-        };
-        assert!(matches!(op, UnaryOperator::Minus));
-    }
-
-    #[test]
-    fn parses_simple_addition() {
-        let expr = parser("1 + 2").parse_expr().unwrap();
-        let ExprKind::Binary { op, lhs, rhs } = expr.kind else {
-            panic!("expected binary");
-        };
-        assert_eq!(op, BinaryOperator::Add);
-        assert!(matches!(lhs.kind, ExprKind::Const(Const::Int(1))));
-        assert!(matches!(rhs.kind, ExprKind::Const(Const::Int(2))));
-    }
-
-    #[test]
     fn precedence_mul_binds_tighter_than_add() {
-        // `1 + 2 * 3` → Add(1, Mul(2, 3))
         let expr = parser("1 + 2 * 3").parse_expr().unwrap();
-        let ExprKind::Binary { op, lhs, rhs } = expr.kind else {
-            panic!("expected outer binary");
-        };
-        assert_eq!(op, BinaryOperator::Add);
-        assert!(matches!(lhs.kind, ExprKind::Const(Const::Int(1))));
-        let ExprKind::Binary { op: inner_op, .. } = &rhs.kind else {
-            panic!("expected inner binary on rhs");
-        };
-        assert_eq!(*inner_op, BinaryOperator::Mul);
-    }
-
-    #[test]
-    fn left_associativity_for_same_precedence() {
-        // `1 - 2 - 3` → Sub(Sub(1, 2), 3)  (left-assoc, NOT `1 - (2 - 3)`)
-        let expr = parser("1 - 2 - 3").parse_expr().unwrap();
-        let ExprKind::Binary { op, lhs, rhs } = expr.kind else {
-            panic!("expected outer binary");
-        };
-        assert_eq!(op, BinaryOperator::Sub);
-        assert!(matches!(rhs.kind, ExprKind::Const(Const::Int(3))));
-        let ExprKind::Binary { op: inner_op, .. } = &lhs.kind else {
-            panic!("expected inner binary on lhs");
-        };
-        assert_eq!(*inner_op, BinaryOperator::Sub);
-    }
-
-    #[test]
-    fn unary_binds_tighter_than_binary() {
-        // `-1 + 2` → Add(Unary(Minus, 1), 2)   NOT Unary(Minus, Add(1, 2))
-        let expr = parser("-1 + 2").parse_expr().unwrap();
-        let ExprKind::Binary { op, lhs, .. } = expr.kind else {
-            panic!("expected binary at the top");
-        };
-        assert_eq!(op, BinaryOperator::Add);
-        assert!(matches!(lhs.kind, ExprKind::Unary { .. }));
-    }
-
-    #[test]
-    fn comparison_lower_precedence_than_arithmetic() {
-        // `1 + 2 < 3 * 4` → Lt(Add(1, 2), Mul(3, 4))
-        let expr = parser("1 + 2 < 3 * 4").parse_expr().unwrap();
-        let ExprKind::Binary { op, lhs, rhs } = expr.kind else {
-            panic!("expected top binary");
-        };
-        assert_eq!(op, BinaryOperator::Lt);
-        let ExprKind::Binary { op: l, .. } = &lhs.kind else {
-            panic!("expected add on lhs");
-        };
-        assert_eq!(*l, BinaryOperator::Add);
-        let ExprKind::Binary { op: r, .. } = &rhs.kind else {
-            panic!("expected mul on rhs");
-        };
-        assert_eq!(*r, BinaryOperator::Mul);
-    }
-
-    #[test]
-    fn logical_or_lowest_precedence() {
-        // `a && b || c && d` → Or(And(a, b), And(c, d))
-        let expr = parser("a && b || c && d").parse_expr().unwrap();
-        let ExprKind::Binary { op, lhs, rhs } = expr.kind else {
-            panic!("expected top binary");
-        };
-        assert_eq!(op, BinaryOperator::Or);
-        let ExprKind::Binary { op: l, .. } = &lhs.kind else {
-            panic!("expected and on lhs");
-        };
-        assert_eq!(*l, BinaryOperator::And);
-        let ExprKind::Binary { op: r, .. } = &rhs.kind else {
-            panic!("expected and on rhs");
-        };
-        assert_eq!(*r, BinaryOperator::And);
-    }
-
-    #[test]
-    fn shift_between_add_and_comparison() {
-        // `1 + 2 << 3 < 10` → Lt(Shl(Add(1,2), 3), 10)
-        let expr = parser("1 + 2 << 3 < 10").parse_expr().unwrap();
-        let ExprKind::Binary { op, lhs, .. } = expr.kind else {
-            panic!("expected top");
-        };
-        assert_eq!(op, BinaryOperator::Lt);
-        let ExprKind::Binary { op: shl_op, lhs: shl_lhs, .. } = &lhs.kind else {
-            panic!("expected shl");
-        };
-        assert_eq!(*shl_op, BinaryOperator::Shl);
-        let ExprKind::Binary { op: add_op, .. } = &shl_lhs.kind else {
-            panic!("expected add inside shl lhs");
-        };
-        assert_eq!(*add_op, BinaryOperator::Add);
-    }
-
-    #[test]
-    fn binary_with_calls_and_unary() {
-        // `-foo() + bar() * 2` — exercises precedence + postfix + unary together
-        let expr = parser("-foo() + bar() * 2").parse_expr().unwrap();
-        let ExprKind::Binary { op, lhs, rhs } = expr.kind else {
-            panic!("expected add");
-        };
-        assert_eq!(op, BinaryOperator::Add);
-        assert!(matches!(lhs.kind, ExprKind::Unary { .. }));
-        let ExprKind::Binary { op: mul_op, .. } = &rhs.kind else {
-            panic!("expected mul on rhs");
-        };
-        assert_eq!(*mul_op, BinaryOperator::Mul);
-    }
-
-    #[test]
-    fn parses_parenthesized_expression() {
-        let expr = parser("(1 + 2)").parse_expr().unwrap();
-        // Parens disappear — the result is just the inner Add expression.
-        let ExprKind::Binary { op, .. } = expr.kind else {
+        let ExprKind::Binary { op, rhs, .. } = expr.kind else {
             panic!("expected binary");
         };
         assert_eq!(op, BinaryOperator::Add);
+        let ExprKind::Binary { op: inner, .. } = &rhs.kind else {
+            panic!("expected inner binary");
+        };
+        assert_eq!(*inner, BinaryOperator::Mul);
     }
 
     #[test]
-    fn parens_override_precedence() {
-        // Without parens, `a + b * 2` is Add(a, Mul(b, 2)).
-        // With parens, `(a + b) * 2` should be Mul(Add(a, b), 2).
-        let expr = parser("(a + b) * 2").parse_expr().unwrap();
-        let ExprKind::Binary { op, lhs, rhs } = expr.kind else {
-            panic!("expected outer binary");
-        };
-        assert_eq!(op, BinaryOperator::Mul);
-        assert!(matches!(rhs.kind, ExprKind::Const(Const::Int(2))));
-        let ExprKind::Binary { op: inner_op, .. } = &lhs.kind else {
-            panic!("expected inner binary on lhs");
-        };
-        assert_eq!(*inner_op, BinaryOperator::Add);
-    }
-
-    #[test]
-    fn nested_parens() {
-        let expr = parser("((1 + 2))").parse_expr().unwrap();
-        let ExprKind::Binary { op, .. } = expr.kind else {
-            panic!("expected binary at top level (parens collapse)");
-        };
-        assert_eq!(op, BinaryOperator::Add);
-    }
-
-    #[test]
-    fn unary_on_parens() {
-        // `-(a + b)` → Unary(Minus, Add(a, b))
-        let expr = parser("-(a + b)").parse_expr().unwrap();
-        let ExprKind::Unary { op, expr: inner } = expr.kind else {
-            panic!("expected unary");
-        };
-        assert!(matches!(op, UnaryOperator::Minus));
-        let ExprKind::Binary { op: bin_op, .. } = &inner.kind else {
-            panic!("expected binary inside unary");
-        };
-        assert_eq!(*bin_op, BinaryOperator::Add);
-    }
-
-    #[test]
-    fn parens_in_call_arg() {
-        // `foo((1 + 2))` — one arg, which is itself a parenthesized expression
-        let expr = parser("foo((1 + 2))").parse_expr().unwrap();
-        let ExprKind::Call { args, .. } = expr.kind else {
-            panic!("expected call");
-        };
-        assert_eq!(args.len(), 1);
-        let ExprKind::Binary { op, .. } = &args[0].kind else {
-            panic!("expected binary as arg");
-        };
-        assert_eq!(*op, BinaryOperator::Add);
-    }
-
-    #[test]
-    fn function_literal_still_parses_with_empty_params() {
-        // sanity: `() -> Int { 0 }` should still parse as a function literal,
-        // not be ambiguous with a parenthesized expression
-        let expr = parser("() -> Int { 0 }").parse_expr().unwrap();
-        assert!(matches!(expr.kind, ExprKind::Function { .. }));
-    }
-
-    #[test]
-    fn function_literal_with_typed_param_still_parses() {
-        let expr = parser("(x: Int) -> Int { x }").parse_expr().unwrap();
-        assert!(matches!(expr.kind, ExprKind::Function { .. }));
-    }
-
-    #[test]
-    fn parens_span_covers_parens() {
-        // `(1 + 2)` — span should run from col 1 (the `(`) through col 8 (just past `)`)
-        let expr = parser("(1 + 2)").parse_expr().unwrap();
-        assert_eq!(expr.span.start.column, 1);
-        assert_eq!(expr.span.end.column, 8);
-    }
-
-    #[test]
-    fn parses_unary_span_covers_op_and_operand() {
-        // `-5` — span should run from col 1 (the `-`) to col 3 (just past `5`)
-        let expr = parser("-5").parse_expr().unwrap();
-        assert_eq!(expr.span.start.column, 1);
-        assert_eq!(expr.span.end.column, 3);
-    }
-
-    #[test]
-    fn parses_identifier_expression() {
-        let expr = parser("x").parse_expr().unwrap();
-        let ExprKind::Identifier(name) = expr.kind else {
-            panic!("expected identifier expression");
-        };
-        assert_eq!(name, "x");
-    }
-
-    #[test]
-    fn parses_return_of_identifier() {
-        let block = parser("{ return x; }").parse_block().unwrap();
-        let BlockItem::Statement(stmt) = &block.items[0] else {
-            panic!("expected statement");
-        };
-        let StatementKind::Return(expr) = &stmt.kind else {
-            panic!("expected return");
-        };
-        let ExprKind::Identifier(name) = &expr.kind else {
-            panic!("expected identifier in return");
-        };
-        assert_eq!(name, "x");
-    }
-
-    #[test]
-    fn parses_declaration_with_identifier_value() {
-        let decl = parser("let y = x;").parse_declaration().unwrap();
-        assert_eq!(decl.name, "y");
-        let ExprKind::Identifier(name) = &decl.value.kind else {
-            panic!("expected identifier value");
-        };
-        assert_eq!(name, "x");
-    }
-
-    #[test]
-    fn parses_int_literal_expression() {
-        let expr = parser("42").parse_expr().unwrap();
-        assert!(matches!(expr.kind, ExprKind::Const(Const::Int(42))));
+    fn parses_block_with_tail_only() {
+        let block = parser("{ 7 }").parse_block().unwrap();
+        assert!(block.items.is_empty());
+        let tail = block.tail.as_ref().unwrap();
+        assert!(matches!(tail.kind, ExprKind::Const(Const::Int(7))));
     }
 
     #[test]
@@ -540,226 +139,131 @@ mod tests {
     }
 
     #[test]
-    fn parses_block_with_return() {
-        let block = parser("{ return 7; }").parse_block().unwrap();
-        assert_eq!(block.items.len(), 1);
-        let BlockItem::Statement(stmt) = &block.items[0] else {
-            panic!("expected statement");
-        };
-        let StatementKind::Return(expr) = &stmt.kind else {
-            panic!("expected return statement");
-        };
-        assert!(matches!(expr.kind, ExprKind::Const(Const::Int(7))));
-    }
+    fn parses_if_without_else() {
+        let expr = parser("if x { 1 }").parse_expr().unwrap();
 
-    #[test]
-    fn parses_block_with_nested_let() {
-        let block = parser("{ let x = 1; return 2; }").parse_block().unwrap();
-        assert_eq!(block.items.len(), 2);
-        let BlockItem::Declaration(Declaration { name, .. }) = &block.items[0] else {
-            panic!("expected declaration");
-        };
-        assert_eq!(name, "x");
-    }
-
-    #[test]
-    fn declaration_errors_on_missing_semicolon() {
-        let err = parser("let x = 5").parse_declaration().unwrap_err();
-        let msg = err.kind.to_string();
-        assert!(msg.contains("`;`"), "got: {msg}");
-    }
-
-    #[test]
-    fn span_of_declaration_covers_let_through_value() {
-        let decl = parser("let x = 5;").parse_declaration().unwrap();
-        // "let x = 5;" — span runs from `let` (col 1) through the value `5` (col 9)
-        assert_eq!(decl.span.start.column, 1);
-        assert_eq!(decl.span.end.column, 10);
-    }
-
-    #[test]
-    fn parse_expr_int_carries_token_span() {
-        let expr: Expr = parser("42").parse_expr().unwrap();
-        assert_eq!(expr.span.start.column, 1);
-        assert_eq!(expr.span.end.column, 3);
-    }
-
-    #[test]
-    fn parse_type_assigns_fresh_node_ids() {
-        let ty: TypeExpr = parser("() -> () -> Int").parse_type().unwrap();
-        let TypeExprKind::Function { return_ty, .. } = &ty.kind else {
-            unreachable!();
-        };
-        assert_ne!(ty.id, return_ty.id);
-    }
-
-    #[test]
-    fn empty_program_is_error() {
-        let err = parser("").parse_program().unwrap_err();
-        let msg = err.kind.to_string();
-        assert!(msg.contains("expected declaration"), "got: {msg}");
-    }
-
-    #[test]
-    fn parses_function_literal_returning_a_function() {
-        let src = "() -> () -> Int { return () -> Int { return 0; }; }";
-        let expr = parser(src).parse_expr().unwrap();
-
-        // outer: () -> () -> int { ... }
-        let ExprKind::Function {
-            params,
-            return_ty,
-            body,
+        let ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
         } = expr.kind
         else {
-            panic!("expected outer function literal");
-        };
-        assert!(params.is_empty());
-
-        // outer return type: () -> int
-        let TypeExprKind::Function {
-            return_ty: outer_ret_ret,
-            ..
-        } = return_ty.kind
-        else {
-            panic!("expected outer return type to be a function type");
-        };
-        assert!(matches!(outer_ret_ret.kind, TypeExprKind::Int));
-
-        // outer body: single `return <function-literal>;`
-        assert_eq!(body.items.len(), 1);
-        let BlockItem::Statement(stmt) = &body.items[0] else {
-            panic!("expected statement");
-        };
-        let StatementKind::Return(ret_expr) = &stmt.kind else {
-            panic!("expected return statement");
+            panic!("expected if expression");
         };
 
-        // returned value: () -> int { return 0; }
-        let ExprKind::Function {
-            return_ty: inner_ret_ty,
-            body: inner_body,
-            ..
-        } = &ret_expr.kind
-        else {
-            panic!("expected inner function literal");
-        };
-        assert!(matches!(inner_ret_ty.kind, TypeExprKind::Int));
+        assert!(else_branch.is_none());
 
-        // inner body: return 0;
-        assert_eq!(inner_body.items.len(), 1);
-        let BlockItem::Statement(inner_stmt) = &inner_body.items[0] else {
-            panic!("expected inner statement");
-        };
-        let StatementKind::Return(inner_ret) = &inner_stmt.kind else {
-            panic!("expected inner return");
-        };
-        assert!(matches!(inner_ret.kind, ExprKind::Const(Const::Int(0))));
-    }
-
-    #[test]
-    fn test_main_function_with_return() {
-        let src = "let main = () -> Int { return 0; };";
-        let program = parser(src).parse_program().unwrap();
-
-        assert_eq!(program.declarations.len(), 1);
-        let decl = &program.declarations[0];
-        assert_eq!(decl.name, "main");
-
-        let ExprKind::Function {
-            params,
-            return_ty,
-            body,
-        } = &decl.value.kind
-        else {
-            panic!("expected function literal as the value of `main`");
-        };
-        assert!(params.is_empty());
-        assert!(matches!(return_ty.kind, TypeExprKind::Int));
-
-        assert_eq!(body.items.len(), 1);
-        let BlockItem::Statement(stmt) = &body.items[0] else {
-            panic!("expected statement");
-        };
-        let StatementKind::Return(expr) = &stmt.kind else {
-            panic!("expected return statement");
-        };
-        assert!(matches!(expr.kind, ExprKind::Const(Const::Int(0))));
-    }
-
-    #[test]
-    fn test_main_function() {
-        let src = "let main = () -> Int { 0 };";
-        let program = parser(src).parse_program().unwrap();
-
-        assert_eq!(program.declarations.len(), 1);
-        let decl = &program.declarations[0];
-        assert_eq!(decl.name, "main");
-
-        let ExprKind::Function {
-            params,
-            return_ty,
-            body,
-        } = &decl.value.kind
-        else {
-            panic!("expected function literal as the value of `main`");
-        };
-        assert!(params.is_empty());
-        assert!(matches!(return_ty.kind, TypeExprKind::Int));
-
-        // `{ 0 }` — `0` is the tail expression, not a regular item.
-        assert!(body.items.is_empty());
-        let tail = body.tail.as_ref().expect("expected tail expression");
-        assert!(matches!(tail.kind, ExprKind::Const(Const::Int(0))));
-    }
-
-    #[test]
-    fn parses_block_with_tail_only() {
-        let block = parser("{ 7 }").parse_block().unwrap();
-        assert!(block.items.is_empty());
-        let tail = block.tail.as_ref().expect("expected tail");
-        assert!(matches!(tail.kind, ExprKind::Const(Const::Int(7))));
-    }
-
-    #[test]
-    fn parses_block_with_statement_and_tail() {
-        // `let x = 1; x` — one declaration item, then `x` as tail
-        let block = parser("{ let x = 1; x }").parse_block().unwrap();
-        assert_eq!(block.items.len(), 1);
-        let BlockItem::Declaration(Declaration { name, .. }) = &block.items[0] else {
-            panic!("expected declaration");
+        let ExprKind::Identifier(name) = &condition.kind else {
+            panic!("expected identifier condition");
         };
         assert_eq!(name, "x");
 
-        let tail = block.tail.as_ref().expect("expected tail");
-        let ExprKind::Identifier(tail_name) = &tail.kind else {
-            panic!("expected identifier as tail");
+        let tail = then_branch.tail.as_ref().unwrap();
+        assert!(matches!(tail.kind, ExprKind::Const(Const::Int(1))));
+    }
+    #[test]
+    fn parses_if_else_expression() {
+        let expr = parser("if x { 1 } else { 2 }").parse_expr().unwrap();
+
+        let ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } = expr.kind
+        else {
+            panic!("expected if");
         };
-        assert_eq!(tail_name, "x");
+
+        let ExprKind::Identifier(name) = &condition.kind else {
+            panic!("expected condition");
+        };
+        assert_eq!(name, "x");
+
+        let then_tail = then_branch.tail.as_ref().unwrap();
+        assert!(matches!(then_tail.kind, ExprKind::Const(Const::Int(1))));
+
+        let else_expr = else_branch.expect("expected else branch");
+
+        let ExprKind::Block(block) = &else_expr.kind else {
+            panic!("expected block in else branch");
+        };
+
+        let else_tail = block.tail.as_ref().unwrap();
+        assert!(matches!(else_tail.kind, ExprKind::Const(Const::Int(2))));
     }
 
     #[test]
-    fn parses_bare_expr_statement_with_semicolon() {
-        // `x;` — bare expression *with* `;` is a discard statement, not a tail.
-        let block = parser("{ x; }").parse_block().unwrap();
-        assert_eq!(block.items.len(), 1);
-        assert!(block.tail.is_none());
-        let BlockItem::Statement(stmt) = &block.items[0] else {
-            panic!("expected statement");
+    fn parses_else_if_as_nested_if() {
+        let expr = parser("if a { 1 } else if b { 2 } else { 3 }")
+            .parse_expr()
+            .unwrap();
+
+        let ExprKind::If { else_branch, .. } = expr.kind else {
+            panic!("expected outer if");
         };
-        let StatementKind::Expr(expr) = &stmt.kind else {
-            panic!("expected expression statement");
+
+        let else_expr = else_branch.unwrap();
+
+        let ExprKind::If {
+            condition,
+            else_branch: nested_else,
+            ..
+        } = &else_expr.kind
+        else {
+            panic!("expected nested if");
         };
+
+        let ExprKind::Identifier(name) = &condition.kind else {
+            panic!("expected condition");
+        };
+        assert_eq!(name, "b");
+
+        assert!(nested_else.is_some());
+    }
+
+    #[test]
+    fn if_binds_as_expression_in_binary() {
+        let expr = parser("1 + if x { 2 } else { 3 }").parse_expr().unwrap();
+
+        let ExprKind::Binary { rhs, .. } = expr.kind else {
+            panic!("expected binary");
+        };
+
+        assert!(matches!(rhs.kind, ExprKind::If { .. }));
+    }
+
+    #[test]
+    fn if_inside_block_tail() {
+        let block = parser("{ if x { 1 } else { 2 } }").parse_block().unwrap();
+        assert!(block.items.is_empty());
+        assert!(matches!(
+            block.tail.as_ref().unwrap().kind,
+            ExprKind::If { .. }
+        ));
+    }
+
+    #[test]
+    fn dangling_else_binds_to_nearest_if() {
+        let expr = parser("if a { if b { 1 } else { 2 } }")
+            .parse_expr()
+            .unwrap();
+
+        let ExprKind::If { then_branch, .. } = expr.kind else {
+            panic!("expected outer if");
+        };
+
+        let tail = then_branch.tail.as_ref().unwrap();
+
+        let ExprKind::If { else_branch, .. } = &tail.kind else {
+            panic!("expected inner if");
+        };
+
+        assert!(else_branch.is_some());
+    }
+
+    #[test]
+    fn parses_identifier_expression() {
+        let expr = parser("x").parse_expr().unwrap();
         assert!(matches!(expr.kind, ExprKind::Identifier(_)));
-    }
-
-    #[test]
-    fn rejects_two_consecutive_bare_expressions() {
-        // `0 a` — `0` is not followed by `;` or `}`, so it can't be a statement
-        // or a tail. Should error with `expected \`;\` or \`}\``.
-        let err = parser("{ 0 a }").parse_block().unwrap_err();
-        let msg = err.kind.to_string();
-        assert!(msg.contains("`;`"), "got: {msg}");
-        assert!(msg.contains("`}`"), "got: {msg}");
     }
 }

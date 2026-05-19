@@ -237,6 +237,21 @@ impl Lower {
                     },
                 })
             }
+
+            ast::ExprKind::Block(block) => {
+                let b = self.lower_block(block)?;
+                Ok(Expr {
+                    span: e.span,
+                    kind: ExprKind::Block(b),
+                    ty: todo!(),
+                })
+            }
+
+            ast::ExprKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => todo!(),
         }
     }
 

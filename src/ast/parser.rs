@@ -25,6 +25,7 @@ statement ::=
     | <function-literal>
     | <identifier> "(" [ <expr> [ { "," <expr> } ] ] ")"
     | <unary-op> <expr>
+    | if <expr> <block> [ "else" <expr> ]
 
 <function-literal> ::= "(" [<params>] ")" "->" <type> <block>
 <params> ::= <param> { "," <param> }
@@ -224,11 +225,7 @@ impl Parser {
         let mut lhs = self.parse_unary()?;
 
         loop {
-            let Some((prec, op)) = self
-                .iter
-                .peek()
-                .and_then(|t| binary_precedence(&t.kind))
-            else {
+            let Some((prec, op)) = self.iter.peek().and_then(|t| binary_precedence(&t.kind)) else {
                 break;
             };
             if prec < min_prec {
@@ -353,6 +350,43 @@ impl Parser {
                     expr.span = left.join(right);
                     Ok(expr)
                 }
+            }
+            TokenKind::LeftBrace => {
+                let block = self.parse_block()?;
+                Ok(Expr {
+                    id: self.id_gen.fresh(),
+                    span: block.span,
+                    kind: ExprKind::Block(block),
+                })
+            }
+            TokenKind::If => {
+                let start = self.expect(TokenKind::If)?.span;
+
+                let condition = self.parse_expr()?;
+                let then_branch = self.parse_block()?;
+
+                let else_branch = if self.check(TokenKind::Else) {
+                    self.expect(TokenKind::Else)?;
+                    Some(Box::new(self.parse_expr()?))
+                } else {
+                    None
+                };
+
+                let span = if let Some(e) = &else_branch {
+                    start.join(e.span)
+                } else {
+                    start.join(then_branch.span)
+                };
+
+                Ok(Expr {
+                    id: self.id_gen.fresh(),
+                    span,
+                    kind: ExprKind::If {
+                        condition: Box::new(condition),
+                        then_branch,
+                        else_branch,
+                    },
+                })
             }
             _ => Err(Error::unexpected(tok, "expression")),
         }

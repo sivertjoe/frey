@@ -56,6 +56,7 @@ pub enum ExprKind {
         op: UnaryOperator,
         operand: Box<Expr>,
     },
+    Block(Block),
     Binary {
         op: BinaryOperator,
         lhs: Box<Expr>,
