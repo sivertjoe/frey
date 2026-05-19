@@ -295,4 +295,293 @@ mod tests {
             span(0, 1, 1, src.len(), 1, src.chars().count() + 1),
         );
     }
+
+    #[test]
+    fn tokenizes_if_else_keywords() {
+        let src = "if else";
+
+        let tokens = tokenize(src).unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: TokenKind::If,
+                    span: span(0, 1, 1, 2, 1, 3),
+                },
+                Token {
+                    kind: TokenKind::Else,
+                    span: span(3, 1, 4, 7, 1, 8),
+                },
+                eof(7, 1, 8),
+            ]
+        );
+    }
+
+    #[test]
+    fn tokenizes_arithmetic_operators() {
+        let src = "+ - * / %";
+
+        let tokens = tokenize(src).unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: TokenKind::Plus,
+                    span: span(0, 1, 1, 1, 1, 2),
+                },
+                Token {
+                    kind: TokenKind::Minus,
+                    span: span(2, 1, 3, 3, 1, 4),
+                },
+                Token {
+                    kind: TokenKind::Star,
+                    span: span(4, 1, 5, 5, 1, 6),
+                },
+                Token {
+                    kind: TokenKind::Slash,
+                    span: span(6, 1, 7, 7, 1, 8),
+                },
+                Token {
+                    kind: TokenKind::Percent,
+                    span: span(8, 1, 9, 9, 1, 10),
+                },
+                eof(9, 1, 10),
+            ]
+        );
+    }
+
+    #[test]
+    fn tokenizes_comparison_operators() {
+        let src = "< <= > >= == !=";
+
+        let tokens = tokenize(src).unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: TokenKind::LessThan,
+                    span: span(0, 1, 1, 1, 1, 2),
+                },
+                Token {
+                    kind: TokenKind::LessEqual,
+                    span: span(2, 1, 3, 4, 1, 5),
+                },
+                Token {
+                    kind: TokenKind::GreaterThan,
+                    span: span(5, 1, 6, 6, 1, 7),
+                },
+                Token {
+                    kind: TokenKind::GreaterEqual,
+                    span: span(7, 1, 8, 9, 1, 10),
+                },
+                Token {
+                    kind: TokenKind::EqualEqual,
+                    span: span(10, 1, 11, 12, 1, 13),
+                },
+                Token {
+                    kind: TokenKind::NotEqual,
+                    span: span(13, 1, 14, 15, 1, 16),
+                },
+                eof(15, 1, 16),
+            ]
+        );
+    }
+
+    #[test]
+    fn tokenizes_bitwise_and_logical_operators() {
+        let src = "& && | || ^ ! << >>";
+
+        let tokens = tokenize(src).unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: TokenKind::Ampersand,
+                    span: span(0, 1, 1, 1, 1, 2),
+                },
+                Token {
+                    kind: TokenKind::AmpAmp,
+                    span: span(2, 1, 3, 4, 1, 5),
+                },
+                Token {
+                    kind: TokenKind::Pipe,
+                    span: span(5, 1, 6, 6, 1, 7),
+                },
+                Token {
+                    kind: TokenKind::PipePipe,
+                    span: span(7, 1, 8, 9, 1, 10),
+                },
+                Token {
+                    kind: TokenKind::Caret,
+                    span: span(10, 1, 11, 11, 1, 12),
+                },
+                Token {
+                    kind: TokenKind::Not,
+                    span: span(12, 1, 13, 13, 1, 14),
+                },
+                Token {
+                    kind: TokenKind::ShiftLeft,
+                    span: span(14, 1, 15, 16, 1, 17),
+                },
+                Token {
+                    kind: TokenKind::ShiftRight,
+                    span: span(17, 1, 18, 19, 1, 20),
+                },
+                eof(19, 1, 20),
+            ]
+        );
+    }
+
+    #[test]
+    fn prefers_longest_matching_operator() {
+        let src = "<< <= && || ==";
+
+        let tokens = tokenize(src).unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: TokenKind::ShiftLeft,
+                    span: span(0, 1, 1, 2, 1, 3),
+                },
+                Token {
+                    kind: TokenKind::LessEqual,
+                    span: span(3, 1, 4, 5, 1, 6),
+                },
+                Token {
+                    kind: TokenKind::AmpAmp,
+                    span: span(6, 1, 7, 8, 1, 9),
+                },
+                Token {
+                    kind: TokenKind::PipePipe,
+                    span: span(9, 1, 10, 11, 1, 12),
+                },
+                Token {
+                    kind: TokenKind::EqualEqual,
+                    span: span(12, 1, 13, 14, 1, 15),
+                },
+                eof(14, 1, 15),
+            ]
+        );
+    }
+
+    #[test]
+    fn tokenizes_if_expression() {
+        let src = "if x { return 1; } else { 2 }";
+
+        let tokens = tokenize(src).unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: TokenKind::If,
+                    span: span(0, 1, 1, 2, 1, 3),
+                },
+                Token {
+                    kind: TokenKind::Identifier("x".to_string()),
+                    span: span(3, 1, 4, 4, 1, 5),
+                },
+                Token {
+                    kind: TokenKind::LeftBrace,
+                    span: span(5, 1, 6, 6, 1, 7),
+                },
+                Token {
+                    kind: TokenKind::Return,
+                    span: span(7, 1, 8, 13, 1, 14),
+                },
+                Token {
+                    kind: TokenKind::Literal(Literal::Int(1)),
+                    span: span(14, 1, 15, 15, 1, 16),
+                },
+                Token {
+                    kind: TokenKind::Semicolon,
+                    span: span(15, 1, 16, 16, 1, 17),
+                },
+                Token {
+                    kind: TokenKind::RightBrace,
+                    span: span(17, 1, 18, 18, 1, 19),
+                },
+                Token {
+                    kind: TokenKind::Else,
+                    span: span(19, 1, 20, 23, 1, 24),
+                },
+                Token {
+                    kind: TokenKind::LeftBrace,
+                    span: span(24, 1, 25, 25, 1, 26),
+                },
+                Token {
+                    kind: TokenKind::Literal(Literal::Int(2)),
+                    span: span(26, 1, 27, 27, 1, 28),
+                },
+                Token {
+                    kind: TokenKind::RightBrace,
+                    span: span(28, 1, 29, 29, 1, 30),
+                },
+                eof(29, 1, 30),
+            ]
+        );
+    }
+
+    #[test]
+    fn tokenizes_nested_parentheses_and_calls() {
+        let src = "foo(bar(1, 2))";
+
+        let tokens = tokenize(src).unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: TokenKind::Identifier("foo".to_string()),
+                    span: span(0, 1, 1, 3, 1, 4),
+                },
+                Token {
+                    kind: TokenKind::LeftParen,
+                    span: span(3, 1, 4, 4, 1, 5),
+                },
+                Token {
+                    kind: TokenKind::Identifier("bar".to_string()),
+                    span: span(4, 1, 5, 7, 1, 8),
+                },
+                Token {
+                    kind: TokenKind::LeftParen,
+                    span: span(7, 1, 8, 8, 1, 9),
+                },
+                Token {
+                    kind: TokenKind::Literal(Literal::Int(1)),
+                    span: span(8, 1, 9, 9, 1, 10),
+                },
+                Token {
+                    kind: TokenKind::Comma,
+                    span: span(9, 1, 10, 10, 1, 11),
+                },
+                Token {
+                    kind: TokenKind::Literal(Literal::Int(2)),
+                    span: span(11, 1, 12, 12, 1, 13),
+                },
+                Token {
+                    kind: TokenKind::RightParen,
+                    span: span(12, 1, 13, 13, 1, 14),
+                },
+                Token {
+                    kind: TokenKind::RightParen,
+                    span: span(13, 1, 14, 14, 1, 15),
+                },
+                eof(14, 1, 15),
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_input_only_emits_eof() {
+        let tokens = tokenize("").unwrap();
+
+        assert_eq!(tokens, vec![eof(0, 1, 1)]);
+    }
 }

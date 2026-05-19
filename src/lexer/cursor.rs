@@ -97,7 +97,10 @@ impl<'a> Cursor<'a> {
 
         let digits = self.take_while(|ch| ch.is_ascii_digit()).to_string();
 
-        if self.peek().is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_') {
+        if self
+            .peek()
+            .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
+        {
             let suffix = self
                 .take_while(|ch| ch.is_ascii_alphanumeric() || ch == '_')
                 .to_string();
@@ -137,6 +140,8 @@ impl<'a> Cursor<'a> {
         let kind = match raw {
             "let" => TokenKind::Let,
             "Int" => TokenKind::Int,
+            "if" => TokenKind::If,
+            "else" => TokenKind::Else,
             "return" => TokenKind::Return,
             _ => TokenKind::Identifier(raw.to_string()),
         };
