@@ -42,6 +42,7 @@ pub enum TokenKind {
     Equal,
     Minus,
     GreaterThan,
+    Not,
 
     Literal(Literal),
 
@@ -69,6 +70,7 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Identifier(name) => write!(f, "`{name}`"),
             TokenKind::Equal => write!(f, "`=`"),
             TokenKind::Minus => write!(f, "`-`"),
+            TokenKind::Not => write!(f, "`!`"),
             TokenKind::GreaterThan => write!(f, "`>`"),
             TokenKind::Literal(lit) => write!(f, "{lit}"),
             TokenKind::Semicolon => write!(f, "`;`"),

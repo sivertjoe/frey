@@ -1,8 +1,8 @@
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, ValueKind};
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, IntValue, ValueKind};
 
 use crate::codegen::{Codegen, Error};
-use crate::hir::FunctionCall;
 use crate::hir::types::{Const, Expr, ExprKind, Statement, StatementKind};
+use crate::hir::{FunctionCall, UnaryOperator};
 
 impl<'ctx> Codegen<'ctx> {
     pub fn lower_expr(&mut self, expr: Expr) -> Result<BasicValueEnum<'ctx>, Error> {
@@ -21,6 +21,24 @@ impl<'ctx> Codegen<'ctx> {
             }
             ExprKind::Function(_) => {
                 todo!("nested function literals require closure support")
+            }
+            ExprKind::Unary { operand, op } => {
+                let value = self.lower_expr(*operand)?.into_int_value();
+                let result = match op {
+                    UnaryOperator::Minus => self.builder.build_int_neg(value, "")?,
+                    UnaryOperator::Not => {
+                        let zero = self.context.i32_type().const_zero();
+                        let is_zero = self.builder.build_int_compare(
+                            inkwell::IntPredicate::EQ,
+                            value,
+                            zero,
+                            "",
+                        )?;
+                        self.builder
+                            .build_int_z_extend(is_zero, self.context.i32_type(), "")?
+                    }
+                };
+                Ok(result.into())
             }
             ExprKind::Call(FunctionCall { callee, args }) => {
                 let arg_vals: Vec<BasicValueEnum<'ctx>> = args

@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::{
     ast,
     hir::{
+        UnaryOperator,
         error::{Error, ErrorKind},
         types::{
             Block, BlockItem, Const, Declaration, Expr, ExprKind, Function, FunctionCall, LocalId,
@@ -209,6 +210,19 @@ impl Lower {
                     }),
                 })
             }
+            ast::ExprKind::Unary { op, expr } => {
+                let operand = self.lower_expr(*expr)?;
+                let ty = operand.ty.clone();
+                let op = self.lower_unary(op);
+                Ok(Expr {
+                    span: e.span,
+                    ty,
+                    kind: ExprKind::Unary {
+                        op,
+                        operand: Box::new(operand),
+                    },
+                })
+            }
         }
     }
 
@@ -266,6 +280,13 @@ impl Lower {
                 let return_ty = Box::new(self.lower_type(return_ty)?);
                 Ok(Ty::Function { params, return_ty })
             }
+        }
+    }
+
+    fn lower_unary(&self, op: ast::UnaryOperator) -> UnaryOperator {
+        match op {
+            ast::UnaryOperator::Not => UnaryOperator::Not,
+            ast::UnaryOperator::Minus => UnaryOperator::Minus,
         }
     }
 }

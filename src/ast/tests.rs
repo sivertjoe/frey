@@ -3,6 +3,7 @@ mod tests {
     use crate::ast::parser::Parser;
     use crate::ast::types::{
         BlockItem, Const, Declaration, Expr, ExprKind, StatementKind, TypeExpr, TypeExprKind,
+        UnaryOperator,
     };
     use crate::lexer::tokenize;
 
@@ -207,6 +208,79 @@ mod tests {
     fn identifier_without_parens_is_not_a_call() {
         let expr = parser("x").parse_expr().unwrap();
         assert!(matches!(expr.kind, ExprKind::Identifier(_)));
+    }
+
+    #[test]
+    fn parses_unary_minus_on_literal() {
+        let expr = parser("-5").parse_expr().unwrap();
+        let ExprKind::Unary { op, expr: inner } = expr.kind else {
+            panic!("expected unary");
+        };
+        assert!(matches!(op, UnaryOperator::Minus));
+        assert!(matches!(inner.kind, ExprKind::Const(Const::Int(5))));
+    }
+
+    #[test]
+    fn parses_unary_not_on_identifier() {
+        let expr = parser("!x").parse_expr().unwrap();
+        let ExprKind::Unary { op, expr: inner } = expr.kind else {
+            panic!("expected unary");
+        };
+        assert!(matches!(op, UnaryOperator::Not));
+        let ExprKind::Identifier(name) = &inner.kind else {
+            panic!("expected identifier operand");
+        };
+        assert_eq!(name, "x");
+    }
+
+    #[test]
+    fn parses_double_unary_minus() {
+        // `--5` → Unary(Minus, Unary(Minus, 5))
+        let expr = parser("--5").parse_expr().unwrap();
+        let ExprKind::Unary { op, expr: outer_inner } = expr.kind else {
+            panic!("expected outer unary");
+        };
+        assert!(matches!(op, UnaryOperator::Minus));
+        let ExprKind::Unary { op: inner_op, expr: innermost } = &outer_inner.kind else {
+            panic!("expected nested unary");
+        };
+        assert!(matches!(inner_op, UnaryOperator::Minus));
+        assert!(matches!(innermost.kind, ExprKind::Const(Const::Int(5))));
+    }
+
+    #[test]
+    fn parses_unary_minus_on_call_result() {
+        let expr = parser("-foo()").parse_expr().unwrap();
+        let ExprKind::Unary { op, expr: inner } = expr.kind else {
+            panic!("expected unary");
+        };
+        assert!(matches!(op, UnaryOperator::Minus));
+        let ExprKind::Call { callee, args } = &inner.kind else {
+            panic!("expected call as unary operand");
+        };
+        assert!(args.is_empty());
+        let ExprKind::Identifier(name) = &callee.kind else {
+            panic!("expected identifier callee");
+        };
+        assert_eq!(name, "foo");
+    }
+
+    #[test]
+    fn parses_declaration_with_unary_value() {
+        let decl = parser("let x = -5;").parse_declaration().unwrap();
+        assert_eq!(decl.name, "x");
+        let ExprKind::Unary { op, .. } = &decl.value.kind else {
+            panic!("expected unary value");
+        };
+        assert!(matches!(op, UnaryOperator::Minus));
+    }
+
+    #[test]
+    fn parses_unary_span_covers_op_and_operand() {
+        // `-5` — span should run from col 1 (the `-`) to col 3 (just past `5`)
+        let expr = parser("-5").parse_expr().unwrap();
+        assert_eq!(expr.span.start.column, 1);
+        assert_eq!(expr.span.end.column, 3);
     }
 
     #[test]

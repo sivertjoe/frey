@@ -43,6 +43,9 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, Error> {
             '-' => {
                 tokens.push(cursor.single(TokenKind::Minus));
             }
+            '!' => {
+                tokens.push(cursor.single(TokenKind::Not));
+            }
             '>' => {
                 tokens.push(cursor.single(TokenKind::GreaterThan));
             }

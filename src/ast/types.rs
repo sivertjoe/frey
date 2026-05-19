@@ -92,6 +92,11 @@ pub enum ExprKind {
         callee: Box<Expr>,
         args: Vec<Expr>,
     },
+
+    Unary {
+        op: UnaryOperator,
+        expr: Box<Expr>,
+    },
 }
 
 pub struct Param {
@@ -104,6 +109,12 @@ pub struct Param {
 #[derive(Debug)]
 pub enum Const {
     Int(i32),
+}
+
+#[derive(Debug)]
+pub enum UnaryOperator {
+    Not,
+    Minus,
 }
 
 impl fmt::Debug for TypeExpr {

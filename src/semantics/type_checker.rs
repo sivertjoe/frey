@@ -36,6 +36,19 @@ impl Typechecker {
             ExprKind::Local(_) => Ok(()),
             ExprKind::Function(func) => self.check_function(func),
             ExprKind::Call(call) => self.check_call(call, e),
+            ExprKind::Unary { operand, .. } => {
+                self.check_expr(operand)?;
+                if operand.ty != Ty::Int {
+                    return Err(Error {
+                        span: operand.span,
+                        kind: ErrorKind::TypeMismatch {
+                            expected: Ty::Int,
+                            found: operand.ty.clone(),
+                        },
+                    });
+                }
+                Ok(())
+            }
         }
     }
 

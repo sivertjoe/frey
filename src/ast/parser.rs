@@ -24,6 +24,7 @@ statement ::=
     | <ident>
     | <function-literal>
     | <identifier> "(" [ <expr> [ { "," <expr> } ] ] ")"
+    | <unary-op> <expr>
 
 <function-literal> ::= "(" [<params>] ")" "->" <type> <block>
 <params> ::= <param> { "," <param> }
@@ -39,6 +40,7 @@ statement ::=
 
 use crate::{
     ast::{
+        UnaryOperator,
         error::Error,
         token_iter::TokenIter,
         types::{
@@ -273,6 +275,26 @@ impl Parser {
                     },
                 })
             }
+            op if self.check_is_unop() => {
+                let op = match op {
+                    TokenKind::Not => UnaryOperator::Not,
+                    TokenKind::Minus => UnaryOperator::Minus,
+                    _ => unreachable!(),
+                };
+                let start = self.iter.consume().unwrap().span;
+                let expr = self.parse_expr()?;
+
+                let span = start.join(expr.span);
+
+                Ok(Expr {
+                    id: self.id_gen.fresh(),
+                    span,
+                    kind: ExprKind::Unary {
+                        op,
+                        expr: Box::new(expr),
+                    },
+                })
+            }
             _ => Err(Error::unexpected(tok, "expression")),
         }
     }
@@ -331,5 +353,12 @@ impl Parser {
 
     fn check(&self, kind: TokenKind) -> bool {
         matches!(self.iter.peek().unwrap(), tok if tok.kind == kind)
+    }
+
+    fn check_is_unop(&self) -> bool {
+        match self.iter.peek().expect("should end in eof").kind {
+            TokenKind::Minus | TokenKind::Not => true,
+            _ => false,
+        }
     }
 }

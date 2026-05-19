@@ -51,11 +51,21 @@ pub enum ExprKind {
     Local(LocalId),
     Function(Function),
     Call(FunctionCall),
+    Unary {
+        op: UnaryOperator,
+        operand: Box<Expr>,
+    },
 }
 
 pub struct FunctionCall {
     pub callee: Box<Expr>,
     pub args: Vec<Expr>,
+}
+
+#[derive(Debug)]
+pub enum UnaryOperator {
+    Not,
+    Minus,
 }
 
 pub enum Const {
@@ -146,6 +156,7 @@ impl fmt::Debug for ExprKind {
             ExprKind::Local(id) => write!(f, "Local({})", id.0),
             ExprKind::Function(func) => write!(f, "{func:?}"),
             ExprKind::Call(call) => write!(f, "call {:?}{:?}", call.callee, call.args),
+            ExprKind::Unary { op, operand } => write!(f, "{op:?}({operand:?})"),
         }
     }
 }
