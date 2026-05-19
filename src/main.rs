@@ -3,6 +3,7 @@ mod codegen;
 mod driver;
 mod hir;
 mod lexer;
+mod semantics;
 
 use std::path::PathBuf;
 

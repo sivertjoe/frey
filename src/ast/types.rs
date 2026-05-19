@@ -88,6 +88,10 @@ pub enum ExprKind {
         return_ty: TypeExpr,
         body: Block,
     },
+    FunctionCall {
+        name: String,
+        args: Vec<Expr>,
+    },
 }
 
 pub struct Param {

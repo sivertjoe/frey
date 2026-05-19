@@ -23,6 +23,7 @@ statement ::=
     <const>
     | <ident>
     | <function-literal>
+    | <identifier> "(" [ <expr> [ { "," <expr> } ] ] ")"
 
 <function-literal> ::= "(" [<params>] ")" "->" <type> <block>
 <params> ::= <param> { "," <param> }
@@ -229,14 +230,27 @@ impl Parser {
             }
             TokenKind::Identifier(_) => {
                 let span = tok.span;
-                let consumed = self.iter.consume().unwrap();
-                let TokenKind::Identifier(name) = consumed.kind else {
-                    unreachable!("peek matched Identifier")
+                let name = self.ident()?;
+
+                let (span, kind) = if self.check(TokenKind::LeftParen) {
+                    self.expect(TokenKind::LeftParen);
+
+                    let mut args = Vec::new();
+                    while !self.check(TokenKind::RightParen) {
+                        args.push(self.parse_expr()?);
+                    }
+
+                    let end = self.expect(TokenKind::RightParen)?.span;
+                    let span = span.join(end);
+                    (span, ExprKind::FunctionCall { name, args })
+                } else {
+                    (span, ExprKind::Identifier(name))
                 };
+
                 Ok(Expr {
                     id: self.id_gen.fresh(),
                     span,
-                    kind: ExprKind::Identifier(name),
+                    kind,
                 })
             }
             TokenKind::LeftParen => {
@@ -300,5 +314,9 @@ impl Parser {
 
     fn eof(&self) -> bool {
         matches!(self.iter.peek(), Some(tok) if tok.kind == TokenKind::Eof)
+    }
+
+    fn check(&self, kind: TokenKind) -> bool {
+        matches!(self.iter.peek().unwrap(), tok if tok.kind == kind)
     }
 }
