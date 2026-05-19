@@ -16,7 +16,7 @@ block-item ::=
     | <statement>
 
 statement ::=
-    "return" <expr> ";"
+    "return" [<expr>] ";"
     | <expr> ";"
 
 <expr> ::=
@@ -171,7 +171,11 @@ impl Parser {
                 }
                 TokenKind::Return => {
                     let start = self.expect(TokenKind::Return)?.span;
-                    let expr = self.parse_expr()?;
+                    let expr = if self.check(TokenKind::Semicolon) {
+                        None
+                    } else {
+                        Some(self.parse_expr()?)
+                    };
                     let end = self.expect(TokenKind::Semicolon)?.span;
                     items.push(BlockItem::Statement(Statement {
                         id: self.id_gen.fresh(),
@@ -180,8 +184,12 @@ impl Parser {
                     }));
                 }
                 _ => {
-                    // Bare expression: either followed by `;` (statement)
-                    // or `}` (this is the block's tail expression).
+                    // Bare expression at statement position. Outcomes:
+                    //   - followed by `;`  → expression statement
+                    //   - followed by `}`  → tail expression
+                    //   - block-like expr  → statement with no `;` required
+                    //     (since `}` already terminates it visually)
+                    //   - anything else    → error
                     let expr = self.parse_expr()?;
                     let after_kind = self.iter.peek().expect("lexer emits eof").kind.clone();
                     match after_kind {
@@ -196,6 +204,14 @@ impl Parser {
                         TokenKind::RightBrace => {
                             tail = Some(Box::new(expr));
                             break;
+                        }
+                        _ if is_block_like(&expr) => {
+                            let span = expr.span;
+                            items.push(BlockItem::Statement(Statement {
+                                id: self.id_gen.fresh(),
+                                span,
+                                kind: StatementKind::Expr(expr),
+                            }));
                         }
                         _ => {
                             let next = self.iter.peek().expect("lexer emits eof");
@@ -460,6 +476,10 @@ impl Parser {
             _ => false,
         }
     }
+}
+
+fn is_block_like(expr: &Expr) -> bool {
+    matches!(expr.kind, ExprKind::Block(_) | ExprKind::If { .. })
 }
 
 fn binary_precedence(kind: &TokenKind) -> Option<(i32, BinaryOperator)> {

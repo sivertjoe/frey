@@ -318,7 +318,10 @@ impl Lower {
     fn lower_statement(&mut self, s: ast::Statement) -> Result<Statement, Error> {
         let kind = match s.kind {
             ast::StatementKind::Return(expr) => {
-                let expr = self.lower_expr(expr)?;
+                let expr = match expr {
+                    Some(e) => self.lower_expr(e)?,
+                    None => unit_expr(end_of(s.span)),
+                };
                 StatementKind::Return(expr)
             }
             ast::StatementKind::Expr(expr) => {

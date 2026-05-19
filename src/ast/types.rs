@@ -69,7 +69,7 @@ pub struct Statement {
 
 #[derive(Debug)]
 pub enum StatementKind {
-    Return(Expr),
+    Return(Option<Expr>),
     Expr(Expr),
 }
 

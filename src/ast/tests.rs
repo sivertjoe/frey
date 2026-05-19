@@ -262,6 +262,87 @@ mod tests {
     }
 
     #[test]
+    fn if_statement_without_trailing_semicolon() {
+        // `{ if a { return 1; } return 0; }` — the `if` is a statement,
+        // followed directly by another statement, with no `;` after `}`.
+        let block = parser("{ if a { return 1; } return 0; }")
+            .parse_block()
+            .unwrap();
+        assert_eq!(block.items.len(), 2);
+
+        // First item: the `if` as an expression statement
+        let BlockItem::Statement(stmt0) = &block.items[0] else {
+            panic!("expected statement");
+        };
+        let StatementKind::Expr(expr) = &stmt0.kind else {
+            panic!("expected expression statement");
+        };
+        assert!(matches!(expr.kind, ExprKind::If { .. }));
+
+        // Second item: the trailing return statement
+        let BlockItem::Statement(stmt1) = &block.items[1] else {
+            panic!("expected statement");
+        };
+        assert!(matches!(stmt1.kind, StatementKind::Return(_)));
+    }
+
+    #[test]
+    fn nested_block_as_statement_without_semicolon() {
+        // `{ { 1 } 2 }` — the inner `{ 1 }` is a block-statement, then `2` is the tail
+        let block = parser("{ { 1 } 2 }").parse_block().unwrap();
+        assert_eq!(block.items.len(), 1);
+        let BlockItem::Statement(stmt) = &block.items[0] else {
+            panic!("expected statement");
+        };
+        let StatementKind::Expr(expr) = &stmt.kind else {
+            panic!("expected expression statement");
+        };
+        assert!(matches!(expr.kind, ExprKind::Block(_)));
+
+        let tail = block.tail.as_ref().unwrap();
+        assert!(matches!(tail.kind, ExprKind::Const(Const::Int(2))));
+    }
+
+    #[test]
+    fn if_can_still_be_followed_by_explicit_semicolon() {
+        // `{ if a { 1 }; }` — semicolon still accepted (and consumed)
+        let block = parser("{ if a { 1 }; }").parse_block().unwrap();
+        assert_eq!(block.items.len(), 1);
+        let BlockItem::Statement(stmt) = &block.items[0] else {
+            panic!("expected statement");
+        };
+        let StatementKind::Expr(_) = &stmt.kind else {
+            panic!("expected expression statement");
+        };
+    }
+
+    #[test]
+    fn parses_bare_return() {
+        // `{ return; }` — return without an expression, for unit-returning functions
+        let block = parser("{ return; }").parse_block().unwrap();
+        assert_eq!(block.items.len(), 1);
+        let BlockItem::Statement(stmt) = &block.items[0] else {
+            panic!("expected statement");
+        };
+        let StatementKind::Return(expr) = &stmt.kind else {
+            panic!("expected return statement");
+        };
+        assert!(expr.is_none(), "expected bare return (no value)");
+    }
+
+    #[test]
+    fn parses_return_with_value_still_works() {
+        let block = parser("{ return 5; }").parse_block().unwrap();
+        let BlockItem::Statement(stmt) = &block.items[0] else {
+            panic!("expected statement");
+        };
+        let StatementKind::Return(Some(expr)) = &stmt.kind else {
+            panic!("expected return with value");
+        };
+        assert!(matches!(expr.kind, ExprKind::Const(Const::Int(5))));
+    }
+
+    #[test]
     fn function_literal_without_return_type_annotation() {
         // `() { }` — no `->` means implicit Unit return
         let expr = parser("() { }").parse_expr().unwrap();
