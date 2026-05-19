@@ -39,6 +39,11 @@ fn main() {
         }
     };
 
+    if let Err(err) = semantics::type_check(&hir) {
+        report(&file, &src, err.span, &err.kind.to_string());
+        std::process::exit(1);
+    }
+
     let output_path = output_path_for(&file);
     if let Err(err) = driver::build(hir, &output_path) {
         eprintln!("error: {err}");

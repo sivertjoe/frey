@@ -215,6 +215,14 @@ impl Parser {
     }
 
     pub(super) fn parse_expr(&mut self) -> Result<Expr, Error> {
+        let mut e = self.parse_primary()?;
+        while self.check(TokenKind::LeftParen) {
+            e = self.parse_call_suffix(e)?;
+        }
+        Ok(e)
+    }
+
+    fn parse_primary(&mut self) -> Result<Expr, Error> {
         let tok = self.iter.peek().expect("lexer emits eof");
 
         match &tok.kind {
@@ -231,26 +239,10 @@ impl Parser {
             TokenKind::Identifier(_) => {
                 let span = tok.span;
                 let name = self.ident()?;
-
-                let (span, kind) = if self.check(TokenKind::LeftParen) {
-                    self.expect(TokenKind::LeftParen);
-
-                    let mut args = Vec::new();
-                    while !self.check(TokenKind::RightParen) {
-                        args.push(self.parse_expr()?);
-                    }
-
-                    let end = self.expect(TokenKind::RightParen)?.span;
-                    let span = span.join(end);
-                    (span, ExprKind::FunctionCall { name, args })
-                } else {
-                    (span, ExprKind::Identifier(name))
-                };
-
                 Ok(Expr {
                     id: self.id_gen.fresh(),
                     span,
-                    kind,
+                    kind: ExprKind::Identifier(name),
                 })
             }
             TokenKind::LeftParen => {
@@ -271,20 +263,41 @@ impl Parser {
                 let body = self.parse_block()?;
 
                 let span = left.span.join(body.span);
-                let kind = ExprKind::Function {
-                    params,
-                    return_ty,
-                    body,
-                };
-
                 Ok(Expr {
                     id: self.id_gen.fresh(),
                     span,
-                    kind,
+                    kind: ExprKind::Function {
+                        params,
+                        return_ty,
+                        body,
+                    },
                 })
             }
             _ => Err(Error::unexpected(tok, "expression")),
         }
+    }
+
+    fn parse_call_suffix(&mut self, callee: Expr) -> Result<Expr, Error> {
+        self.expect(TokenKind::LeftParen)?;
+
+        let mut args = Vec::new();
+        while !self.check(TokenKind::RightParen) {
+            if !args.is_empty() {
+                self.expect(TokenKind::Comma)?;
+            }
+            args.push(self.parse_expr()?);
+        }
+
+        let end = self.expect(TokenKind::RightParen)?.span;
+        let span = callee.span.join(end);
+        Ok(Expr {
+            id: self.id_gen.fresh(),
+            span,
+            kind: ExprKind::Call {
+                callee: Box::new(callee),
+                args,
+            },
+        })
     }
 }
 

@@ -11,9 +11,8 @@ pub struct Error {
 #[derive(Debug, PartialEq)]
 pub enum ErrorKind {
     NameNotFound { name: String },
-    TypeMismatch { expected: Ty, found: Ty },
-    MissingReturn { expected: Ty },
     AlreadyDefined { name: String },
+    NotCallable { found: Ty },
 }
 
 impl fmt::Display for Error {
@@ -29,21 +28,14 @@ impl fmt::Display for Error {
 impl fmt::Display for ErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ErrorKind::MissingReturn { expected } => {
-                write!(f, "missing return, expected {:?}", expected)
-            }
             ErrorKind::NameNotFound { name } => {
                 write!(f, "name not found: {name}")
             }
-            ErrorKind::TypeMismatch { expected, found } => {
-                write!(
-                    f,
-                    "type mismatch\nexpected: {:?}\nfound:{:?}",
-                    expected, found
-                )
-            }
             ErrorKind::AlreadyDefined { name } => {
-                write!(f, "name `{name}` already define")
+                write!(f, "name `{name}` already defined")
+            }
+            ErrorKind::NotCallable { found } => {
+                write!(f, "cannot call non-function value of type {found:?}")
             }
         }
     }

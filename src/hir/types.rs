@@ -50,6 +50,12 @@ pub enum ExprKind {
     Const(Const),
     Local(LocalId),
     Function(Function),
+    Call(FunctionCall),
+}
+
+pub struct FunctionCall {
+    pub callee: Box<Expr>,
+    pub args: Vec<Expr>,
 }
 
 pub enum Const {
@@ -139,6 +145,7 @@ impl fmt::Debug for ExprKind {
             ExprKind::Const(c) => write!(f, "{c:?}"),
             ExprKind::Local(id) => write!(f, "Local({})", id.0),
             ExprKind::Function(func) => write!(f, "{func:?}"),
+            ExprKind::Call(call) => write!(f, "call {:?}{:?}", call.callee, call.args),
         }
     }
 }

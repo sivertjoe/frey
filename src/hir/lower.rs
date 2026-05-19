@@ -5,8 +5,8 @@ use crate::{
     hir::{
         error::{Error, ErrorKind},
         types::{
-            Block, BlockItem, Const, Declaration, Expr, ExprKind, Function, LocalId, LocalIdGen,
-            Param, Program, Statement, StatementKind, Ty,
+            Block, BlockItem, Const, Declaration, Expr, ExprKind, Function, FunctionCall, LocalId,
+            LocalIdGen, Param, Program, Statement, StatementKind, Ty,
         },
     },
 };
@@ -15,7 +15,6 @@ pub struct Lower {
     scopes: Vec<HashMap<String, LocalId>>,
     bindings: HashMap<LocalId, Ty>,
     id_gen: LocalIdGen,
-    expected_return: Vec<Ty>, // enclosing function return types
 }
 
 impl Lower {
@@ -24,7 +23,6 @@ impl Lower {
             scopes: vec![HashMap::default()], // Add the global scope
             bindings: HashMap::default(),
             id_gen: LocalIdGen::new(),
-            expected_return: Vec::new(),
         }
     }
     pub fn lower_program(&mut self, p: ast::Program) -> Result<Program, Error> {
@@ -61,7 +59,9 @@ impl Lower {
         if self.current_scope().contains_key(&d.name) {
             return Err(Error {
                 span: d.span,
-                kind: ErrorKind::AlreadyDefined { name: d.name.clone() },
+                kind: ErrorKind::AlreadyDefined {
+                    name: d.name.clone(),
+                },
             });
         }
 
@@ -164,9 +164,7 @@ impl Lower {
                     });
                 }
 
-                self.expected_return.push(return_ty.clone());
                 let body = self.lower_block(body)?;
-                self.expected_return.pop();
 
                 self.leave_scope();
 
@@ -182,6 +180,32 @@ impl Lower {
                         params: hir_params,
                         return_ty,
                         body,
+                    }),
+                })
+            }
+            ast::ExprKind::Call { callee, args } => {
+                let callee = self.lower_expr(*callee)?;
+                let args = args
+                    .into_iter()
+                    .map(|a| self.lower_expr(a))
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                let Ty::Function { return_ty, .. } = &callee.ty else {
+                    return Err(Error {
+                        span: callee.span,
+                        kind: ErrorKind::NotCallable {
+                            found: callee.ty.clone(),
+                        },
+                    });
+                };
+                let result_ty = (**return_ty).clone();
+
+                Ok(Expr {
+                    span: e.span,
+                    ty: result_ty,
+                    kind: ExprKind::Call(FunctionCall {
+                        callee: Box::new(callee),
+                        args,
                     }),
                 })
             }

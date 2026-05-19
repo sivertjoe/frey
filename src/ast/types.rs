@@ -88,8 +88,8 @@ pub enum ExprKind {
         return_ty: TypeExpr,
         body: Block,
     },
-    FunctionCall {
-        name: String,
+    Call {
+        callee: Box<Expr>,
         args: Vec<Expr>,
     },
 }

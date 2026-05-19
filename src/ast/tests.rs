@@ -117,6 +117,98 @@ mod tests {
         assert!(msg.contains("expected type"), "got: {msg}");
     }
 
+    fn assert_callee_named(callee: &Expr, expected: &str) {
+        let ExprKind::Identifier(name) = &callee.kind else {
+            panic!("expected identifier callee, got {:?}", callee.kind);
+        };
+        assert_eq!(name, expected);
+    }
+
+    #[test]
+    fn parses_call_no_args() {
+        let expr = parser("f()").parse_expr().unwrap();
+        let ExprKind::Call { callee, args } = expr.kind else {
+            panic!("expected call");
+        };
+        assert_callee_named(&callee, "f");
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn parses_call_one_arg() {
+        let expr = parser("f(5)").parse_expr().unwrap();
+        let ExprKind::Call { callee, args } = expr.kind else {
+            panic!("expected call");
+        };
+        assert_callee_named(&callee, "f");
+        assert_eq!(args.len(), 1);
+        assert!(matches!(args[0].kind, ExprKind::Const(Const::Int(5))));
+    }
+
+    #[test]
+    fn parses_call_multiple_args() {
+        let expr = parser("f(1, 2, 3)").parse_expr().unwrap();
+        let ExprKind::Call { callee, args } = expr.kind else {
+            panic!("expected call");
+        };
+        assert_callee_named(&callee, "f");
+        assert_eq!(args.len(), 3);
+        assert!(matches!(args[0].kind, ExprKind::Const(Const::Int(1))));
+        assert!(matches!(args[1].kind, ExprKind::Const(Const::Int(2))));
+        assert!(matches!(args[2].kind, ExprKind::Const(Const::Int(3))));
+    }
+
+    #[test]
+    fn parses_call_with_identifier_arg() {
+        let expr = parser("f(x)").parse_expr().unwrap();
+        let ExprKind::Call { args, .. } = expr.kind else {
+            panic!("expected call");
+        };
+        assert_eq!(args.len(), 1);
+        let ExprKind::Identifier(arg_name) = &args[0].kind else {
+            panic!("expected identifier arg");
+        };
+        assert_eq!(arg_name, "x");
+    }
+
+    #[test]
+    fn parses_nested_call() {
+        let expr = parser("f(g())").parse_expr().unwrap();
+        let ExprKind::Call { callee, args } = expr.kind else {
+            panic!("expected outer call");
+        };
+        assert_callee_named(&callee, "f");
+        assert_eq!(args.len(), 1);
+        let ExprKind::Call { callee: inner_callee, args: inner_args } = &args[0].kind else {
+            panic!("expected inner call as arg");
+        };
+        assert_callee_named(inner_callee, "g");
+        assert!(inner_args.is_empty());
+    }
+
+    #[test]
+    fn parses_chained_call() {
+        // foo()() — call the result of foo() with no args
+        let expr = parser("foo()()").parse_expr().unwrap();
+        let ExprKind::Call { callee: outer_callee, args: outer_args } = expr.kind else {
+            panic!("expected outer call");
+        };
+        assert!(outer_args.is_empty());
+
+        // The outer callee is itself a Call(foo, [])
+        let ExprKind::Call { callee: inner_callee, args: inner_args } = &outer_callee.kind else {
+            panic!("expected inner call as the outer callee");
+        };
+        assert_callee_named(inner_callee, "foo");
+        assert!(inner_args.is_empty());
+    }
+
+    #[test]
+    fn identifier_without_parens_is_not_a_call() {
+        let expr = parser("x").parse_expr().unwrap();
+        assert!(matches!(expr.kind, ExprKind::Identifier(_)));
+    }
+
     #[test]
     fn parses_identifier_expression() {
         let expr = parser("x").parse_expr().unwrap();

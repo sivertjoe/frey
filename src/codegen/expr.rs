@@ -1,6 +1,7 @@
-use inkwell::values::BasicValueEnum;
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, ValueKind};
 
 use crate::codegen::{Codegen, Error};
+use crate::hir::FunctionCall;
 use crate::hir::types::{Const, Expr, ExprKind, Statement, StatementKind};
 
 impl<'ctx> Codegen<'ctx> {
@@ -20,6 +21,37 @@ impl<'ctx> Codegen<'ctx> {
             }
             ExprKind::Function(_) => {
                 todo!("nested function literals require closure support")
+            }
+            ExprKind::Call(FunctionCall { callee, args }) => {
+                let arg_vals: Vec<BasicValueEnum<'ctx>> = args
+                    .into_iter()
+                    .map(|a| self.lower_expr(a))
+                    .collect::<Result<_, _>>()?;
+
+                let arg_metadata: Vec<BasicMetadataValueEnum<'ctx>> =
+                    arg_vals.iter().map(|v| (*v).into()).collect();
+
+                let direct_target = match &callee.kind {
+                    ExprKind::Local(id) => self.functions.get(id).copied(),
+                    _ => None,
+                };
+
+                let call_site = match direct_target {
+                    Some(func) => self.builder.build_direct_call(func, &arg_metadata, "")?,
+                    None => {
+                        let fn_ty = self.fn_type_for_function_ty(&callee.ty);
+                        let fn_ptr = self.lower_expr(*callee)?.into_pointer_value();
+                        self.builder
+                            .build_indirect_call(fn_ty, fn_ptr, &arg_metadata, "")?
+                    }
+                };
+
+                match call_site.try_as_basic_value() {
+                    ValueKind::Basic(v) => Ok(v),
+                    ValueKind::Instruction(_) => {
+                        panic!("call returned no value, but Frey functions always return")
+                    }
+                }
             }
         }
     }

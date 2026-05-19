@@ -27,4 +27,19 @@ impl<'ctx> Codegen<'ctx> {
                 .fn_type(&param_types, false),
         }
     }
+
+    pub fn fn_type_for_function_ty(&self, fn_ty: &Ty) -> FunctionType<'ctx> {
+        let Ty::Function { params, return_ty } = fn_ty else {
+            panic!("expected function type, got {fn_ty:?}");
+        };
+        let param_types: Vec<BasicMetadataTypeEnum<'ctx>> =
+            params.iter().map(|p| self.lower_ty(p).into()).collect();
+        match return_ty.as_ref() {
+            Ty::Int => self.context.i32_type().fn_type(&param_types, false),
+            Ty::Function { .. } => self
+                .context
+                .ptr_type(AddressSpace::default())
+                .fn_type(&param_types, false),
+        }
+    }
 }
