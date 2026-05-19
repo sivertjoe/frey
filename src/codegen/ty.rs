@@ -7,25 +7,16 @@ use crate::hir::types::{Param, Ty};
 impl<'ctx> Codegen<'ctx> {
     pub fn lower_ty(&self, ty: &Ty) -> BasicTypeEnum<'ctx> {
         match ty {
+            Ty::Unit => self.context.bool_type().into(),
             Ty::Int => self.context.i32_type().into(),
-            Ty::Function { .. } => self
-                .context
-                .ptr_type(AddressSpace::default())
-                .into(),
+            Ty::Function { .. } => self.context.ptr_type(AddressSpace::default()).into(),
         }
     }
 
     pub fn lower_fn_type(&self, params: &[Param], return_ty: &Ty) -> FunctionType<'ctx> {
         let param_types: Vec<BasicMetadataTypeEnum<'ctx>> =
             params.iter().map(|p| self.lower_ty(&p.ty).into()).collect();
-
-        match return_ty {
-            Ty::Int => self.context.i32_type().fn_type(&param_types, false),
-            Ty::Function { .. } => self
-                .context
-                .ptr_type(AddressSpace::default())
-                .fn_type(&param_types, false),
-        }
+        self.fn_type_with_return(&param_types, return_ty)
     }
 
     pub fn fn_type_for_function_ty(&self, fn_ty: &Ty) -> FunctionType<'ctx> {
@@ -34,12 +25,21 @@ impl<'ctx> Codegen<'ctx> {
         };
         let param_types: Vec<BasicMetadataTypeEnum<'ctx>> =
             params.iter().map(|p| self.lower_ty(p).into()).collect();
-        match return_ty.as_ref() {
-            Ty::Int => self.context.i32_type().fn_type(&param_types, false),
+        self.fn_type_with_return(&param_types, return_ty)
+    }
+
+    fn fn_type_with_return(
+        &self,
+        param_types: &[BasicMetadataTypeEnum<'ctx>],
+        return_ty: &Ty,
+    ) -> FunctionType<'ctx> {
+        match return_ty {
+            Ty::Unit => self.context.bool_type().fn_type(param_types, false),
+            Ty::Int => self.context.i32_type().fn_type(param_types, false),
             Ty::Function { .. } => self
                 .context
                 .ptr_type(AddressSpace::default())
-                .fn_type(&param_types, false),
+                .fn_type(param_types, false),
         }
     }
 }

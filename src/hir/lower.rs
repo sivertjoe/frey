@@ -240,18 +240,44 @@ impl Lower {
 
             ast::ExprKind::Block(block) => {
                 let b = self.lower_block(block)?;
+                let ty = b.tail.ty.clone();
                 Ok(Expr {
                     span: e.span,
+                    ty,
                     kind: ExprKind::Block(b),
-                    ty: todo!(),
                 })
             }
-
             ast::ExprKind::If {
                 condition,
                 then_branch,
                 else_branch,
-            } => todo!(),
+            } => {
+                let condition = self.lower_expr(*condition)?;
+
+                let then_block = self.lower_block(then_branch)?;
+                let then_ty = then_block.tail.ty.clone();
+                let then_span = then_block.span;
+                let then_expr = Expr {
+                    span: then_span,
+                    ty: then_ty.clone(),
+                    kind: ExprKind::Block(then_block),
+                };
+
+                let else_expr = match else_branch {
+                    Some(else_branch) => self.lower_expr(*else_branch)?,
+                    None => unit_expr(end_of(e.span)),
+                };
+
+                Ok(Expr {
+                    span: e.span,
+                    ty: then_ty,
+                    kind: ExprKind::If {
+                        condition: Box::new(condition),
+                        then_branch: Box::new(then_expr),
+                        else_branch: Box::new(else_expr),
+                    },
+                })
+            }
         }
     }
 
@@ -272,8 +298,8 @@ impl Lower {
         }
 
         let tail = match b.tail {
-            Some(expr) => Some(Box::new(self.lower_expr(*expr)?)),
-            None => None,
+            Some(expr) => Box::new(self.lower_expr(*expr)?),
+            None => Box::new(unit_expr(end_of(b.span))),
         };
 
         Ok(Block {
@@ -342,5 +368,20 @@ impl Lower {
             }
         }
         None
+    }
+}
+
+fn unit_expr(span: crate::lexer::types::Span) -> Expr {
+    Expr {
+        span,
+        ty: Ty::Unit,
+        kind: ExprKind::Const(Const::Unit),
+    }
+}
+
+fn end_of(span: crate::lexer::types::Span) -> crate::lexer::types::Span {
+    crate::lexer::types::Span {
+        start: span.end,
+        end: span.end,
     }
 }

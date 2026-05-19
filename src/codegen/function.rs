@@ -42,14 +42,23 @@ impl<'ctx> Codegen<'ctx> {
                 BlockItem::Statement(s) => self.lower_statement(s)?,
             }
         }
-        if let Some(tail) = block.tail {
-            let value = self.lower_expr(*tail)?;
+        // The body may already be terminated by a `return` statement; only
+        // emit the implicit tail-return if the block still needs a terminator.
+        if !self.current_block_terminated() {
+            let value = self.lower_expr(*block.tail)?;
             self.builder.build_return(Some(&value))?;
         }
         Ok(())
     }
 
-    fn lower_local_decl(&mut self, decl: Declaration) -> Result<(), Error> {
+    pub(super) fn current_block_terminated(&self) -> bool {
+        self.builder
+            .get_insert_block()
+            .and_then(|bb| bb.get_terminator())
+            .is_some()
+    }
+
+    pub(super) fn lower_local_decl(&mut self, decl: Declaration) -> Result<(), Error> {
         let value = self.lower_expr(decl.value)?;
         let llvm_ty = self.lower_ty(&decl.ty);
         let slot = self.builder.build_alloca(llvm_ty, &decl.name)?;

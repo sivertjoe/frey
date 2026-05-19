@@ -72,6 +72,44 @@ impl Typechecker {
                 }
                 Ok(())
             }
+            ExprKind::Block(block) => {
+                for item in &block.items {
+                    match item {
+                        BlockItem::Declaration(d) => self.check_declaration(d)?,
+                        BlockItem::Statement(s) => self.check_statement(s)?,
+                    }
+                }
+                self.check_expr(&block.tail)?;
+                Ok(())
+            }
+            ExprKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                self.check_expr(condition)?;
+                if condition.ty != Ty::Int {
+                    return Err(Error {
+                        span: condition.span,
+                        kind: ErrorKind::TypeMismatch {
+                            expected: Ty::Int,
+                            found: condition.ty.clone(),
+                        },
+                    });
+                }
+                self.check_expr(then_branch)?;
+                self.check_expr(else_branch)?;
+                if then_branch.ty != else_branch.ty {
+                    return Err(Error {
+                        span: else_branch.span,
+                        kind: ErrorKind::TypeMismatch {
+                            expected: then_branch.ty.clone(),
+                            found: else_branch.ty.clone(),
+                        },
+                    });
+                }
+                Ok(())
+            }
         }
     }
 
@@ -89,31 +127,23 @@ impl Typechecker {
                 BlockItem::Statement(s) => self.check_statement(s)?,
             }
         }
-        if let Some(tail) = &body.tail {
-            self.check_expr(tail)?;
-            if &tail.ty != return_ty {
-                return Err(Error {
-                    span: tail.span,
-                    kind: ErrorKind::TypeMismatch {
-                        expected: return_ty.clone(),
-                        found: tail.ty.clone(),
-                    },
-                });
-            }
-        } else {
-            let ends_with_return = matches!(
-                body.items.last(),
-                Some(BlockItem::Statement(stmt))
-                    if matches!(stmt.kind, StatementKind::Return(_))
-            );
-            if !ends_with_return {
-                return Err(Error {
-                    span: body.span,
-                    kind: ErrorKind::MissingReturn {
-                        expected: return_ty.clone(),
-                    },
-                });
-            }
+        self.check_expr(&body.tail)?;
+
+        // If the body terminates via a `return` statement at the end, the
+        // synthesized Unit tail is unreachable — skip the type check on it.
+        let ends_with_return = matches!(
+            body.items.last(),
+            Some(BlockItem::Statement(stmt))
+                if matches!(stmt.kind, StatementKind::Return(_))
+        );
+        if !ends_with_return && &body.tail.ty != return_ty {
+            return Err(Error {
+                span: body.tail.span,
+                kind: ErrorKind::TypeMismatch {
+                    expected: return_ty.clone(),
+                    found: body.tail.ty.clone(),
+                },
+            });
         }
         Ok(())
     }

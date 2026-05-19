@@ -11,6 +11,7 @@ impl<'ctx> Codegen<'ctx> {
                 let i32_ty = self.context.i32_type();
                 Ok(i32_ty.const_int(n as u64, true).into())
             }
+            ExprKind::Const(Const::Unit) => Ok(self.context.bool_type().const_zero().into()),
             ExprKind::Local(id) => {
                 if let Some(func) = self.functions.get(&id) {
                     return Ok(func.as_global_value().as_pointer_value().into());
@@ -82,6 +83,12 @@ impl<'ctx> Codegen<'ctx> {
                 };
                 Ok(result.into())
             }
+            ExprKind::Block(block) => self.lower_block_value(block),
+            ExprKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => self.lower_if(*condition, *then_branch, *else_branch),
             ExprKind::Call(FunctionCall { callee, args }) => {
                 let arg_vals: Vec<BasicValueEnum<'ctx>> = args
                     .into_iter()
@@ -112,6 +119,87 @@ impl<'ctx> Codegen<'ctx> {
                         panic!("call returned no value, but Frey functions always return")
                     }
                 }
+            }
+        }
+    }
+
+    fn lower_block_value(
+        &mut self,
+        block: crate::hir::types::Block,
+    ) -> Result<BasicValueEnum<'ctx>, Error> {
+        for item in block.items {
+            match item {
+                crate::hir::types::BlockItem::Declaration(d) => self.lower_local_decl(d)?,
+                crate::hir::types::BlockItem::Statement(s) => self.lower_statement(s)?,
+            }
+        }
+        // If a `return` inside the block already terminated this basic block,
+        // there's no way to actually evaluate the tail — emit a placeholder
+        // value that the caller won't use (since it's unreachable code).
+        if self.current_block_terminated() {
+            return Ok(self.context.bool_type().const_zero().into());
+        }
+        self.lower_expr(*block.tail)
+    }
+
+    fn lower_if(
+        &mut self,
+        condition: Expr,
+        then_branch: Expr,
+        else_branch: Expr,
+    ) -> Result<BasicValueEnum<'ctx>, Error> {
+        let cond_val = self.lower_expr(condition)?.into_int_value();
+        let zero = self.context.i32_type().const_zero();
+        let cond_i1 = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::NE, cond_val, zero, "")?;
+
+        let function = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_parent()
+            .unwrap();
+
+        let then_bb = self.context.append_basic_block(function, "if.then");
+        let else_bb = self.context.append_basic_block(function, "if.else");
+        let merge_bb = self.context.append_basic_block(function, "if.merge");
+
+        self.builder
+            .build_conditional_branch(cond_i1, then_bb, else_bb)?;
+
+        // Then branch
+        self.builder.position_at_end(then_bb);
+        let then_val = self.lower_expr(then_branch)?;
+        let then_end_bb = self.builder.get_insert_block().unwrap();
+        let then_reaches_merge = then_end_bb.get_terminator().is_none();
+        if then_reaches_merge {
+            self.builder.build_unconditional_branch(merge_bb)?;
+        }
+
+        // Else branch
+        self.builder.position_at_end(else_bb);
+        let else_val = self.lower_expr(else_branch)?;
+        let else_end_bb = self.builder.get_insert_block().unwrap();
+        let else_reaches_merge = else_end_bb.get_terminator().is_none();
+        if else_reaches_merge {
+            self.builder.build_unconditional_branch(merge_bb)?;
+        }
+
+        // Merge
+        self.builder.position_at_end(merge_bb);
+        match (then_reaches_merge, else_reaches_merge) {
+            (true, true) => {
+                let phi_ty = then_val.get_type();
+                let phi = self.builder.build_phi(phi_ty, "")?;
+                phi.add_incoming(&[(&then_val, then_end_bb), (&else_val, else_end_bb)]);
+                Ok(phi.as_basic_value())
+            }
+            (true, false) => Ok(then_val),
+            (false, true) => Ok(else_val),
+            (false, false) => {
+                self.builder.build_unreachable()?;
+                Ok(then_val)
             }
         }
     }

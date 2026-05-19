@@ -24,6 +24,7 @@ impl LocalIdGen {
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum Ty {
+    Unit,
     Int,
     Function { params: Vec<Ty>, return_ty: Box<Ty> },
 }
@@ -62,6 +63,11 @@ pub enum ExprKind {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
     },
+    If {
+        condition: Box<Expr>,
+        then_branch: Box<Expr>,
+        else_branch: Box<Expr>,
+    },
 }
 
 pub struct FunctionCall {
@@ -71,6 +77,7 @@ pub struct FunctionCall {
 
 pub enum Const {
     Int(i32),
+    Unit,
 }
 
 pub struct Function {
@@ -89,7 +96,7 @@ pub struct Param {
 pub struct Block {
     pub span: Span,
     pub items: Vec<BlockItem>,
-    pub tail: Option<Box<Expr>>,
+    pub tail: Box<Expr>,
 }
 
 pub enum BlockItem {
@@ -110,6 +117,7 @@ pub enum StatementKind {
 impl fmt::Debug for Ty {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Ty::Unit => write!(f, "Unit"),
             Ty::Int => write!(f, "Int"),
             Ty::Function { params, return_ty } => {
                 write!(f, "(")?;
@@ -159,6 +167,12 @@ impl fmt::Debug for ExprKind {
             ExprKind::Call(call) => write!(f, "call {:?}{:?}", call.callee, call.args),
             ExprKind::Unary { op, operand } => write!(f, "{op:?}({operand:?})"),
             ExprKind::Binary { op, lhs, rhs } => write!(f, "{op:?}({lhs:?}, {rhs:?})"),
+            ExprKind::Block(block) => write!(f, "{block:?}"),
+            ExprKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => write!(f, "If({condition:?}, {then_branch:?}, {else_branch:?})"),
         }
     }
 }
@@ -167,6 +181,7 @@ impl fmt::Debug for Const {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Const::Int(n) => write!(f, "Int({n})"),
+            Const::Unit => write!(f, "Unit"),
         }
     }
 }
