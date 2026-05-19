@@ -27,7 +27,7 @@ statement ::=
     | <unary-op> <expr>
     | if <expr> <block> [ "else" <expr> ]
 
-<function-literal> ::= "(" [<params>] ")" "->" <type> <block>
+<function-literal> ::= "(" [<params>] ")" [ "->" <type> ] <block>
 <params> ::= <param> { "," <param> }
 <param>  ::= <ident> ":" <type>
 
@@ -328,9 +328,15 @@ impl Parser {
                     }
 
                     self.expect(TokenKind::RightParen)?;
-                    self.expect(TokenKind::Minus)?;
-                    self.expect(TokenKind::GreaterThan)?;
-                    let return_ty = self.parse_type()?;
+
+                    let return_ty = if self.check(TokenKind::Minus) {
+                        self.expect(TokenKind::Minus)?;
+                        self.expect(TokenKind::GreaterThan)?;
+                        Some(self.parse_type()?)
+                    } else {
+                        None
+                    };
+
                     let body = self.parse_block()?;
 
                     let span = left.span.join(body.span);

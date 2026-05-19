@@ -85,7 +85,7 @@ pub enum ExprKind {
     Identifier(String),
     Function {
         params: Vec<Param>,
-        return_ty: TypeExpr,
+        return_ty: Option<TypeExpr>,
         body: Block,
     },
     Call {

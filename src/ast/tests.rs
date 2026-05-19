@@ -262,6 +262,27 @@ mod tests {
     }
 
     #[test]
+    fn function_literal_without_return_type_annotation() {
+        // `() { }` — no `->` means implicit Unit return
+        let expr = parser("() { }").parse_expr().unwrap();
+        let ExprKind::Function { return_ty, .. } = expr.kind else {
+            panic!("expected function literal");
+        };
+        assert!(return_ty.is_none());
+    }
+
+    #[test]
+    fn function_literal_with_return_type_annotation() {
+        // `() -> Int { 0 }` — explicit return type still parses
+        let expr = parser("() -> Int { 0 }").parse_expr().unwrap();
+        let ExprKind::Function { return_ty, .. } = expr.kind else {
+            panic!("expected function literal");
+        };
+        let ret = return_ty.expect("return type should be present");
+        assert!(matches!(ret.kind, TypeExprKind::Int));
+    }
+
+    #[test]
     fn parses_identifier_expression() {
         let expr = parser("x").parse_expr().unwrap();
         assert!(matches!(expr.kind, ExprKind::Identifier(_)));

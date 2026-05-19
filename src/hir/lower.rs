@@ -70,7 +70,10 @@ impl Lower {
             .iter()
             .map(|p| self.lower_type(&p.ty))
             .collect::<Result<Vec<_>, _>>()?;
-        let return_ty = Box::new(self.lower_type(return_ty)?);
+        let return_ty = Box::new(match return_ty {
+            Some(t) => self.lower_type(t)?,
+            None => Ty::Unit,
+        });
         let ty = Ty::Function {
             params: param_tys,
             return_ty,
@@ -145,7 +148,10 @@ impl Lower {
                 return_ty,
                 body,
             } => {
-                let return_ty = self.lower_type(&return_ty)?;
+                let return_ty = match return_ty {
+                    Some(t) => self.lower_type(&t)?,
+                    None => Ty::Unit,
+                };
 
                 self.enter_scope();
 
