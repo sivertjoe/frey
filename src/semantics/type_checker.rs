@@ -49,6 +49,29 @@ impl Typechecker {
                 }
                 Ok(())
             }
+            ExprKind::Binary { lhs, rhs, .. } => {
+                self.check_expr(lhs)?;
+                self.check_expr(rhs)?;
+                if lhs.ty != Ty::Int {
+                    return Err(Error {
+                        span: lhs.span,
+                        kind: ErrorKind::TypeMismatch {
+                            expected: Ty::Int,
+                            found: lhs.ty.clone(),
+                        },
+                    });
+                }
+                if rhs.ty != Ty::Int {
+                    return Err(Error {
+                        span: rhs.span,
+                        kind: ErrorKind::TypeMismatch {
+                            expected: Ty::Int,
+                            found: rhs.ty.clone(),
+                        },
+                    });
+                }
+                Ok(())
+            }
         }
     }
 

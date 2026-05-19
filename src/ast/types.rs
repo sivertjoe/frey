@@ -97,6 +97,33 @@ pub enum ExprKind {
         op: UnaryOperator,
         expr: Box<Expr>,
     },
+    Binary {
+        op: BinaryOperator,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinaryOperator {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    Shl,
+    Shr,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Eq,
+    Ne,
+    BitAnd,
+    BitXor,
+    BitOr,
+    And,
+    Or,
 }
 
 pub struct Param {

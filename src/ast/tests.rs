@@ -2,8 +2,8 @@
 mod tests {
     use crate::ast::parser::Parser;
     use crate::ast::types::{
-        BlockItem, Const, Declaration, Expr, ExprKind, StatementKind, TypeExpr, TypeExprKind,
-        UnaryOperator,
+        BinaryOperator, BlockItem, Const, Declaration, Expr, ExprKind, StatementKind, TypeExpr,
+        TypeExprKind, UnaryOperator,
     };
     use crate::lexer::tokenize;
 
@@ -88,11 +88,14 @@ mod tests {
 
     #[test]
     fn param_missing_colon_is_error() {
+        // `(x Int) -> ...` — since `x` isn't followed by `:`, the parser now
+        // treats `(x Int)` as a parenthesized expression containing `x`, and
+        // errors on the unexpected `Int` where `)` was expected.
         let err = parser("(x Int) -> Int { return 0; }")
             .parse_expr()
             .unwrap_err();
         let msg = err.kind.to_string();
-        assert!(msg.contains("`:`"), "got: {msg}");
+        assert!(msg.contains("`)`"), "got: {msg}");
     }
 
     #[test]
@@ -273,6 +276,212 @@ mod tests {
             panic!("expected unary value");
         };
         assert!(matches!(op, UnaryOperator::Minus));
+    }
+
+    #[test]
+    fn parses_simple_addition() {
+        let expr = parser("1 + 2").parse_expr().unwrap();
+        let ExprKind::Binary { op, lhs, rhs } = expr.kind else {
+            panic!("expected binary");
+        };
+        assert_eq!(op, BinaryOperator::Add);
+        assert!(matches!(lhs.kind, ExprKind::Const(Const::Int(1))));
+        assert!(matches!(rhs.kind, ExprKind::Const(Const::Int(2))));
+    }
+
+    #[test]
+    fn precedence_mul_binds_tighter_than_add() {
+        // `1 + 2 * 3` → Add(1, Mul(2, 3))
+        let expr = parser("1 + 2 * 3").parse_expr().unwrap();
+        let ExprKind::Binary { op, lhs, rhs } = expr.kind else {
+            panic!("expected outer binary");
+        };
+        assert_eq!(op, BinaryOperator::Add);
+        assert!(matches!(lhs.kind, ExprKind::Const(Const::Int(1))));
+        let ExprKind::Binary { op: inner_op, .. } = &rhs.kind else {
+            panic!("expected inner binary on rhs");
+        };
+        assert_eq!(*inner_op, BinaryOperator::Mul);
+    }
+
+    #[test]
+    fn left_associativity_for_same_precedence() {
+        // `1 - 2 - 3` → Sub(Sub(1, 2), 3)  (left-assoc, NOT `1 - (2 - 3)`)
+        let expr = parser("1 - 2 - 3").parse_expr().unwrap();
+        let ExprKind::Binary { op, lhs, rhs } = expr.kind else {
+            panic!("expected outer binary");
+        };
+        assert_eq!(op, BinaryOperator::Sub);
+        assert!(matches!(rhs.kind, ExprKind::Const(Const::Int(3))));
+        let ExprKind::Binary { op: inner_op, .. } = &lhs.kind else {
+            panic!("expected inner binary on lhs");
+        };
+        assert_eq!(*inner_op, BinaryOperator::Sub);
+    }
+
+    #[test]
+    fn unary_binds_tighter_than_binary() {
+        // `-1 + 2` → Add(Unary(Minus, 1), 2)   NOT Unary(Minus, Add(1, 2))
+        let expr = parser("-1 + 2").parse_expr().unwrap();
+        let ExprKind::Binary { op, lhs, .. } = expr.kind else {
+            panic!("expected binary at the top");
+        };
+        assert_eq!(op, BinaryOperator::Add);
+        assert!(matches!(lhs.kind, ExprKind::Unary { .. }));
+    }
+
+    #[test]
+    fn comparison_lower_precedence_than_arithmetic() {
+        // `1 + 2 < 3 * 4` → Lt(Add(1, 2), Mul(3, 4))
+        let expr = parser("1 + 2 < 3 * 4").parse_expr().unwrap();
+        let ExprKind::Binary { op, lhs, rhs } = expr.kind else {
+            panic!("expected top binary");
+        };
+        assert_eq!(op, BinaryOperator::Lt);
+        let ExprKind::Binary { op: l, .. } = &lhs.kind else {
+            panic!("expected add on lhs");
+        };
+        assert_eq!(*l, BinaryOperator::Add);
+        let ExprKind::Binary { op: r, .. } = &rhs.kind else {
+            panic!("expected mul on rhs");
+        };
+        assert_eq!(*r, BinaryOperator::Mul);
+    }
+
+    #[test]
+    fn logical_or_lowest_precedence() {
+        // `a && b || c && d` → Or(And(a, b), And(c, d))
+        let expr = parser("a && b || c && d").parse_expr().unwrap();
+        let ExprKind::Binary { op, lhs, rhs } = expr.kind else {
+            panic!("expected top binary");
+        };
+        assert_eq!(op, BinaryOperator::Or);
+        let ExprKind::Binary { op: l, .. } = &lhs.kind else {
+            panic!("expected and on lhs");
+        };
+        assert_eq!(*l, BinaryOperator::And);
+        let ExprKind::Binary { op: r, .. } = &rhs.kind else {
+            panic!("expected and on rhs");
+        };
+        assert_eq!(*r, BinaryOperator::And);
+    }
+
+    #[test]
+    fn shift_between_add_and_comparison() {
+        // `1 + 2 << 3 < 10` → Lt(Shl(Add(1,2), 3), 10)
+        let expr = parser("1 + 2 << 3 < 10").parse_expr().unwrap();
+        let ExprKind::Binary { op, lhs, .. } = expr.kind else {
+            panic!("expected top");
+        };
+        assert_eq!(op, BinaryOperator::Lt);
+        let ExprKind::Binary { op: shl_op, lhs: shl_lhs, .. } = &lhs.kind else {
+            panic!("expected shl");
+        };
+        assert_eq!(*shl_op, BinaryOperator::Shl);
+        let ExprKind::Binary { op: add_op, .. } = &shl_lhs.kind else {
+            panic!("expected add inside shl lhs");
+        };
+        assert_eq!(*add_op, BinaryOperator::Add);
+    }
+
+    #[test]
+    fn binary_with_calls_and_unary() {
+        // `-foo() + bar() * 2` — exercises precedence + postfix + unary together
+        let expr = parser("-foo() + bar() * 2").parse_expr().unwrap();
+        let ExprKind::Binary { op, lhs, rhs } = expr.kind else {
+            panic!("expected add");
+        };
+        assert_eq!(op, BinaryOperator::Add);
+        assert!(matches!(lhs.kind, ExprKind::Unary { .. }));
+        let ExprKind::Binary { op: mul_op, .. } = &rhs.kind else {
+            panic!("expected mul on rhs");
+        };
+        assert_eq!(*mul_op, BinaryOperator::Mul);
+    }
+
+    #[test]
+    fn parses_parenthesized_expression() {
+        let expr = parser("(1 + 2)").parse_expr().unwrap();
+        // Parens disappear — the result is just the inner Add expression.
+        let ExprKind::Binary { op, .. } = expr.kind else {
+            panic!("expected binary");
+        };
+        assert_eq!(op, BinaryOperator::Add);
+    }
+
+    #[test]
+    fn parens_override_precedence() {
+        // Without parens, `a + b * 2` is Add(a, Mul(b, 2)).
+        // With parens, `(a + b) * 2` should be Mul(Add(a, b), 2).
+        let expr = parser("(a + b) * 2").parse_expr().unwrap();
+        let ExprKind::Binary { op, lhs, rhs } = expr.kind else {
+            panic!("expected outer binary");
+        };
+        assert_eq!(op, BinaryOperator::Mul);
+        assert!(matches!(rhs.kind, ExprKind::Const(Const::Int(2))));
+        let ExprKind::Binary { op: inner_op, .. } = &lhs.kind else {
+            panic!("expected inner binary on lhs");
+        };
+        assert_eq!(*inner_op, BinaryOperator::Add);
+    }
+
+    #[test]
+    fn nested_parens() {
+        let expr = parser("((1 + 2))").parse_expr().unwrap();
+        let ExprKind::Binary { op, .. } = expr.kind else {
+            panic!("expected binary at top level (parens collapse)");
+        };
+        assert_eq!(op, BinaryOperator::Add);
+    }
+
+    #[test]
+    fn unary_on_parens() {
+        // `-(a + b)` → Unary(Minus, Add(a, b))
+        let expr = parser("-(a + b)").parse_expr().unwrap();
+        let ExprKind::Unary { op, expr: inner } = expr.kind else {
+            panic!("expected unary");
+        };
+        assert!(matches!(op, UnaryOperator::Minus));
+        let ExprKind::Binary { op: bin_op, .. } = &inner.kind else {
+            panic!("expected binary inside unary");
+        };
+        assert_eq!(*bin_op, BinaryOperator::Add);
+    }
+
+    #[test]
+    fn parens_in_call_arg() {
+        // `foo((1 + 2))` — one arg, which is itself a parenthesized expression
+        let expr = parser("foo((1 + 2))").parse_expr().unwrap();
+        let ExprKind::Call { args, .. } = expr.kind else {
+            panic!("expected call");
+        };
+        assert_eq!(args.len(), 1);
+        let ExprKind::Binary { op, .. } = &args[0].kind else {
+            panic!("expected binary as arg");
+        };
+        assert_eq!(*op, BinaryOperator::Add);
+    }
+
+    #[test]
+    fn function_literal_still_parses_with_empty_params() {
+        // sanity: `() -> Int { 0 }` should still parse as a function literal,
+        // not be ambiguous with a parenthesized expression
+        let expr = parser("() -> Int { 0 }").parse_expr().unwrap();
+        assert!(matches!(expr.kind, ExprKind::Function { .. }));
+    }
+
+    #[test]
+    fn function_literal_with_typed_param_still_parses() {
+        let expr = parser("(x: Int) -> Int { x }").parse_expr().unwrap();
+        assert!(matches!(expr.kind, ExprKind::Function { .. }));
+    }
+
+    #[test]
+    fn parens_span_covers_parens() {
+        // `(1 + 2)` — span should run from col 1 (the `(`) through col 8 (just past `)`)
+        let expr = parser("(1 + 2)").parse_expr().unwrap();
+        assert_eq!(expr.span.start.column, 1);
+        assert_eq!(expr.span.end.column, 8);
     }
 
     #[test]

@@ -44,8 +44,8 @@ use crate::{
         error::Error,
         token_iter::TokenIter,
         types::{
-            Block, BlockItem, Const, Declaration, Expr, ExprKind, NodeIdGen, Param, Program,
-            Statement, StatementKind, TypeExpr, TypeExprKind,
+            BinaryOperator, Block, BlockItem, Const, Declaration, Expr, ExprKind, NodeIdGen, Param,
+            Program, Statement, StatementKind, TypeExpr, TypeExprKind,
         },
     },
     lexer::types::{Literal, Token, TokenKind},
@@ -217,6 +217,63 @@ impl Parser {
     }
 
     pub(super) fn parse_expr(&mut self) -> Result<Expr, Error> {
+        self.parse_binary_expr(0)
+    }
+
+    fn parse_binary_expr(&mut self, min_prec: i32) -> Result<Expr, Error> {
+        let mut lhs = self.parse_unary()?;
+
+        loop {
+            let Some((prec, op)) = self
+                .iter
+                .peek()
+                .and_then(|t| binary_precedence(&t.kind))
+            else {
+                break;
+            };
+            if prec < min_prec {
+                break;
+            }
+            self.iter.consume();
+            let rhs = self.parse_binary_expr(prec + 1)?;
+            let span = lhs.span.join(rhs.span);
+            lhs = Expr {
+                id: self.id_gen.fresh(),
+                span,
+                kind: ExprKind::Binary {
+                    op,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
+            };
+        }
+        Ok(lhs)
+    }
+
+    fn parse_unary(&mut self) -> Result<Expr, Error> {
+        if !self.check_is_unop() {
+            return self.parse_postfix();
+        }
+        let tok = self.iter.consume().unwrap();
+        let op = match tok.kind {
+            TokenKind::Not => UnaryOperator::Not,
+            TokenKind::Minus => UnaryOperator::Minus,
+            _ => unreachable!(),
+        };
+        let start = tok.span;
+        let operand = self.parse_unary()?;
+        let span = start.join(operand.span);
+        Ok(Expr {
+            id: self.id_gen.fresh(),
+            span,
+            kind: ExprKind::Unary {
+                op,
+                expr: Box::new(operand),
+            },
+        })
+    }
+
+    fn parse_postfix(&mut self) -> Result<Expr, Error> {
         let mut e = self.parse_primary()?;
         while self.check(TokenKind::LeftParen) {
             e = self.parse_call_suffix(e)?;
@@ -248,52 +305,54 @@ impl Parser {
                 })
             }
             TokenKind::LeftParen => {
-                let left = self.expect(TokenKind::LeftParen)?;
+                // Disambiguate: function literal vs parenthesized expression.
+                // `()` and `(ident : ...)` are function literals; everything
+                // else inside `( ... )` is a grouped expression.
+                let is_function_literal = matches!(
+                    self.iter.peek_nth(1).map(|t| &t.kind),
+                    Some(TokenKind::RightParen)
+                ) || matches!(
+                    (
+                        self.iter.peek_nth(1).map(|t| &t.kind),
+                        self.iter.peek_nth(2).map(|t| &t.kind),
+                    ),
+                    (Some(TokenKind::Identifier(_)), Some(TokenKind::Colon))
+                );
 
-                let mut params = Vec::new();
-                while !matches!(self.iter.peek(), Some(t) if t.kind == TokenKind::RightParen) {
-                    if !params.is_empty() {
-                        self.expect(TokenKind::Comma)?;
+                if is_function_literal {
+                    let left = self.expect(TokenKind::LeftParen)?;
+
+                    let mut params = Vec::new();
+                    while !matches!(self.iter.peek(), Some(t) if t.kind == TokenKind::RightParen) {
+                        if !params.is_empty() {
+                            self.expect(TokenKind::Comma)?;
+                        }
+                        params.push(self.parse_param()?);
                     }
-                    params.push(self.parse_param()?);
+
+                    self.expect(TokenKind::RightParen)?;
+                    self.expect(TokenKind::Minus)?;
+                    self.expect(TokenKind::GreaterThan)?;
+                    let return_ty = self.parse_type()?;
+                    let body = self.parse_block()?;
+
+                    let span = left.span.join(body.span);
+                    Ok(Expr {
+                        id: self.id_gen.fresh(),
+                        span,
+                        kind: ExprKind::Function {
+                            params,
+                            return_ty,
+                            body,
+                        },
+                    })
+                } else {
+                    let left = self.expect(TokenKind::LeftParen)?.span;
+                    let mut expr = self.parse_expr()?;
+                    let right = self.expect(TokenKind::RightParen)?.span;
+                    expr.span = left.join(right);
+                    Ok(expr)
                 }
-
-                self.expect(TokenKind::RightParen)?;
-                self.expect(TokenKind::Minus)?;
-                self.expect(TokenKind::GreaterThan)?;
-                let return_ty = self.parse_type()?;
-                let body = self.parse_block()?;
-
-                let span = left.span.join(body.span);
-                Ok(Expr {
-                    id: self.id_gen.fresh(),
-                    span,
-                    kind: ExprKind::Function {
-                        params,
-                        return_ty,
-                        body,
-                    },
-                })
-            }
-            op if self.check_is_unop() => {
-                let op = match op {
-                    TokenKind::Not => UnaryOperator::Not,
-                    TokenKind::Minus => UnaryOperator::Minus,
-                    _ => unreachable!(),
-                };
-                let start = self.iter.consume().unwrap().span;
-                let expr = self.parse_expr()?;
-
-                let span = start.join(expr.span);
-
-                Ok(Expr {
-                    id: self.id_gen.fresh(),
-                    span,
-                    kind: ExprKind::Unary {
-                        op,
-                        expr: Box::new(expr),
-                    },
-                })
             }
             _ => Err(Error::unexpected(tok, "expression")),
         }
@@ -361,4 +420,28 @@ impl Parser {
             _ => false,
         }
     }
+}
+
+fn binary_precedence(kind: &TokenKind) -> Option<(i32, BinaryOperator)> {
+    Some(match kind {
+        TokenKind::Star => (50, BinaryOperator::Mul),
+        TokenKind::Slash => (50, BinaryOperator::Div),
+        TokenKind::Percent => (50, BinaryOperator::Mod),
+        TokenKind::Plus => (45, BinaryOperator::Add),
+        TokenKind::Minus => (45, BinaryOperator::Sub),
+        TokenKind::ShiftLeft => (40, BinaryOperator::Shl),
+        TokenKind::ShiftRight => (40, BinaryOperator::Shr),
+        TokenKind::LessThan => (35, BinaryOperator::Lt),
+        TokenKind::LessEqual => (35, BinaryOperator::Le),
+        TokenKind::GreaterThan => (35, BinaryOperator::Gt),
+        TokenKind::GreaterEqual => (35, BinaryOperator::Ge),
+        TokenKind::EqualEqual => (30, BinaryOperator::Eq),
+        TokenKind::NotEqual => (30, BinaryOperator::Ne),
+        TokenKind::Ampersand => (25, BinaryOperator::BitAnd),
+        TokenKind::Caret => (20, BinaryOperator::BitXor),
+        TokenKind::Pipe => (15, BinaryOperator::BitOr),
+        TokenKind::AmpAmp => (10, BinaryOperator::And),
+        TokenKind::PipePipe => (5, BinaryOperator::Or),
+        _ => return None,
+    })
 }

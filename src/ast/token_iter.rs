@@ -16,6 +16,10 @@ impl TokenIter {
         self.tokens.front()
     }
 
+    pub fn peek_nth(&self, n: usize) -> Option<&Token> {
+        self.tokens.get(n)
+    }
+
     pub fn consume(&mut self) -> Option<Token> {
         self.tokens.pop_front()
     }

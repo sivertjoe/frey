@@ -37,18 +37,50 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, Error> {
             ')' => {
                 tokens.push(cursor.single(TokenKind::RightParen));
             }
-            '=' => {
-                tokens.push(cursor.single(TokenKind::Equal));
-            }
+            '=' => match cursor.peek_second() {
+                Some('=') => tokens.push(cursor.double(TokenKind::EqualEqual)),
+                _ => tokens.push(cursor.single(TokenKind::Equal)),
+            },
             '-' => {
                 tokens.push(cursor.single(TokenKind::Minus));
             }
-            '!' => {
-                tokens.push(cursor.single(TokenKind::Not));
+            '+' => {
+                tokens.push(cursor.single(TokenKind::Plus));
             }
-            '>' => {
-                tokens.push(cursor.single(TokenKind::GreaterThan));
+            '*' => {
+                tokens.push(cursor.single(TokenKind::Star));
             }
+            '/' => {
+                tokens.push(cursor.single(TokenKind::Slash));
+            }
+            '%' => {
+                tokens.push(cursor.single(TokenKind::Percent));
+            }
+            '^' => {
+                tokens.push(cursor.single(TokenKind::Caret));
+            }
+            '!' => match cursor.peek_second() {
+                Some('=') => tokens.push(cursor.double(TokenKind::NotEqual)),
+                _ => tokens.push(cursor.single(TokenKind::Not)),
+            },
+            '<' => match cursor.peek_second() {
+                Some('=') => tokens.push(cursor.double(TokenKind::LessEqual)),
+                Some('<') => tokens.push(cursor.double(TokenKind::ShiftLeft)),
+                _ => tokens.push(cursor.single(TokenKind::LessThan)),
+            },
+            '>' => match cursor.peek_second() {
+                Some('=') => tokens.push(cursor.double(TokenKind::GreaterEqual)),
+                Some('>') => tokens.push(cursor.double(TokenKind::ShiftRight)),
+                _ => tokens.push(cursor.single(TokenKind::GreaterThan)),
+            },
+            '&' => match cursor.peek_second() {
+                Some('&') => tokens.push(cursor.double(TokenKind::AmpAmp)),
+                _ => tokens.push(cursor.single(TokenKind::Ampersand)),
+            },
+            '|' => match cursor.peek_second() {
+                Some('|') => tokens.push(cursor.double(TokenKind::PipePipe)),
+                _ => tokens.push(cursor.single(TokenKind::Pipe)),
+            },
             '0'..='9' => {
                 tokens.push(cursor.int()?);
             }

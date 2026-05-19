@@ -1,3 +1,4 @@
+pub use crate::ast::{BinaryOperator, UnaryOperator};
 use crate::lexer::types::Span;
 use std::fmt;
 
@@ -55,17 +56,16 @@ pub enum ExprKind {
         op: UnaryOperator,
         operand: Box<Expr>,
     },
+    Binary {
+        op: BinaryOperator,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
 }
 
 pub struct FunctionCall {
     pub callee: Box<Expr>,
     pub args: Vec<Expr>,
-}
-
-#[derive(Debug)]
-pub enum UnaryOperator {
-    Not,
-    Minus,
 }
 
 pub enum Const {
@@ -157,6 +157,7 @@ impl fmt::Debug for ExprKind {
             ExprKind::Function(func) => write!(f, "{func:?}"),
             ExprKind::Call(call) => write!(f, "call {:?}{:?}", call.callee, call.args),
             ExprKind::Unary { op, operand } => write!(f, "{op:?}({operand:?})"),
+            ExprKind::Binary { op, lhs, rhs } => write!(f, "{op:?}({lhs:?}, {rhs:?})"),
         }
     }
 }

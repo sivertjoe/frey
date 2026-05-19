@@ -31,6 +31,12 @@ impl<'a> Cursor<'a> {
         self.src[self.offset..].chars().next()
     }
 
+    pub fn peek_second(&self) -> Option<char> {
+        let mut chars = self.src[self.offset..].chars();
+        chars.next();
+        chars.next()
+    }
+
     pub fn bump(&mut self) -> Option<char> {
         let ch = self.peek()?;
 
@@ -48,6 +54,18 @@ impl<'a> Cursor<'a> {
 
     pub fn single(&mut self, kind: TokenKind) -> Token {
         let start = self.position();
+        self.bump();
+        let end = self.position();
+
+        Token {
+            kind,
+            span: Span { start, end },
+        }
+    }
+
+    pub fn double(&mut self, kind: TokenKind) -> Token {
+        let start = self.position();
+        self.bump();
         self.bump();
         let end = self.position();
 

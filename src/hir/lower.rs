@@ -223,6 +223,20 @@ impl Lower {
                     },
                 })
             }
+            ast::ExprKind::Binary { op, lhs, rhs } => {
+                let lhs = self.lower_expr(*lhs)?;
+                let rhs = self.lower_expr(*rhs)?;
+                let ty = lhs.ty.clone();
+                Ok(Expr {
+                    span: e.span,
+                    ty,
+                    kind: ExprKind::Binary {
+                        op,
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(rhs),
+                    },
+                })
+            }
         }
     }
 
