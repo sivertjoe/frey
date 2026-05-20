@@ -584,4 +584,66 @@ mod tests {
 
         assert_eq!(tokens, vec![eof(0, 1, 1)]);
     }
+
+    #[test]
+    fn tokenizes_float_literal() {
+        let tokens = tokenize("3.14").unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: TokenKind::Literal(Literal::Float(3.14)),
+                    span: span(0, 1, 1, 4, 1, 5),
+                },
+                eof(4, 1, 5),
+            ]
+        );
+    }
+
+    #[test]
+    fn tokenizes_float_with_leading_dot() {
+        let tokens = tokenize(".5").unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: TokenKind::Literal(Literal::Float(0.5)),
+                    span: span(0, 1, 1, 2, 1, 3),
+                },
+                eof(2, 1, 3),
+            ]
+        );
+    }
+
+    #[test]
+    fn tokenizes_float_with_exponent() {
+        let tokens = tokenize("1e10 2.5E-3 1.5e+2").unwrap();
+        let kinds: Vec<_> = tokens.iter().map(|t| &t.kind).collect();
+        assert!(matches!(kinds[0], TokenKind::Literal(Literal::Float(v)) if (*v - 1e10).abs() < 1.0));
+        assert!(matches!(kinds[1], TokenKind::Literal(Literal::Float(v)) if (*v - 2.5e-3).abs() < 1e-9));
+        assert!(matches!(kinds[2], TokenKind::Literal(Literal::Float(v)) if (*v - 150.0).abs() < 1e-3));
+    }
+
+    #[test]
+    fn float_span_tracks_columns_after_number() {
+        // After a number, the next token's column should reflect the number's full width.
+        let tokens = tokenize("3.14 x").unwrap();
+        assert_eq!(tokens[0].span.end.column, 5);
+        // `x` should be at column 6.
+        assert_eq!(tokens[1].span.start.column, 6);
+    }
+
+    #[test]
+    fn integer_followed_by_alpha_is_error() {
+        // `123abc` is not a valid integer/float — alphanumeric suffix.
+        let err = tokenize("123abc").unwrap_err();
+        assert_eq!(err.span.start.column, 1);
+        assert_eq!(err.span.end.column, 7);
+    }
+
+    #[test]
+    fn missing_exponent_digits_is_error() {
+        // `1e` without digits in the exponent is invalid.
+        assert!(tokenize("1e").is_err());
+    }
 }

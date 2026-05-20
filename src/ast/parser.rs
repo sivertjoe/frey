@@ -114,6 +114,14 @@ impl Parser {
                     kind: TypeExprKind::Int,
                 })
             }
+            TokenKind::Float => {
+                let span = self.iter.consume().unwrap().span;
+                Ok(TypeExpr {
+                    id: self.id_gen.fresh(),
+                    span,
+                    kind: TypeExprKind::Float,
+                })
+            }
             TokenKind::LeftParen => self.parse_function_type(),
             _ => Err(Error::unexpected(tok, "type")),
         }
@@ -306,6 +314,16 @@ impl Parser {
                     id: self.id_gen.fresh(),
                     span,
                     kind: ExprKind::Const(Const::Int(value)),
+                })
+            }
+            TokenKind::Literal(Literal::Float(float)) => {
+                let value = *float;
+                let span = tok.span;
+                self.iter.consume();
+                Ok(Expr {
+                    id: self.id_gen.fresh(),
+                    span,
+                    kind: ExprKind::Const(Const::Float(value)),
                 })
             }
             TokenKind::Identifier(_) => {

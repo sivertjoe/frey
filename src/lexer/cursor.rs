@@ -92,46 +92,6 @@ impl<'a> Cursor<'a> {
         &self.src[start..self.offset]
     }
 
-    pub fn int(&mut self) -> Result<Token, Error> {
-        let start = self.position();
-
-        let digits = self.take_while(|ch| ch.is_ascii_digit()).to_string();
-
-        if self
-            .peek()
-            .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
-        {
-            let suffix = self
-                .take_while(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-                .to_string();
-            return Err(Error {
-                kind: ErrorKind::InvalidIntegerSuffix(suffix),
-                span: Span {
-                    start,
-                    end: self.position(),
-                },
-            });
-        }
-
-        // @TODO: handle long later
-        let Ok(value) = digits.parse::<i32>() else {
-            return Err(Error {
-                kind: ErrorKind::InvalidInt(digits),
-                span: Span {
-                    start,
-                    end: self.position(),
-                },
-            });
-        };
-
-        let end = self.position();
-
-        Ok(Token {
-            kind: TokenKind::Literal(Literal::Int(value)),
-            span: Span { start, end },
-        })
-    }
-
     pub fn identifier_or_keyword(&mut self) -> Token {
         let start = self.position();
 
@@ -140,6 +100,7 @@ impl<'a> Cursor<'a> {
         let kind = match raw {
             "let" => TokenKind::Let,
             "Int" => TokenKind::Int,
+            "Float" => TokenKind::Float,
             "if" => TokenKind::If,
             "else" => TokenKind::Else,
             "return" => TokenKind::Return,
@@ -151,6 +112,85 @@ impl<'a> Cursor<'a> {
         Token {
             kind,
             span: Span { start, end },
+        }
+    }
+
+    pub fn number(&mut self) -> Result<Token, Error> {
+        let start = self.position();
+        let start_offset = self.offset;
+        let mut is_float = false;
+
+        self.take_while(|c| c.is_ascii_digit());
+
+        let started_with_dot = self.offset == start_offset;
+        if self.peek() == Some('.')
+            && (started_with_dot || matches!(self.peek_second(), Some(c) if c.is_ascii_digit()))
+        {
+            is_float = true;
+            self.bump();
+            self.take_while(|c| c.is_ascii_digit());
+        }
+
+        // Optional exponent: `e[+-]?digits`.
+        if matches!(self.peek(), Some('e' | 'E')) {
+            is_float = true;
+            self.bump();
+            if matches!(self.peek(), Some('+' | '-')) {
+                self.bump();
+            }
+            let exp_digits_start = self.offset;
+            self.take_while(|c| c.is_ascii_digit());
+            if self.offset == exp_digits_start {
+                return Err(Error {
+                    span: Span {
+                        start,
+                        end: self.position(),
+                    },
+                    kind: ErrorKind::UnexpectedText(
+                        self.src[start_offset..self.offset].to_string(),
+                    ),
+                });
+            }
+        }
+
+        if self
+            .peek()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        {
+            self.take_while(|c| c.is_ascii_alphanumeric() || c == '_');
+            return Err(Error {
+                kind: ErrorKind::UnexpectedText(self.src[start_offset..self.offset].to_string()),
+                span: Span {
+                    start,
+                    end: self.position(),
+                },
+            });
+        }
+
+        let text = &self.src[start_offset..self.offset];
+        let span = Span {
+            start,
+            end: self.position(),
+        };
+
+        if is_float {
+            let value = text.parse::<f32>().map_err(|_| Error {
+                kind: ErrorKind::UnexpectedText(text.to_string()),
+                span,
+            })?;
+            Ok(Token {
+                span,
+                kind: TokenKind::Literal(Literal::Float(value)),
+            })
+        } else {
+            let value = text.parse::<i32>().map_err(|_| Error {
+                kind: ErrorKind::InvalidInt(text.to_string()),
+                span,
+            })?;
+            Ok(Token {
+                span,
+                kind: TokenKind::Literal(Literal::Int(value)),
+            })
         }
     }
 }

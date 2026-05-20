@@ -46,6 +46,7 @@ pub struct TypeExpr {
 #[derive(Debug)]
 pub enum TypeExprKind {
     Int,
+    Float,
     Function {
         params: Vec<TypeExpr>,
         return_ty: Box<TypeExpr>,
@@ -146,6 +147,7 @@ pub struct Param {
 #[derive(Debug)]
 pub enum Const {
     Int(i32),
+    Float(f32),
 }
 
 #[derive(Debug)]

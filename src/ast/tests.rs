@@ -2,8 +2,8 @@
 mod tests {
     use crate::ast::parser::Parser;
     use crate::ast::types::{
-        BinaryOperator, BlockItem, Const, Declaration, Expr, ExprKind, StatementKind, TypeExpr,
-        TypeExprKind, UnaryOperator,
+        BinaryOperator, BlockItem, Const, Expr, ExprKind, StatementKind, TypeExprKind,
+        UnaryOperator,
     };
     use crate::lexer::tokenize;
 

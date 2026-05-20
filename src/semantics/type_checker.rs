@@ -1,6 +1,6 @@
 use crate::hir::types::{
-    Block, BlockItem, Declaration, Expr, ExprKind, Function, FunctionCall, Program, Statement,
-    StatementKind, Ty,
+    BinaryOperator, Block, BlockItem, Declaration, Expr, ExprKind, Function, FunctionCall, Program,
+    Statement, StatementKind, Ty, UnaryOperator,
 };
 use crate::semantics::error::{Error, ErrorKind};
 
@@ -36,40 +36,40 @@ impl Typechecker {
             ExprKind::Local(_) => Ok(()),
             ExprKind::Function(func) => self.check_function(func),
             ExprKind::Call(call) => self.check_call(call, e),
-            ExprKind::Unary { operand, .. } => {
+            ExprKind::Unary { operand, op } => {
                 self.check_expr(operand)?;
-                if operand.ty != Ty::Int {
-                    return Err(Error {
-                        span: operand.span,
-                        kind: ErrorKind::TypeMismatch {
-                            expected: Ty::Int,
-                            found: operand.ty.clone(),
-                        },
-                    });
+                match op {
+                    // `-x` works on any number type (Int or Float).
+                    UnaryOperator::Minus => {
+                        if !operand.ty.is_number() {
+                            return Err(Error {
+                                span: operand.span,
+                                kind: ErrorKind::TypeMismatch {
+                                    expected: Ty::Int,
+                                    found: operand.ty.clone(),
+                                },
+                            });
+                        }
+                    }
+                    // `!x` is bitwise/logical "is zero"; only meaningful on Int.
+                    UnaryOperator::Not => {
+                        if !operand.ty.is_int() {
+                            return Err(Error {
+                                span: operand.span,
+                                kind: ErrorKind::TypeMismatch {
+                                    expected: Ty::Int,
+                                    found: operand.ty.clone(),
+                                },
+                            });
+                        }
+                    }
                 }
                 Ok(())
             }
-            ExprKind::Binary { lhs, rhs, .. } => {
+            ExprKind::Binary { lhs, rhs, op } => {
                 self.check_expr(lhs)?;
                 self.check_expr(rhs)?;
-                if lhs.ty != Ty::Int {
-                    return Err(Error {
-                        span: lhs.span,
-                        kind: ErrorKind::TypeMismatch {
-                            expected: Ty::Int,
-                            found: lhs.ty.clone(),
-                        },
-                    });
-                }
-                if rhs.ty != Ty::Int {
-                    return Err(Error {
-                        span: rhs.span,
-                        kind: ErrorKind::TypeMismatch {
-                            expected: Ty::Int,
-                            found: rhs.ty.clone(),
-                        },
-                    });
-                }
+                self.check_binary_op(*op, lhs, rhs)?;
                 Ok(())
             }
             ExprKind::Block(block) => {
@@ -170,6 +170,82 @@ impl Typechecker {
             }
             StatementKind::Expr(e) => self.check_expr(e),
         }
+    }
+
+    fn check_binary_op(
+        &self,
+        op: BinaryOperator,
+        lhs: &Expr,
+        rhs: &Expr,
+    ) -> Result<(), Error> {
+        use BinaryOperator as B;
+        match op {
+            // Arithmetic: both operands must be the same numeric type.
+            B::Add | B::Sub | B::Mul | B::Div | B::Mod => {
+                self.require_number(lhs)?;
+                self.require_matching(lhs, rhs)?;
+            }
+            // Comparisons: same numeric type. Result is Int (0/1).
+            B::Lt | B::Le | B::Gt | B::Ge | B::Eq | B::Ne => {
+                self.require_number(lhs)?;
+                self.require_matching(lhs, rhs)?;
+            }
+            // Shifts: both Int.
+            B::Shl | B::Shr => {
+                self.require_int(lhs)?;
+                self.require_int(rhs)?;
+            }
+            // Bitwise: both Int.
+            B::BitAnd | B::BitOr | B::BitXor => {
+                self.require_int(lhs)?;
+                self.require_int(rhs)?;
+            }
+            // Logical: treated as truthy on Int (no Bool yet).
+            B::And | B::Or => {
+                self.require_int(lhs)?;
+                self.require_int(rhs)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn require_int(&self, e: &Expr) -> Result<(), Error> {
+        if !e.ty.is_int() {
+            return Err(Error {
+                span: e.span,
+                kind: ErrorKind::TypeMismatch {
+                    expected: Ty::Int,
+                    found: e.ty.clone(),
+                },
+            });
+        }
+        Ok(())
+    }
+
+    fn require_number(&self, e: &Expr) -> Result<(), Error> {
+        if !e.ty.is_number() {
+            return Err(Error {
+                span: e.span,
+                kind: ErrorKind::TypeMismatch {
+                    expected: Ty::Int,
+                    found: e.ty.clone(),
+                },
+            });
+        }
+        Ok(())
+    }
+
+    fn require_matching(&self, lhs: &Expr, rhs: &Expr) -> Result<(), Error> {
+        if lhs.ty != rhs.ty {
+            return Err(Error {
+                span: rhs.span,
+                kind: ErrorKind::TypeMismatch {
+                    expected: lhs.ty.clone(),
+                    found: rhs.ty.clone(),
+                },
+            });
+        }
+        Ok(())
     }
 
     fn check_call(&mut self, call: &FunctionCall, call_expr: &Expr) -> Result<(), Error> {

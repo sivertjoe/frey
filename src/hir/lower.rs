@@ -123,6 +123,11 @@ impl Lower {
                 ty: Ty::Int,
                 kind: ExprKind::Const(Const::Int(n)),
             }),
+            ast::ExprKind::Const(ast::Const::Float(f)) => Ok(Expr {
+                span: e.span,
+                ty: Ty::Float,
+                kind: ExprKind::Const(Const::Float(f)),
+            }),
             ast::ExprKind::Identifier(name) => {
                 let Some(local_id) = self.resolve(&name) else {
                     return Err(Error {
@@ -230,9 +235,19 @@ impl Lower {
                 })
             }
             ast::ExprKind::Binary { op, lhs, rhs } => {
+                use crate::ast::BinaryOperator as B;
                 let lhs = self.lower_expr(*lhs)?;
                 let rhs = self.lower_expr(*rhs)?;
-                let ty = lhs.ty.clone();
+                let ty = match op {
+                    // Arithmetic preserves the operand type (operands must match —
+                    // typechecker enforces this).
+                    B::Add | B::Sub | B::Mul | B::Div | B::Mod => lhs.ty.clone(),
+                    // Shifts and bitwise are Int-only; result is Int.
+                    B::Shl | B::Shr | B::BitAnd | B::BitOr | B::BitXor => Ty::Int,
+                    // Comparisons and logical produce Int (0/1) as boolean.
+                    B::Lt | B::Le | B::Gt | B::Ge | B::Eq | B::Ne => Ty::Int,
+                    B::And | B::Or => Ty::Int,
+                };
                 Ok(Expr {
                     span: e.span,
                     ty,
@@ -336,6 +351,7 @@ impl Lower {
     fn lower_type(&mut self, t: &ast::TypeExpr) -> Result<Ty, Error> {
         match &t.kind {
             ast::TypeExprKind::Int => Ok(Ty::Int),
+            ast::TypeExprKind::Float => Ok(Ty::Float),
             ast::TypeExprKind::Function { params, return_ty } => {
                 let params = params
                     .iter()

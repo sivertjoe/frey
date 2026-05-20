@@ -39,6 +39,7 @@ pub enum TokenKind {
     Else,
 
     Int,
+    Float,
     Identifier(String),
 
     Equal,
@@ -74,6 +75,7 @@ pub enum TokenKind {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Literal {
     Int(i32),
+    Float(f32),
 }
 
 impl std::fmt::Display for TokenKind {
@@ -85,6 +87,7 @@ impl std::fmt::Display for TokenKind {
             TokenKind::RightParen => write!(f, "`)`"),
             TokenKind::Let => write!(f, "`let`"),
             TokenKind::Int => write!(f, "`Int`"),
+            TokenKind::Float => write!(f, "`Float`"),
             TokenKind::Identifier(name) => write!(f, "`{name}`"),
             TokenKind::Equal => write!(f, "`=`"),
             TokenKind::Minus => write!(f, "`-`"),
@@ -123,6 +126,7 @@ impl std::fmt::Display for Literal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Literal::Int(n) => write!(f, "`{n}`"),
+            Literal::Float(fl) => write!(f, "`{fl}`"),
         }
     }
 }

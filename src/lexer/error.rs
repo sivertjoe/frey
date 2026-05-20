@@ -10,8 +10,8 @@ pub struct Error {
 #[derive(Debug, PartialEq, Eq)]
 pub enum ErrorKind {
     UnexpectedChar(char),
+    UnexpectedText(String),
     InvalidInt(String),
-    InvalidIntegerSuffix(String),
 }
 
 impl fmt::Display for Error {
@@ -29,11 +29,11 @@ impl fmt::Display for ErrorKind {
             ErrorKind::UnexpectedChar(ch) => {
                 write!(f, "unexpected character: `{}`", ch)
             }
+            ErrorKind::UnexpectedText(ch) => {
+                write!(f, "unexpected text: `{}`", ch)
+            }
             ErrorKind::InvalidInt(int) => {
                 write!(f, "invalid integer: `{}`", int)
-            }
-            ErrorKind::InvalidIntegerSuffix(suffix) => {
-                write!(f, "invalid integer suffix: `{}`", suffix)
             }
         }
     }

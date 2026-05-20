@@ -30,7 +30,22 @@ impl LocalIdGen {
 pub enum Ty {
     Unit,
     Int,
+    Float,
     Function { params: Vec<Ty>, return_ty: Box<Ty> },
+}
+
+impl Ty {
+    pub fn is_int(&self) -> bool {
+        matches!(self, Ty::Int)
+    }
+
+    pub fn is_float(&self) -> bool {
+        matches!(self, Ty::Float)
+    }
+
+    pub fn is_number(&self) -> bool {
+        matches!(self, Ty::Int | Ty::Float)
+    }
 }
 
 pub struct Program {
@@ -81,6 +96,7 @@ pub struct FunctionCall {
 
 pub enum Const {
     Int(i32),
+    Float(f32),
     Unit,
 }
 
@@ -123,6 +139,7 @@ impl fmt::Debug for Ty {
         match self {
             Ty::Unit => write!(f, "Unit"),
             Ty::Int => write!(f, "Int"),
+            Ty::Float => write!(f, "Float"),
             Ty::Function { params, return_ty } => {
                 write!(f, "(")?;
                 for (i, p) in params.iter().enumerate() {
@@ -185,6 +202,7 @@ impl fmt::Debug for Const {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Const::Int(n) => write!(f, "Int({n})"),
+            Const::Float(n) => write!(f, "Float({n})"),
             Const::Unit => write!(f, "Unit"),
         }
     }

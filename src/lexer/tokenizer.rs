@@ -81,11 +81,15 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, Error> {
                 Some('|') => tokens.push(cursor.double(TokenKind::PipePipe)),
                 _ => tokens.push(cursor.single(TokenKind::Pipe)),
             },
-            '0'..='9' => {
-                tokens.push(cursor.int()?);
-            }
             'a'..='z' | 'A'..='Z' | '_' => {
                 tokens.push(cursor.identifier_or_keyword());
+            }
+            ch if ch.is_ascii_digit()
+                || (ch == '.'
+                    && matches!(cursor.peek_second(), Some(ch) if ch.is_ascii_digit())) =>
+            {
+                let tok = cursor.number()?;
+                tokens.push(tok);
             }
             _ => {
                 let start = cursor.position();

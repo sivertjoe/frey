@@ -9,6 +9,7 @@ impl<'ctx> Codegen<'ctx> {
         match ty {
             Ty::Unit => self.context.bool_type().into(),
             Ty::Int => self.context.i32_type().into(),
+            Ty::Float => self.context.f32_type().into(),
             Ty::Function { .. } => self.context.ptr_type(AddressSpace::default()).into(),
         }
     }
@@ -36,6 +37,7 @@ impl<'ctx> Codegen<'ctx> {
         match return_ty {
             Ty::Unit => self.context.bool_type().fn_type(param_types, false),
             Ty::Int => self.context.i32_type().fn_type(param_types, false),
+            Ty::Float => self.context.f32_type().fn_type(param_types, false),
             Ty::Function { .. } => self
                 .context
                 .ptr_type(AddressSpace::default())

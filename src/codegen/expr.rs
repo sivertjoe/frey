@@ -11,6 +11,10 @@ impl<'ctx> Codegen<'ctx> {
                 let i32_ty = self.context.i32_type();
                 Ok(i32_ty.const_int(n as u64, true).into())
             }
+            ExprKind::Const(Const::Float(f)) => {
+                let f32_ty = self.context.f32_type();
+                Ok(f32_ty.const_float(f as f64).into())
+            }
             ExprKind::Const(Const::Unit) => Ok(self.context.bool_type().const_zero().into()),
             ExprKind::Local(id) => {
                 if let Some(func) = self.functions.get(&id) {
@@ -24,22 +28,34 @@ impl<'ctx> Codegen<'ctx> {
                 todo!("nested function literals require closure support")
             }
             ExprKind::Unary { operand, op } => {
-                let value = self.lower_expr(*operand)?.into_int_value();
-                let result = match op {
-                    UnaryOperator::Minus => self.builder.build_int_neg(value, "")?,
+                let value = self.lower_expr(*operand)?;
+                match op {
+                    UnaryOperator::Minus => {
+                        // Typechecker guarantees Int or Float.
+                        if value.is_int_value() {
+                            let v = value.into_int_value();
+                            Ok(self.builder.build_int_neg(v, "")?.into())
+                        } else {
+                            let v = value.into_float_value();
+                            Ok(self.builder.build_float_neg(v, "")?.into())
+                        }
+                    }
                     UnaryOperator::Not => {
+                        // Typechecker guarantees Int.
+                        let v = value.into_int_value();
                         let zero = self.context.i32_type().const_zero();
                         let is_zero = self.builder.build_int_compare(
                             inkwell::IntPredicate::EQ,
-                            value,
+                            v,
                             zero,
                             "",
                         )?;
-                        self.builder
+                        Ok(self
+                            .builder
                             .build_int_z_extend(is_zero, self.context.i32_type(), "")?
+                            .into())
                     }
-                };
-                Ok(result.into())
+                }
             }
             ExprKind::Binary { op, lhs, rhs } => {
                 if matches!(op, BinaryOperator::And | BinaryOperator::Or) {
@@ -47,41 +63,137 @@ impl<'ctx> Codegen<'ctx> {
                     return Ok(result.into());
                 }
 
-                let lhs = self.lower_expr(*lhs)?.into_int_value();
-                let rhs = self.lower_expr(*rhs)?.into_int_value();
+                let lhs_val = self.lower_expr(*lhs)?;
+                let rhs_val = self.lower_expr(*rhs)?;
+                let is_float = lhs_val.is_float_value();
                 let i32_ty = self.context.i32_type();
-                let result = match op {
-                    BinaryOperator::Add => self.builder.build_int_add(lhs, rhs, "")?,
-                    BinaryOperator::Sub => self.builder.build_int_sub(lhs, rhs, "")?,
-                    BinaryOperator::Mul => self.builder.build_int_mul(lhs, rhs, "")?,
-                    BinaryOperator::Div => self.builder.build_int_signed_div(lhs, rhs, "")?,
-                    BinaryOperator::Mod => self.builder.build_int_signed_rem(lhs, rhs, "")?,
-                    BinaryOperator::Shl => self.builder.build_left_shift(lhs, rhs, "")?,
-                    BinaryOperator::Shr => self.builder.build_right_shift(lhs, rhs, true, "")?,
-                    BinaryOperator::BitAnd => self.builder.build_and(lhs, rhs, "")?,
-                    BinaryOperator::BitOr => self.builder.build_or(lhs, rhs, "")?,
-                    BinaryOperator::BitXor => self.builder.build_xor(lhs, rhs, "")?,
+
+                let result: BasicValueEnum<'ctx> = match op {
+                    BinaryOperator::Add => {
+                        if is_float {
+                            self.builder
+                                .build_float_add(lhs_val.into_float_value(), rhs_val.into_float_value(), "")?
+                                .into()
+                        } else {
+                            self.builder
+                                .build_int_add(lhs_val.into_int_value(), rhs_val.into_int_value(), "")?
+                                .into()
+                        }
+                    }
+                    BinaryOperator::Sub => {
+                        if is_float {
+                            self.builder
+                                .build_float_sub(lhs_val.into_float_value(), rhs_val.into_float_value(), "")?
+                                .into()
+                        } else {
+                            self.builder
+                                .build_int_sub(lhs_val.into_int_value(), rhs_val.into_int_value(), "")?
+                                .into()
+                        }
+                    }
+                    BinaryOperator::Mul => {
+                        if is_float {
+                            self.builder
+                                .build_float_mul(lhs_val.into_float_value(), rhs_val.into_float_value(), "")?
+                                .into()
+                        } else {
+                            self.builder
+                                .build_int_mul(lhs_val.into_int_value(), rhs_val.into_int_value(), "")?
+                                .into()
+                        }
+                    }
+                    BinaryOperator::Div => {
+                        if is_float {
+                            self.builder
+                                .build_float_div(lhs_val.into_float_value(), rhs_val.into_float_value(), "")?
+                                .into()
+                        } else {
+                            self.builder
+                                .build_int_signed_div(lhs_val.into_int_value(), rhs_val.into_int_value(), "")?
+                                .into()
+                        }
+                    }
+                    BinaryOperator::Mod => {
+                        if is_float {
+                            self.builder
+                                .build_float_rem(lhs_val.into_float_value(), rhs_val.into_float_value(), "")?
+                                .into()
+                        } else {
+                            self.builder
+                                .build_int_signed_rem(lhs_val.into_int_value(), rhs_val.into_int_value(), "")?
+                                .into()
+                        }
+                    }
+                    // Shifts and bitwise are Int-only (typechecker enforces this).
+                    BinaryOperator::Shl => self
+                        .builder
+                        .build_left_shift(lhs_val.into_int_value(), rhs_val.into_int_value(), "")?
+                        .into(),
+                    BinaryOperator::Shr => self
+                        .builder
+                        .build_right_shift(
+                            lhs_val.into_int_value(),
+                            rhs_val.into_int_value(),
+                            true,
+                            "",
+                        )?
+                        .into(),
+                    BinaryOperator::BitAnd => self
+                        .builder
+                        .build_and(lhs_val.into_int_value(), rhs_val.into_int_value(), "")?
+                        .into(),
+                    BinaryOperator::BitOr => self
+                        .builder
+                        .build_or(lhs_val.into_int_value(), rhs_val.into_int_value(), "")?
+                        .into(),
+                    BinaryOperator::BitXor => self
+                        .builder
+                        .build_xor(lhs_val.into_int_value(), rhs_val.into_int_value(), "")?
+                        .into(),
                     BinaryOperator::Lt
                     | BinaryOperator::Le
                     | BinaryOperator::Gt
                     | BinaryOperator::Ge
                     | BinaryOperator::Eq
                     | BinaryOperator::Ne => {
-                        let predicate = match op {
-                            BinaryOperator::Lt => inkwell::IntPredicate::SLT,
-                            BinaryOperator::Le => inkwell::IntPredicate::SLE,
-                            BinaryOperator::Gt => inkwell::IntPredicate::SGT,
-                            BinaryOperator::Ge => inkwell::IntPredicate::SGE,
-                            BinaryOperator::Eq => inkwell::IntPredicate::EQ,
-                            BinaryOperator::Ne => inkwell::IntPredicate::NE,
-                            _ => unreachable!(),
+                        let cmp = if is_float {
+                            let predicate = match op {
+                                BinaryOperator::Lt => inkwell::FloatPredicate::OLT,
+                                BinaryOperator::Le => inkwell::FloatPredicate::OLE,
+                                BinaryOperator::Gt => inkwell::FloatPredicate::OGT,
+                                BinaryOperator::Ge => inkwell::FloatPredicate::OGE,
+                                BinaryOperator::Eq => inkwell::FloatPredicate::OEQ,
+                                BinaryOperator::Ne => inkwell::FloatPredicate::ONE,
+                                _ => unreachable!(),
+                            };
+                            self.builder.build_float_compare(
+                                predicate,
+                                lhs_val.into_float_value(),
+                                rhs_val.into_float_value(),
+                                "",
+                            )?
+                        } else {
+                            let predicate = match op {
+                                BinaryOperator::Lt => inkwell::IntPredicate::SLT,
+                                BinaryOperator::Le => inkwell::IntPredicate::SLE,
+                                BinaryOperator::Gt => inkwell::IntPredicate::SGT,
+                                BinaryOperator::Ge => inkwell::IntPredicate::SGE,
+                                BinaryOperator::Eq => inkwell::IntPredicate::EQ,
+                                BinaryOperator::Ne => inkwell::IntPredicate::NE,
+                                _ => unreachable!(),
+                            };
+                            self.builder.build_int_compare(
+                                predicate,
+                                lhs_val.into_int_value(),
+                                rhs_val.into_int_value(),
+                                "",
+                            )?
                         };
-                        let cmp = self.builder.build_int_compare(predicate, lhs, rhs, "")?;
-                        self.builder.build_int_z_extend(cmp, i32_ty, "")?
+                        self.builder.build_int_z_extend(cmp, i32_ty, "")?.into()
                     }
                     BinaryOperator::And | BinaryOperator::Or => unreachable!(),
                 };
-                Ok(result.into())
+                Ok(result)
             }
             ExprKind::Block(block) => self.lower_block_value(block),
             ExprKind::If {
@@ -150,9 +262,9 @@ impl<'ctx> Codegen<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, Error> {
         let cond_val = self.lower_expr(condition)?.into_int_value();
         let zero = self.context.i32_type().const_zero();
-        let cond_i1 = self
-            .builder
-            .build_int_compare(inkwell::IntPredicate::NE, cond_val, zero, "")?;
+        let cond_i1 =
+            self.builder
+                .build_int_compare(inkwell::IntPredicate::NE, cond_val, zero, "")?;
 
         let function = self
             .builder
@@ -255,10 +367,7 @@ impl<'ctx> Codegen<'ctx> {
         } else {
             i1_ty.const_int(1, false)
         };
-        phi.add_incoming(&[
-            (&rhs_bool, rhs_end_bb),
-            (&short_circuit_value, lhs_end_bb),
-        ]);
+        phi.add_incoming(&[(&rhs_bool, rhs_end_bb), (&short_circuit_value, lhs_end_bb)]);
 
         let phi_i1 = phi.as_basic_value().into_int_value();
         Ok(self.builder.build_int_z_extend(phi_i1, i32_ty, "")?)
