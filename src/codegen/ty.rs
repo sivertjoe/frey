@@ -8,10 +8,12 @@ impl<'ctx> Codegen<'ctx> {
     pub fn lower_ty(&self, ty: &Ty) -> BasicTypeEnum<'ctx> {
         match ty {
             Ty::Unit => self.context.bool_type().into(),
-            // LLVM has no signedness in types; both Int and UInt are i32.
-            // Signed-vs-unsigned only matters at the operation level.
-            Ty::Int | Ty::UInt => self.context.i32_type().into(),
-            Ty::Float => self.context.f32_type().into(),
+            // LLVM has no signedness in its types; that only matters per-op.
+            Ty::I8 | Ty::U8 => self.context.i8_type().into(),
+            Ty::Int | Ty::UInt | Ty::I32 | Ty::U32 => self.context.i32_type().into(),
+            Ty::I64 | Ty::U64 => self.context.i64_type().into(),
+            Ty::Float | Ty::F32 => self.context.f32_type().into(),
+            Ty::F64 => self.context.f64_type().into(),
             Ty::Function { .. } => self.context.ptr_type(AddressSpace::default()).into(),
         }
     }
@@ -38,8 +40,13 @@ impl<'ctx> Codegen<'ctx> {
     ) -> FunctionType<'ctx> {
         match return_ty {
             Ty::Unit => self.context.bool_type().fn_type(param_types, false),
-            Ty::Int | Ty::UInt => self.context.i32_type().fn_type(param_types, false),
-            Ty::Float => self.context.f32_type().fn_type(param_types, false),
+            Ty::I8 | Ty::U8 => self.context.i8_type().fn_type(param_types, false),
+            Ty::Int | Ty::UInt | Ty::I32 | Ty::U32 => {
+                self.context.i32_type().fn_type(param_types, false)
+            }
+            Ty::I64 | Ty::U64 => self.context.i64_type().fn_type(param_types, false),
+            Ty::Float | Ty::F32 => self.context.f32_type().fn_type(param_types, false),
+            Ty::F64 => self.context.f64_type().fn_type(param_types, false),
             Ty::Function { .. } => self
                 .context
                 .ptr_type(AddressSpace::default())

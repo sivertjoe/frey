@@ -105,34 +105,27 @@ impl Parser {
 
     pub(super) fn parse_type(&mut self) -> Result<TypeExpr, Error> {
         let tok = self.iter.peek().expect("lexer always emits Eof");
-        match &tok.kind {
-            TokenKind::Int => {
-                let span = self.iter.consume().unwrap().span;
-                Ok(TypeExpr {
-                    id: self.id_gen.fresh(),
-                    span,
-                    kind: TypeExprKind::Int,
-                })
-            }
-            TokenKind::UInt => {
-                let span = self.iter.consume().unwrap().span;
-                Ok(TypeExpr {
-                    id: self.id_gen.fresh(),
-                    span,
-                    kind: TypeExprKind::UInt,
-                })
-            }
-            TokenKind::Float => {
-                let span = self.iter.consume().unwrap().span;
-                Ok(TypeExpr {
-                    id: self.id_gen.fresh(),
-                    span,
-                    kind: TypeExprKind::Float,
-                })
-            }
-            TokenKind::LeftParen => self.parse_function_type(),
-            _ => Err(Error::unexpected(tok, "type")),
-        }
+        let kind = match &tok.kind {
+            TokenKind::Int => TypeExprKind::Int,
+            TokenKind::UInt => TypeExprKind::UInt,
+            TokenKind::Float => TypeExprKind::Float,
+            TokenKind::I8 => TypeExprKind::I8,
+            TokenKind::I32 => TypeExprKind::I32,
+            TokenKind::I64 => TypeExprKind::I64,
+            TokenKind::U8 => TypeExprKind::U8,
+            TokenKind::U32 => TypeExprKind::U32,
+            TokenKind::U64 => TypeExprKind::U64,
+            TokenKind::F32 => TypeExprKind::F32,
+            TokenKind::F64 => TypeExprKind::F64,
+            TokenKind::LeftParen => return self.parse_function_type(),
+            _ => return Err(Error::unexpected(tok, "type")),
+        };
+        let span = self.iter.consume().unwrap().span;
+        Ok(TypeExpr {
+            id: self.id_gen.fresh(),
+            span,
+            kind,
+        })
     }
 
     pub(super) fn parse_function_type(&mut self) -> Result<TypeExpr, Error> {

@@ -11,48 +11,12 @@ impl<'ctx> Codegen<'ctx> {
                 let i32_ty = self.context.i32_type();
                 Ok(i32_ty.const_int(n as u64, true).into())
             }
-            ExprKind::Cast { target, expr } => match (expr.ty.clone(), target) {
-                (t1, t2) if t1 == t2 => Ok(self.lower_expr(*expr)?),
-                // Int ↔ UInt: same LLVM type, just a relabel.
-                (Ty::Int, Ty::UInt) | (Ty::UInt, Ty::Int) => Ok(self.lower_expr(*expr)?),
-                (Ty::Float, Ty::Int) => {
-                    let float = self.lower_expr(*expr)?.into_float_value();
-                    let int_type = self.context.i32_type();
-                    Ok(self
-                        .builder
-                        .build_float_to_signed_int(float, int_type, "")?
-                        .into())
-                }
-                (Ty::Float, Ty::UInt) => {
-                    let float = self.lower_expr(*expr)?.into_float_value();
-                    let int_type = self.context.i32_type();
-                    Ok(self
-                        .builder
-                        .build_float_to_unsigned_int(float, int_type, "")?
-                        .into())
-                }
-                (Ty::Int, Ty::Float) => {
-                    let int = self.lower_expr(*expr)?.into_int_value();
-                    let float_type = self.context.f32_type();
-                    Ok(self
-                        .builder
-                        .build_signed_int_to_float(int, float_type, "")?
-                        .into())
-                }
-                (Ty::UInt, Ty::Float) => {
-                    let int = self.lower_expr(*expr)?.into_int_value();
-                    let float_type = self.context.f32_type();
-                    Ok(self
-                        .builder
-                        .build_unsigned_int_to_float(int, float_type, "")?
-                        .into())
-                }
-                // All remaining combinations involve Unit or Function and are
-                // rejected by the typechecker (only number↔number casts are legal).
-                _ => unreachable!(
-                    "non-numeric cast should have been rejected by typecheck"
-                ),
-            },
+            ExprKind::Cast { target, expr } => {
+                let source_ty = expr.ty.clone();
+                let target_ty = target;
+                let source_val = self.lower_expr(*expr)?;
+                self.lower_numeric_cast(source_val, &source_ty, &target_ty)
+            }
             ExprKind::Const(Const::Float(f)) => {
                 let f32_ty = self.context.f32_type();
                 Ok(f32_ty.const_float(f as f64).into())
@@ -111,8 +75,8 @@ impl<'ctx> Codegen<'ctx> {
                 let operand_ty = lhs.ty.clone();
                 let lhs_val = self.lower_expr(*lhs)?;
                 let rhs_val = self.lower_expr(*rhs)?;
-                let is_float = matches!(operand_ty, Ty::Float);
-                let is_unsigned = matches!(operand_ty, Ty::UInt);
+                let is_float = operand_ty.is_float();
+                let is_unsigned = operand_ty.is_uint();
                 let i32_ty = self.context.i32_type();
 
                 let result: BasicValueEnum<'ctx> = match op {
@@ -347,6 +311,104 @@ impl<'ctx> Codegen<'ctx> {
                     }
                 }
             }
+        }
+    }
+
+    fn lower_numeric_cast(
+        &mut self,
+        source_val: BasicValueEnum<'ctx>,
+        source_ty: &Ty,
+        target_ty: &Ty,
+    ) -> Result<BasicValueEnum<'ctx>, Error> {
+        if source_ty == target_ty {
+            return Ok(source_val);
+        }
+
+        let source_is_float = source_ty.is_float();
+        let target_is_float = target_ty.is_float();
+        let source_width = source_ty.bit_width().expect("numeric source");
+        let target_width = target_ty.bit_width().expect("numeric target");
+
+        match (source_is_float, target_is_float) {
+            // float -> float
+            (true, true) => {
+                let v = source_val.into_float_value();
+                let target_llvm = self.float_llvm_type(target_ty);
+                if source_width < target_width {
+                    Ok(self.builder.build_float_ext(v, target_llvm, "")?.into())
+                } else if source_width > target_width {
+                    Ok(self.builder.build_float_trunc(v, target_llvm, "")?.into())
+                } else {
+                    Ok(source_val)
+                }
+            }
+            // float -> int
+            (true, false) => {
+                let v = source_val.into_float_value();
+                let target_llvm = self.int_llvm_type(target_ty);
+                if target_ty.is_uint() {
+                    Ok(self
+                        .builder
+                        .build_float_to_unsigned_int(v, target_llvm, "")?
+                        .into())
+                } else {
+                    Ok(self
+                        .builder
+                        .build_float_to_signed_int(v, target_llvm, "")?
+                        .into())
+                }
+            }
+            // int -> float
+            (false, true) => {
+                let v = source_val.into_int_value();
+                let target_llvm = self.float_llvm_type(target_ty);
+                if source_ty.is_uint() {
+                    Ok(self
+                        .builder
+                        .build_unsigned_int_to_float(v, target_llvm, "")?
+                        .into())
+                } else {
+                    Ok(self
+                        .builder
+                        .build_signed_int_to_float(v, target_llvm, "")?
+                        .into())
+                }
+            }
+            // int -> int
+            (false, false) => {
+                let v = source_val.into_int_value();
+                let target_llvm = self.int_llvm_type(target_ty);
+                if source_width < target_width {
+                    // Widening: zero-extend for unsigned source, sign-extend for signed.
+                    if source_ty.is_uint() {
+                        Ok(self.builder.build_int_z_extend(v, target_llvm, "")?.into())
+                    } else {
+                        Ok(self.builder.build_int_s_extend(v, target_llvm, "")?.into())
+                    }
+                } else if source_width > target_width {
+                    Ok(self.builder.build_int_truncate(v, target_llvm, "")?.into())
+                } else {
+                    // Same width — Int<->I32, UInt<->U32, signed<->unsigned of same width.
+                    Ok(source_val)
+                }
+            }
+        }
+    }
+
+    fn int_llvm_type(&self, ty: &Ty) -> inkwell::types::IntType<'ctx> {
+        match ty.bit_width().expect("integer type") {
+            8 => self.context.i8_type(),
+            32 => self.context.i32_type(),
+            64 => self.context.i64_type(),
+            _ => unreachable!("unsupported integer width"),
+        }
+    }
+
+    fn float_llvm_type(&self, ty: &Ty) -> inkwell::types::FloatType<'ctx> {
+        match ty.bit_width().expect("float type") {
+            32 => self.context.f32_type(),
+            64 => self.context.f64_type(),
+            _ => unreachable!("unsupported float width"),
         }
     }
 

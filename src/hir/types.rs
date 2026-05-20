@@ -32,30 +32,51 @@ pub enum Ty {
     Int,
     UInt,
     Float,
+    I8,
+    I32,
+    I64,
+    U8,
+    U32,
+    U64,
+    F32,
+    F64,
     Function { params: Vec<Ty>, return_ty: Box<Ty> },
 }
 
 impl Ty {
+    /// Any signed integer type.
     pub fn is_int(&self) -> bool {
-        matches!(self, Ty::Int)
+        matches!(self, Ty::Int | Ty::I8 | Ty::I32 | Ty::I64)
     }
 
+    /// Any unsigned integer type.
     pub fn is_uint(&self) -> bool {
-        matches!(self, Ty::UInt)
+        matches!(self, Ty::UInt | Ty::U8 | Ty::U32 | Ty::U64)
     }
 
+    /// Any float type.
     pub fn is_float(&self) -> bool {
-        matches!(self, Ty::Float)
+        matches!(self, Ty::Float | Ty::F32 | Ty::F64)
     }
 
     /// Any integer type (signed or unsigned).
     pub fn is_integer(&self) -> bool {
-        matches!(self, Ty::Int | Ty::UInt)
+        self.is_int() || self.is_uint()
     }
 
     /// Any numeric type (integer or float).
     pub fn is_number(&self) -> bool {
-        matches!(self, Ty::Int | Ty::UInt | Ty::Float)
+        self.is_integer() || self.is_float()
+    }
+
+    /// Bit width for numeric types. `Int`/`UInt` are 32-bit, `Float` is f32.
+    pub fn bit_width(&self) -> Option<u32> {
+        match self {
+            Ty::I8 | Ty::U8 => Some(8),
+            Ty::Int | Ty::UInt | Ty::I32 | Ty::U32 | Ty::Float | Ty::F32 => Some(32),
+            Ty::I64 | Ty::U64 | Ty::F64 => Some(64),
+            _ => None,
+        }
     }
 }
 
@@ -156,6 +177,14 @@ impl fmt::Debug for Ty {
             Ty::Int => write!(f, "Int"),
             Ty::UInt => write!(f, "UInt"),
             Ty::Float => write!(f, "Float"),
+            Ty::I8 => write!(f, "i8"),
+            Ty::I32 => write!(f, "i32"),
+            Ty::I64 => write!(f, "i64"),
+            Ty::U8 => write!(f, "u8"),
+            Ty::U32 => write!(f, "u32"),
+            Ty::U64 => write!(f, "u64"),
+            Ty::F32 => write!(f, "f32"),
+            Ty::F64 => write!(f, "f64"),
             Ty::Function { params, return_ty } => {
                 write!(f, "(")?;
                 for (i, p) in params.iter().enumerate() {

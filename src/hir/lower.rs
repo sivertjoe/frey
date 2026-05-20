@@ -364,6 +364,14 @@ impl Lower {
             ast::TypeExprKind::Int => Ok(Ty::Int),
             ast::TypeExprKind::UInt => Ok(Ty::UInt),
             ast::TypeExprKind::Float => Ok(Ty::Float),
+            ast::TypeExprKind::I8 => Ok(Ty::I8),
+            ast::TypeExprKind::I32 => Ok(Ty::I32),
+            ast::TypeExprKind::I64 => Ok(Ty::I64),
+            ast::TypeExprKind::U8 => Ok(Ty::U8),
+            ast::TypeExprKind::U32 => Ok(Ty::U32),
+            ast::TypeExprKind::U64 => Ok(Ty::U64),
+            ast::TypeExprKind::F32 => Ok(Ty::F32),
+            ast::TypeExprKind::F64 => Ok(Ty::F64),
             ast::TypeExprKind::Function { params, return_ty } => {
                 let params = params
                     .iter()
