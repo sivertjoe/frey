@@ -299,6 +299,17 @@ impl Lower {
                     },
                 })
             }
+            ast::ExprKind::Cast { expr, target } => {
+                let ty = self.lower_type(&target)?;
+                Ok(Expr {
+                    span: e.span,
+                    ty: ty.clone(),
+                    kind: ExprKind::Cast {
+                        target: ty.clone(),
+                        expr: Box::new(self.lower_expr(*expr)?),
+                    },
+                })
+            }
         }
     }
 

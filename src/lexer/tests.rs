@@ -646,4 +646,56 @@ mod tests {
         // `1e` without digits in the exponent is invalid.
         assert!(tokenize("1e").is_err());
     }
+
+    #[test]
+    fn tokenizes_as_keyword() {
+        let tokens = tokenize("as").unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: TokenKind::As,
+                    span: span(0, 1, 1, 2, 1, 3),
+                },
+                eof(2, 1, 3),
+            ]
+        );
+    }
+
+    #[test]
+    fn as_in_a_cast_expression() {
+        let tokens = tokenize("x as Int").unwrap();
+        let kinds: Vec<&TokenKind> = tokens.iter().map(|t| &t.kind).take(3).collect();
+        assert_eq!(kinds[0], &TokenKind::Identifier("x".to_string()));
+        assert_eq!(kinds[1], &TokenKind::As);
+        assert_eq!(kinds[2], &TokenKind::Int);
+    }
+
+    #[test]
+    fn as_prefix_is_an_identifier() {
+        // `asx`, `as_foo`, `assert` — anything where `as` is part of a longer
+        // identifier should NOT be tokenized as the `as` keyword.
+        for ident in ["asx", "as_foo", "assert", "asd"] {
+            let tokens = tokenize(ident).unwrap();
+            assert_eq!(
+                tokens[0].kind,
+                TokenKind::Identifier(ident.to_string()),
+                "expected `{ident}` to be an identifier, not a keyword"
+            );
+        }
+    }
+
+    #[test]
+    fn as_keyword_in_declaration_context() {
+        // `let y = 1.5 as Int;`
+        let tokens = tokenize("let y = 1.5 as Int;").unwrap();
+        let kinds: Vec<&TokenKind> = tokens.iter().map(|t| &t.kind).collect();
+        assert_eq!(kinds[0], &TokenKind::Let);
+        assert_eq!(kinds[1], &TokenKind::Identifier("y".to_string()));
+        assert_eq!(kinds[2], &TokenKind::Equal);
+        assert!(matches!(kinds[3], TokenKind::Literal(Literal::Float(_))));
+        assert_eq!(kinds[4], &TokenKind::As);
+        assert_eq!(kinds[5], &TokenKind::Int);
+        assert_eq!(kinds[6], &TokenKind::Semicolon);
+    }
 }

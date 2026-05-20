@@ -246,7 +246,7 @@ impl Parser {
     }
 
     fn parse_binary_expr(&mut self, min_prec: i32) -> Result<Expr, Error> {
-        let mut lhs = self.parse_unary()?;
+        let mut lhs = self.parse_unary_with_cast()?;
 
         loop {
             let Some((prec, op)) = self.iter.peek().and_then(|t| binary_precedence(&t.kind)) else {
@@ -269,6 +269,24 @@ impl Parser {
             };
         }
         Ok(lhs)
+    }
+
+    fn parse_unary_with_cast(&mut self) -> Result<Expr, Error> {
+        let mut e = self.parse_unary()?;
+        while self.check(TokenKind::As) {
+            self.expect(TokenKind::As)?;
+            let target = self.parse_type()?;
+            let span = e.span.join(target.span);
+            e = Expr {
+                id: self.id_gen.fresh(),
+                span,
+                kind: ExprKind::Cast {
+                    expr: Box::new(e),
+                    target,
+                },
+            };
+        }
+        Ok(e)
     }
 
     fn parse_unary(&mut self) -> Result<Expr, Error> {

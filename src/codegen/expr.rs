@@ -2,7 +2,7 @@ use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, IntValue, ValueKin
 
 use crate::codegen::{Codegen, Error};
 use crate::hir::types::{Const, Expr, ExprKind, Statement, StatementKind};
-use crate::hir::{BinaryOperator, FunctionCall, UnaryOperator};
+use crate::hir::{BinaryOperator, FunctionCall, Ty, UnaryOperator};
 
 impl<'ctx> Codegen<'ctx> {
     pub fn lower_expr(&mut self, expr: Expr) -> Result<BasicValueEnum<'ctx>, Error> {
@@ -11,6 +11,41 @@ impl<'ctx> Codegen<'ctx> {
                 let i32_ty = self.context.i32_type();
                 Ok(i32_ty.const_int(n as u64, true).into())
             }
+            ExprKind::Cast { target, expr } => match (expr.ty.clone(), target) {
+                (t1, t2) if t1 == t2 => Ok(self.lower_expr(*expr)?),
+                (Ty::Float, Ty::Int) => {
+                    let float = self.lower_expr(*expr)?.into_float_value();
+                    let int_type = self.context.i32_type();
+                    Ok(self
+                        .builder
+                        .build_float_to_signed_int(float, int_type, "")?
+                        .into())
+                }
+                (Ty::Int, Ty::Float) => {
+                    let int = self.lower_expr(*expr)?.into_int_value();
+                    let float_type = self.context.f32_type();
+                    Ok(self
+                        .builder
+                        .build_signed_int_to_float(int, float_type, "")?
+                        .into())
+                }
+                (Ty::Unit, Ty::Unit)
+                | (Ty::Unit, Ty::Int)
+                | (Ty::Unit, Ty::Float)
+                | (Ty::Unit, Ty::Function { .. })
+                | (Ty::Int, Ty::Unit)
+                | (Ty::Int, Ty::Int)
+                | (Ty::Int, Ty::Function { .. })
+                | (Ty::Float, Ty::Unit)
+                | (Ty::Float, Ty::Float)
+                | (Ty::Float, Ty::Function { .. })
+                | (Ty::Function { .. }, Ty::Unit)
+                | (Ty::Function { .. }, Ty::Int)
+                | (Ty::Function { .. }, Ty::Float)
+                | (Ty::Function { .. }, Ty::Function { .. }) => unreachable!(
+                    "Same type is handled as first branch, rest is handled in the typechecker "
+                ),
+            },
             ExprKind::Const(Const::Float(f)) => {
                 let f32_ty = self.context.f32_type();
                 Ok(f32_ty.const_float(f as f64).into())
@@ -72,55 +107,95 @@ impl<'ctx> Codegen<'ctx> {
                     BinaryOperator::Add => {
                         if is_float {
                             self.builder
-                                .build_float_add(lhs_val.into_float_value(), rhs_val.into_float_value(), "")?
+                                .build_float_add(
+                                    lhs_val.into_float_value(),
+                                    rhs_val.into_float_value(),
+                                    "",
+                                )?
                                 .into()
                         } else {
                             self.builder
-                                .build_int_add(lhs_val.into_int_value(), rhs_val.into_int_value(), "")?
+                                .build_int_add(
+                                    lhs_val.into_int_value(),
+                                    rhs_val.into_int_value(),
+                                    "",
+                                )?
                                 .into()
                         }
                     }
                     BinaryOperator::Sub => {
                         if is_float {
                             self.builder
-                                .build_float_sub(lhs_val.into_float_value(), rhs_val.into_float_value(), "")?
+                                .build_float_sub(
+                                    lhs_val.into_float_value(),
+                                    rhs_val.into_float_value(),
+                                    "",
+                                )?
                                 .into()
                         } else {
                             self.builder
-                                .build_int_sub(lhs_val.into_int_value(), rhs_val.into_int_value(), "")?
+                                .build_int_sub(
+                                    lhs_val.into_int_value(),
+                                    rhs_val.into_int_value(),
+                                    "",
+                                )?
                                 .into()
                         }
                     }
                     BinaryOperator::Mul => {
                         if is_float {
                             self.builder
-                                .build_float_mul(lhs_val.into_float_value(), rhs_val.into_float_value(), "")?
+                                .build_float_mul(
+                                    lhs_val.into_float_value(),
+                                    rhs_val.into_float_value(),
+                                    "",
+                                )?
                                 .into()
                         } else {
                             self.builder
-                                .build_int_mul(lhs_val.into_int_value(), rhs_val.into_int_value(), "")?
+                                .build_int_mul(
+                                    lhs_val.into_int_value(),
+                                    rhs_val.into_int_value(),
+                                    "",
+                                )?
                                 .into()
                         }
                     }
                     BinaryOperator::Div => {
                         if is_float {
                             self.builder
-                                .build_float_div(lhs_val.into_float_value(), rhs_val.into_float_value(), "")?
+                                .build_float_div(
+                                    lhs_val.into_float_value(),
+                                    rhs_val.into_float_value(),
+                                    "",
+                                )?
                                 .into()
                         } else {
                             self.builder
-                                .build_int_signed_div(lhs_val.into_int_value(), rhs_val.into_int_value(), "")?
+                                .build_int_signed_div(
+                                    lhs_val.into_int_value(),
+                                    rhs_val.into_int_value(),
+                                    "",
+                                )?
                                 .into()
                         }
                     }
                     BinaryOperator::Mod => {
                         if is_float {
                             self.builder
-                                .build_float_rem(lhs_val.into_float_value(), rhs_val.into_float_value(), "")?
+                                .build_float_rem(
+                                    lhs_val.into_float_value(),
+                                    rhs_val.into_float_value(),
+                                    "",
+                                )?
                                 .into()
                         } else {
                             self.builder
-                                .build_int_signed_rem(lhs_val.into_int_value(), rhs_val.into_int_value(), "")?
+                                .build_int_signed_rem(
+                                    lhs_val.into_int_value(),
+                                    rhs_val.into_int_value(),
+                                    "",
+                                )?
                                 .into()
                         }
                     }

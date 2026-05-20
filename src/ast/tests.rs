@@ -368,4 +368,112 @@ mod tests {
         let expr = parser("x").parse_expr().unwrap();
         assert!(matches!(expr.kind, ExprKind::Identifier(_)));
     }
+
+    #[test]
+    fn parses_simple_cast() {
+        let expr = parser("x as Int").parse_expr().unwrap();
+        let ExprKind::Cast { expr: inner, target } = expr.kind else {
+            panic!("expected cast");
+        };
+        let ExprKind::Identifier(name) = &inner.kind else {
+            panic!("expected identifier inside cast");
+        };
+        assert_eq!(name, "x");
+        assert!(matches!(target.kind, TypeExprKind::Int));
+    }
+
+    #[test]
+    fn parses_cast_to_float() {
+        let expr = parser("5 as Float").parse_expr().unwrap();
+        let ExprKind::Cast { expr: inner, target } = expr.kind else {
+            panic!("expected cast");
+        };
+        assert!(matches!(inner.kind, ExprKind::Const(Const::Int(5))));
+        assert!(matches!(target.kind, TypeExprKind::Float));
+    }
+
+    #[test]
+    fn cast_binds_tighter_than_addition() {
+        // `1 + 2 as Int` should parse as `1 + (2 as Int)`
+        let expr = parser("1 + 2 as Int").parse_expr().unwrap();
+        let ExprKind::Binary { op, lhs, rhs } = expr.kind else {
+            panic!("expected binary at top");
+        };
+        assert_eq!(op, BinaryOperator::Add);
+        assert!(matches!(lhs.kind, ExprKind::Const(Const::Int(1))));
+        // RHS should be the cast, NOT another binary
+        let ExprKind::Cast { expr: inner, .. } = &rhs.kind else {
+            panic!("expected cast on rhs, got {:?}", rhs.kind);
+        };
+        assert!(matches!(inner.kind, ExprKind::Const(Const::Int(2))));
+    }
+
+    #[test]
+    fn parens_override_cast_precedence() {
+        // `(1 + 2) as Int` should cast the Add result
+        let expr = parser("(1 + 2) as Int").parse_expr().unwrap();
+        let ExprKind::Cast { expr: inner, .. } = expr.kind else {
+            panic!("expected cast at top");
+        };
+        let ExprKind::Binary { op, .. } = &inner.kind else {
+            panic!("expected binary inside cast");
+        };
+        assert_eq!(*op, BinaryOperator::Add);
+    }
+
+    #[test]
+    fn unary_binds_tighter_than_cast() {
+        // `-x as Int` should parse as `(-x) as Int`, NOT `-(x as Int)`
+        let expr = parser("-x as Int").parse_expr().unwrap();
+        let ExprKind::Cast { expr: inner, .. } = expr.kind else {
+            panic!("expected cast at top, got {:?}", expr.kind);
+        };
+        assert!(matches!(inner.kind, ExprKind::Unary { .. }));
+    }
+
+    #[test]
+    fn chained_casts() {
+        // `x as Float as Int` parses left-associatively: (x as Float) as Int
+        let expr = parser("x as Float as Int").parse_expr().unwrap();
+        let ExprKind::Cast { expr: inner, target } = expr.kind else {
+            panic!("expected outer cast");
+        };
+        assert!(matches!(target.kind, TypeExprKind::Int));
+        let ExprKind::Cast { target: inner_target, .. } = &inner.kind else {
+            panic!("expected inner cast");
+        };
+        assert!(matches!(inner_target.kind, TypeExprKind::Float));
+    }
+
+    #[test]
+    fn cast_on_call_result() {
+        // `foo() as Int` — the call's result is what's cast
+        let expr = parser("foo() as Int").parse_expr().unwrap();
+        let ExprKind::Cast { expr: inner, .. } = expr.kind else {
+            panic!("expected cast");
+        };
+        assert!(matches!(inner.kind, ExprKind::Call { .. }));
+    }
+
+    #[test]
+    fn cast_in_declaration() {
+        let decl = parser("let x = 1.5 as Int;").parse_declaration().unwrap();
+        assert_eq!(decl.name, "x");
+        let ExprKind::Cast { expr: inner, target } = &decl.value.kind else {
+            panic!("expected cast as declaration value");
+        };
+        assert!(matches!(inner.kind, ExprKind::Const(Const::Float(_))));
+        assert!(matches!(target.kind, TypeExprKind::Int));
+    }
+
+    #[test]
+    fn cast_to_function_type() {
+        // Casts to function types should at least parse, even if the typechecker
+        // later rejects them.
+        let expr = parser("x as () -> Int").parse_expr().unwrap();
+        let ExprKind::Cast { target, .. } = expr.kind else {
+            panic!("expected cast");
+        };
+        assert!(matches!(target.kind, TypeExprKind::Function { .. }));
+    }
 }

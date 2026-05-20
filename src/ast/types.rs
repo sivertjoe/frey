@@ -93,6 +93,10 @@ pub enum ExprKind {
         return_ty: Option<TypeExpr>,
         body: Block,
     },
+    Cast {
+        expr: Box<Expr>,
+        target: TypeExpr,
+    },
     Call {
         callee: Box<Expr>,
         args: Vec<Expr>,

@@ -104,6 +104,7 @@ impl<'a> Cursor<'a> {
             "if" => TokenKind::If,
             "else" => TokenKind::Else,
             "return" => TokenKind::Return,
+            "as" => TokenKind::As,
             _ => TokenKind::Identifier(raw.to_string()),
         };
 

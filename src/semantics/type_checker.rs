@@ -66,6 +66,16 @@ impl Typechecker {
                 }
                 Ok(())
             }
+            ExprKind::Cast { target, expr } => {
+                self.check_expr(expr)?;
+                if !expr.ty.is_number() || !target.is_number() {
+                    return Err(Error {
+                        span: expr.span,
+                        kind: ErrorKind::IllegalCast { ty: target.clone() },
+                    });
+                }
+                Ok(())
+            }
             ExprKind::Binary { lhs, rhs, op } => {
                 self.check_expr(lhs)?;
                 self.check_expr(rhs)?;
@@ -172,12 +182,7 @@ impl Typechecker {
         }
     }
 
-    fn check_binary_op(
-        &self,
-        op: BinaryOperator,
-        lhs: &Expr,
-        rhs: &Expr,
-    ) -> Result<(), Error> {
+    fn check_binary_op(&self, op: BinaryOperator, lhs: &Expr, rhs: &Expr) -> Result<(), Error> {
         use BinaryOperator as B;
         match op {
             // Arithmetic: both operands must be the same numeric type.

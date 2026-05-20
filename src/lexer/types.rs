@@ -35,6 +35,7 @@ pub enum TokenKind {
 
     Let,
     Return,
+    As,
     If,
     Else,
 
@@ -116,6 +117,7 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Return => write!(f, "`return`"),
             TokenKind::If => write!(f, "`if`"),
             TokenKind::Else => write!(f, "`else`"),
+            TokenKind::As => write!(f, "`as`"),
 
             TokenKind::Eof => write!(f, "end of input"),
         }

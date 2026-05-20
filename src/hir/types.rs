@@ -72,6 +72,10 @@ pub enum ExprKind {
     Local(LocalId),
     Function(Function),
     Call(FunctionCall),
+    Cast {
+        target: Ty,
+        expr: Box<Expr>,
+    },
     Unary {
         op: UnaryOperator,
         operand: Box<Expr>,
@@ -189,6 +193,7 @@ impl fmt::Debug for ExprKind {
             ExprKind::Unary { op, operand } => write!(f, "{op:?}({operand:?})"),
             ExprKind::Binary { op, lhs, rhs } => write!(f, "{op:?}({lhs:?}, {rhs:?})"),
             ExprKind::Block(block) => write!(f, "{block:?}"),
+            ExprKind::Cast { target, expr } => write!(f, "Cast({target:?}) {expr:?}"),
             ExprKind::If {
                 condition,
                 then_branch,
