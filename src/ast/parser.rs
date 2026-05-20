@@ -114,6 +114,14 @@ impl Parser {
                     kind: TypeExprKind::Int,
                 })
             }
+            TokenKind::UInt => {
+                let span = self.iter.consume().unwrap().span;
+                Ok(TypeExpr {
+                    id: self.id_gen.fresh(),
+                    span,
+                    kind: TypeExprKind::UInt,
+                })
+            }
             TokenKind::Float => {
                 let span = self.iter.consume().unwrap().span;
                 Ok(TypeExpr {

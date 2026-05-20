@@ -51,9 +51,9 @@ impl Typechecker {
                             });
                         }
                     }
-                    // `!x` is bitwise/logical "is zero"; only meaningful on Int.
+                    // `!x` is "is zero"; meaningful on any integer (Int or UInt).
                     UnaryOperator::Not => {
-                        if !operand.ty.is_int() {
+                        if !operand.ty.is_integer() {
                             return Err(Error {
                                 span: operand.span,
                                 kind: ErrorKind::TypeMismatch {
@@ -98,7 +98,7 @@ impl Typechecker {
                 else_branch,
             } => {
                 self.check_expr(condition)?;
-                if condition.ty != Ty::Int {
+                if !condition.ty.is_integer() {
                     return Err(Error {
                         span: condition.span,
                         kind: ErrorKind::TypeMismatch {
@@ -195,27 +195,41 @@ impl Typechecker {
                 self.require_number(lhs)?;
                 self.require_matching(lhs, rhs)?;
             }
-            // Shifts: both Int.
+            // Shifts: both integer (signed or unsigned), same type.
             B::Shl | B::Shr => {
-                self.require_int(lhs)?;
-                self.require_int(rhs)?;
+                self.require_integer(lhs)?;
+                self.require_matching(lhs, rhs)?;
             }
-            // Bitwise: both Int.
+            // Bitwise: both integer, same type.
             B::BitAnd | B::BitOr | B::BitXor => {
-                self.require_int(lhs)?;
-                self.require_int(rhs)?;
+                self.require_integer(lhs)?;
+                self.require_matching(lhs, rhs)?;
             }
-            // Logical: treated as truthy on Int (no Bool yet).
+            // Logical: any integer (truthy semantics; no Bool yet).
             B::And | B::Or => {
-                self.require_int(lhs)?;
-                self.require_int(rhs)?;
+                self.require_integer(lhs)?;
+                self.require_matching(lhs, rhs)?;
             }
         }
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn require_int(&self, e: &Expr) -> Result<(), Error> {
         if !e.ty.is_int() {
+            return Err(Error {
+                span: e.span,
+                kind: ErrorKind::TypeMismatch {
+                    expected: Ty::Int,
+                    found: e.ty.clone(),
+                },
+            });
+        }
+        Ok(())
+    }
+
+    fn require_integer(&self, e: &Expr) -> Result<(), Error> {
+        if !e.ty.is_integer() {
             return Err(Error {
                 span: e.span,
                 kind: ErrorKind::TypeMismatch {

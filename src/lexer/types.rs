@@ -40,6 +40,7 @@ pub enum TokenKind {
     Else,
 
     Int,
+    UInt,
     Float,
     Identifier(String),
 
@@ -88,6 +89,7 @@ impl std::fmt::Display for TokenKind {
             TokenKind::RightParen => write!(f, "`)`"),
             TokenKind::Let => write!(f, "`let`"),
             TokenKind::Int => write!(f, "`Int`"),
+            TokenKind::UInt => write!(f, "`UInt`"),
             TokenKind::Float => write!(f, "`Float`"),
             TokenKind::Identifier(name) => write!(f, "`{name}`"),
             TokenKind::Equal => write!(f, "`=`"),

@@ -100,6 +100,7 @@ impl<'a> Cursor<'a> {
         let kind = match raw {
             "let" => TokenKind::Let,
             "Int" => TokenKind::Int,
+            "UInt" => TokenKind::UInt,
             "Float" => TokenKind::Float,
             "if" => TokenKind::If,
             "else" => TokenKind::Else,

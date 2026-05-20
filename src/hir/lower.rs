@@ -362,6 +362,7 @@ impl Lower {
     fn lower_type(&mut self, t: &ast::TypeExpr) -> Result<Ty, Error> {
         match &t.kind {
             ast::TypeExprKind::Int => Ok(Ty::Int),
+            ast::TypeExprKind::UInt => Ok(Ty::UInt),
             ast::TypeExprKind::Float => Ok(Ty::Float),
             ast::TypeExprKind::Function { params, return_ty } => {
                 let params = params

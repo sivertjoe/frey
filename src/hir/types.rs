@@ -30,6 +30,7 @@ impl LocalIdGen {
 pub enum Ty {
     Unit,
     Int,
+    UInt,
     Float,
     Function { params: Vec<Ty>, return_ty: Box<Ty> },
 }
@@ -39,12 +40,22 @@ impl Ty {
         matches!(self, Ty::Int)
     }
 
+    pub fn is_uint(&self) -> bool {
+        matches!(self, Ty::UInt)
+    }
+
     pub fn is_float(&self) -> bool {
         matches!(self, Ty::Float)
     }
 
+    /// Any integer type (signed or unsigned).
+    pub fn is_integer(&self) -> bool {
+        matches!(self, Ty::Int | Ty::UInt)
+    }
+
+    /// Any numeric type (integer or float).
     pub fn is_number(&self) -> bool {
-        matches!(self, Ty::Int | Ty::Float)
+        matches!(self, Ty::Int | Ty::UInt | Ty::Float)
     }
 }
 
@@ -143,6 +154,7 @@ impl fmt::Debug for Ty {
         match self {
             Ty::Unit => write!(f, "Unit"),
             Ty::Int => write!(f, "Int"),
+            Ty::UInt => write!(f, "UInt"),
             Ty::Float => write!(f, "Float"),
             Ty::Function { params, return_ty } => {
                 write!(f, "(")?;

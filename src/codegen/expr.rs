@@ -13,12 +13,22 @@ impl<'ctx> Codegen<'ctx> {
             }
             ExprKind::Cast { target, expr } => match (expr.ty.clone(), target) {
                 (t1, t2) if t1 == t2 => Ok(self.lower_expr(*expr)?),
+                // Int ↔ UInt: same LLVM type, just a relabel.
+                (Ty::Int, Ty::UInt) | (Ty::UInt, Ty::Int) => Ok(self.lower_expr(*expr)?),
                 (Ty::Float, Ty::Int) => {
                     let float = self.lower_expr(*expr)?.into_float_value();
                     let int_type = self.context.i32_type();
                     Ok(self
                         .builder
                         .build_float_to_signed_int(float, int_type, "")?
+                        .into())
+                }
+                (Ty::Float, Ty::UInt) => {
+                    let float = self.lower_expr(*expr)?.into_float_value();
+                    let int_type = self.context.i32_type();
+                    Ok(self
+                        .builder
+                        .build_float_to_unsigned_int(float, int_type, "")?
                         .into())
                 }
                 (Ty::Int, Ty::Float) => {
@@ -29,21 +39,18 @@ impl<'ctx> Codegen<'ctx> {
                         .build_signed_int_to_float(int, float_type, "")?
                         .into())
                 }
-                (Ty::Unit, Ty::Unit)
-                | (Ty::Unit, Ty::Int)
-                | (Ty::Unit, Ty::Float)
-                | (Ty::Unit, Ty::Function { .. })
-                | (Ty::Int, Ty::Unit)
-                | (Ty::Int, Ty::Int)
-                | (Ty::Int, Ty::Function { .. })
-                | (Ty::Float, Ty::Unit)
-                | (Ty::Float, Ty::Float)
-                | (Ty::Float, Ty::Function { .. })
-                | (Ty::Function { .. }, Ty::Unit)
-                | (Ty::Function { .. }, Ty::Int)
-                | (Ty::Function { .. }, Ty::Float)
-                | (Ty::Function { .. }, Ty::Function { .. }) => unreachable!(
-                    "Same type is handled as first branch, rest is handled in the typechecker "
+                (Ty::UInt, Ty::Float) => {
+                    let int = self.lower_expr(*expr)?.into_int_value();
+                    let float_type = self.context.f32_type();
+                    Ok(self
+                        .builder
+                        .build_unsigned_int_to_float(int, float_type, "")?
+                        .into())
+                }
+                // All remaining combinations involve Unit or Function and are
+                // rejected by the typechecker (only number↔number casts are legal).
+                _ => unreachable!(
+                    "non-numeric cast should have been rejected by typecheck"
                 ),
             },
             ExprKind::Const(Const::Float(f)) => {
@@ -98,9 +105,14 @@ impl<'ctx> Codegen<'ctx> {
                     return Ok(result.into());
                 }
 
+                // Capture operand type before lowering — LLVM doesn't track
+                // signedness in types, so we need the HIR type for Div/Mod/Shr
+                // and comparison predicate selection.
+                let operand_ty = lhs.ty.clone();
                 let lhs_val = self.lower_expr(*lhs)?;
                 let rhs_val = self.lower_expr(*rhs)?;
-                let is_float = lhs_val.is_float_value();
+                let is_float = matches!(operand_ty, Ty::Float);
+                let is_unsigned = matches!(operand_ty, Ty::UInt);
                 let i32_ty = self.context.i32_type();
 
                 let result: BasicValueEnum<'ctx> = match op {
@@ -170,6 +182,14 @@ impl<'ctx> Codegen<'ctx> {
                                     "",
                                 )?
                                 .into()
+                        } else if is_unsigned {
+                            self.builder
+                                .build_int_unsigned_div(
+                                    lhs_val.into_int_value(),
+                                    rhs_val.into_int_value(),
+                                    "",
+                                )?
+                                .into()
                         } else {
                             self.builder
                                 .build_int_signed_div(
@@ -186,6 +206,14 @@ impl<'ctx> Codegen<'ctx> {
                                 .build_float_rem(
                                     lhs_val.into_float_value(),
                                     rhs_val.into_float_value(),
+                                    "",
+                                )?
+                                .into()
+                        } else if is_unsigned {
+                            self.builder
+                                .build_int_unsigned_rem(
+                                    lhs_val.into_int_value(),
+                                    rhs_val.into_int_value(),
                                     "",
                                 )?
                                 .into()
@@ -209,7 +237,7 @@ impl<'ctx> Codegen<'ctx> {
                         .build_right_shift(
                             lhs_val.into_int_value(),
                             rhs_val.into_int_value(),
-                            true,
+                            !is_unsigned, // signed = arithmetic shift; unsigned = logical
                             "",
                         )?
                         .into(),
@@ -248,14 +276,26 @@ impl<'ctx> Codegen<'ctx> {
                                 "",
                             )?
                         } else {
-                            let predicate = match op {
-                                BinaryOperator::Lt => inkwell::IntPredicate::SLT,
-                                BinaryOperator::Le => inkwell::IntPredicate::SLE,
-                                BinaryOperator::Gt => inkwell::IntPredicate::SGT,
-                                BinaryOperator::Ge => inkwell::IntPredicate::SGE,
-                                BinaryOperator::Eq => inkwell::IntPredicate::EQ,
-                                BinaryOperator::Ne => inkwell::IntPredicate::NE,
-                                _ => unreachable!(),
+                            let predicate = if is_unsigned {
+                                match op {
+                                    BinaryOperator::Lt => inkwell::IntPredicate::ULT,
+                                    BinaryOperator::Le => inkwell::IntPredicate::ULE,
+                                    BinaryOperator::Gt => inkwell::IntPredicate::UGT,
+                                    BinaryOperator::Ge => inkwell::IntPredicate::UGE,
+                                    BinaryOperator::Eq => inkwell::IntPredicate::EQ,
+                                    BinaryOperator::Ne => inkwell::IntPredicate::NE,
+                                    _ => unreachable!(),
+                                }
+                            } else {
+                                match op {
+                                    BinaryOperator::Lt => inkwell::IntPredicate::SLT,
+                                    BinaryOperator::Le => inkwell::IntPredicate::SLE,
+                                    BinaryOperator::Gt => inkwell::IntPredicate::SGT,
+                                    BinaryOperator::Ge => inkwell::IntPredicate::SGE,
+                                    BinaryOperator::Eq => inkwell::IntPredicate::EQ,
+                                    BinaryOperator::Ne => inkwell::IntPredicate::NE,
+                                    _ => unreachable!(),
+                                }
                             };
                             self.builder.build_int_compare(
                                 predicate,

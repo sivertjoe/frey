@@ -46,6 +46,7 @@ pub struct TypeExpr {
 #[derive(Debug)]
 pub enum TypeExprKind {
     Int,
+    UInt,
     Float,
     Function {
         params: Vec<TypeExpr>,
