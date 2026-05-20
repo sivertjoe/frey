@@ -1,3 +1,7 @@
+// HIR nodes carry `id` and `span` fields that aren't all consumed by every
+// pass; they're kept for diagnostics and future tooling.
+#![allow(dead_code)]
+
 pub use crate::ast::{BinaryOperator, UnaryOperator};
 use crate::lexer::types::Span;
 use std::fmt;

@@ -1,3 +1,7 @@
+// AST nodes carry `id` and `span` fields that aren't all consumed by every
+// pass; they're kept for diagnostics, visitor passes, and future tooling.
+#![allow(dead_code)]
+
 use crate::lexer::types::Span;
 use std::fmt;
 

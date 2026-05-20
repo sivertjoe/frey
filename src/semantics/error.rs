@@ -13,6 +13,7 @@ pub struct Error {
 pub enum ErrorKind {
     TypeMismatch { expected: Ty, found: Ty },
     ArityMismatch { expected: usize, found: usize },
+    #[allow(dead_code)] // reserved for when CFG analysis lands
     MissingReturn { expected: Ty },
 }
 
