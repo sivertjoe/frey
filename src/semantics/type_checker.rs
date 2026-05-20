@@ -1,8 +1,17 @@
+use std::collections::HashMap;
+
 use crate::hir::types::{
-    BinaryOperator, Block, BlockItem, Declaration, Expr, ExprKind, Function, FunctionCall, Program,
-    Statement, StatementKind, Ty, UnaryOperator,
+    BinaryOperator, Block, BlockItem, Declaration, Expr, ExprKind, Function, FunctionCall, LocalId,
+    Program, Statement, StatementKind, Ty, UnaryOperator,
 };
 use crate::semantics::error::{Error, ErrorKind};
+
+#[derive(Clone)]
+struct BindingInfo {
+    name: String,
+    ty: Ty,
+    mutable: bool,
+}
 
 pub fn type_check(program: &Program) -> Result<(), Error> {
     Typechecker::new().check_program(program)
@@ -10,16 +19,30 @@ pub fn type_check(program: &Program) -> Result<(), Error> {
 
 struct Typechecker {
     expected_return: Vec<Ty>,
+    bindings: HashMap<LocalId, BindingInfo>,
 }
 
 impl Typechecker {
     fn new() -> Self {
         Self {
             expected_return: Vec::new(),
+            bindings: HashMap::new(),
         }
     }
 
     fn check_program(&mut self, p: &Program) -> Result<(), Error> {
+        // Pre-register top-level bindings so nested function bodies that
+        // assign to outer mutable bindings can resolve them.
+        for decl in &p.declarations {
+            self.bindings.insert(
+                decl.id,
+                BindingInfo {
+                    name: decl.name.clone(),
+                    ty: decl.ty.clone(),
+                    mutable: decl.mutable,
+                },
+            );
+        }
         for decl in &p.declarations {
             self.check_declaration(decl)?;
         }
@@ -27,6 +50,17 @@ impl Typechecker {
     }
 
     fn check_declaration(&mut self, d: &Declaration) -> Result<(), Error> {
+        // Top-level decls were registered in check_program; for nested decls
+        // (block items), this insert is what makes them visible to later
+        // assignments in the same block.
+        self.bindings.insert(
+            d.id,
+            BindingInfo {
+                name: d.name.clone(),
+                ty: d.ty.clone(),
+                mutable: d.mutable,
+            },
+        );
         self.check_expr(&d.value)
     }
 
@@ -92,6 +126,32 @@ impl Typechecker {
                 self.check_expr(&block.tail)?;
                 Ok(())
             }
+            ExprKind::Assign { target, value } => {
+                self.check_expr(value)?;
+                let binding = self
+                    .bindings
+                    .get(target)
+                    .expect("resolved LocalId must be in the bindings table")
+                    .clone();
+                if !binding.mutable {
+                    return Err(Error {
+                        span: e.span,
+                        kind: ErrorKind::AssignToImmutable {
+                            name: binding.name,
+                        },
+                    });
+                }
+                if value.ty != binding.ty {
+                    return Err(Error {
+                        span: value.span,
+                        kind: ErrorKind::TypeMismatch {
+                            expected: binding.ty,
+                            found: value.ty.clone(),
+                        },
+                    });
+                }
+                Ok(())
+            }
             ExprKind::If {
                 condition,
                 then_branch,
@@ -125,6 +185,18 @@ impl Typechecker {
 
     fn check_function(&mut self, f: &Function) -> Result<(), Error> {
         self.expected_return.push(f.return_ty.clone());
+        // Register params in the bindings table. Params are always immutable
+        // and passed by value — there's no syntactic way to mark them `mut`.
+        for p in &f.params {
+            self.bindings.insert(
+                p.id,
+                BindingInfo {
+                    name: p.name.clone(),
+                    ty: p.ty.clone(),
+                    mutable: false,
+                },
+            );
+        }
         self.check_body(&f.body, &f.return_ty)?;
         self.expected_return.pop();
         Ok(())

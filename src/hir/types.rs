@@ -88,6 +88,7 @@ pub struct Program {
 pub struct Declaration {
     pub id: LocalId,
     pub span: Span,
+    pub mutable: bool,
     pub name: String,
     pub ty: Ty,
     pub value: Expr,
@@ -122,6 +123,10 @@ pub enum ExprKind {
         condition: Box<Expr>,
         then_branch: Box<Expr>,
         else_branch: Box<Expr>,
+    },
+    Assign {
+        target: LocalId,
+        value: Box<Expr>,
     },
 }
 
@@ -211,6 +216,7 @@ impl fmt::Debug for Declaration {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Declaration")
             .field("id", &self.id)
+            .field("mutable", &self.mutable)
             .field("name", &self.name)
             .field("ty", &self.ty)
             .field("value", &self.value)
@@ -240,6 +246,9 @@ impl fmt::Debug for ExprKind {
                 then_branch,
                 else_branch,
             } => write!(f, "If({condition:?}, {then_branch:?}, {else_branch:?})"),
+            ExprKind::Assign { target, value } => {
+                write!(f, "Assign(Local({}), {value:?})", target.0)
+            }
         }
     }
 }

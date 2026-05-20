@@ -274,6 +274,16 @@ impl<'ctx> Codegen<'ctx> {
                 };
                 Ok(result)
             }
+            ExprKind::Assign { target, value } => {
+                let val = self.lower_expr(*value)?;
+                let ptr = *self
+                    .locals
+                    .get(&target)
+                    .expect("assignable local is in the locals table");
+                self.builder.build_store(ptr, val)?;
+                // Assignment returns Unit.
+                Ok(self.context.bool_type().const_zero().into())
+            }
             ExprKind::Block(block) => self.lower_block_value(block),
             ExprKind::If {
                 condition,

@@ -33,6 +33,7 @@ pub struct Program {
 pub struct Declaration {
     pub id: NodeId,
     pub span: Span,
+    pub mutable: bool,
     pub name: String,
     pub value: Expr,
 }
@@ -120,6 +121,10 @@ pub enum ExprKind {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
     },
+    Assign {
+        target: String,
+        value: Box<Expr>,
+    },
     Block(Block),
     If {
         condition: Box<Expr>,
@@ -198,6 +203,7 @@ impl fmt::Debug for Program {
 impl fmt::Debug for Declaration {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Declaration")
+            .field("mutable", &self.mutable)
             .field("name", &self.name)
             .field("value", &self.value)
             .finish()

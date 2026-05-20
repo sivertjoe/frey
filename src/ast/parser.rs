@@ -71,6 +71,12 @@ impl Parser {
 
     pub(super) fn parse_declaration(&mut self) -> Result<Declaration, Error> {
         let start = self.expect(TokenKind::Let)?.span;
+        let mutable = if self.check(TokenKind::Mut) {
+            self.expect(TokenKind::Mut)?;
+            true
+        } else {
+            false
+        };
         let name = self.ident()?;
         self.expect(TokenKind::Equal)?;
         let expr = self.parse_expr()?;
@@ -79,6 +85,7 @@ impl Parser {
         Ok(Declaration {
             id: self.id_gen.fresh(),
             span: start.join(expr.span),
+            mutable,
             name,
             value: expr,
         })
@@ -243,7 +250,34 @@ impl Parser {
     }
 
     pub(super) fn parse_expr(&mut self) -> Result<Expr, Error> {
-        self.parse_binary_expr(0)
+        let lhs = self.parse_binary_expr(0)?;
+        // Assignment: lowest precedence, right-associative, LHS must be a name.
+        if self.check(TokenKind::Equal) {
+            self.expect(TokenKind::Equal)?;
+            let value = self.parse_expr()?;
+            let span = lhs.span.join(value.span);
+            let target = match lhs.kind {
+                ExprKind::Identifier(name) => name,
+                _ => {
+                    return Err(Error::unexpected(
+                        &Token {
+                            kind: TokenKind::Equal,
+                            span: lhs.span,
+                        },
+                        "assignable name on the left of `=`",
+                    ));
+                }
+            };
+            return Ok(Expr {
+                id: self.id_gen.fresh(),
+                span,
+                kind: ExprKind::Assign {
+                    target,
+                    value: Box::new(value),
+                },
+            });
+        }
+        Ok(lhs)
     }
 
     fn parse_binary_expr(&mut self, min_prec: i32) -> Result<Expr, Error> {

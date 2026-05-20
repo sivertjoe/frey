@@ -1,12 +1,49 @@
+use inkwell::values::BasicValueEnum;
+
 use crate::codegen::{Codegen, Error};
-use crate::hir::types::{Block, BlockItem, Declaration, ExprKind};
+use crate::hir::types::{Block, BlockItem, Const, Declaration, Expr, ExprKind};
 
 impl<'ctx> Codegen<'ctx> {
     pub fn declare_top_level(&mut self, decl: &Declaration) {
-        if let ExprKind::Function(func) = &decl.value.kind {
-            let fn_type = self.lower_fn_type(&func.params, &func.return_ty);
-            let llvm_fn = self.module.add_function(&decl.name, fn_type, None);
-            self.functions.insert(decl.id, llvm_fn);
+        match &decl.value.kind {
+            ExprKind::Function(func) => {
+                let fn_type = self.lower_fn_type(&func.params, &func.return_ty);
+                let llvm_fn = self.module.add_function(&decl.name, fn_type, None);
+                self.functions.insert(decl.id, llvm_fn);
+            }
+            // Top-level non-function declarations become LLVM globals.
+            // The initializer must be a constant literal — complex expressions
+            // would need a static-init function (LLVM `@llvm.global_ctors`).
+            _ => {
+                let llvm_ty = self.lower_ty(&decl.ty);
+                let global = self.module.add_global(llvm_ty, None, &decl.name);
+                let init = self
+                    .const_initializer(&decl.value)
+                    .expect("global initializer must be a constant literal");
+                global.set_initializer(&init);
+                // Immutable globals get marked `constant` so LLVM can place
+                // them in `.rodata` and inline reads aggressively.
+                if !decl.mutable {
+                    global.set_constant(true);
+                }
+                // Store the global's pointer in `locals` so `Local(id)` reads
+                // and `Assign { target: id }` writes go through the same code
+                // path as function locals.
+                self.locals.insert(decl.id, global.as_pointer_value());
+            }
+        }
+    }
+
+    fn const_initializer(&self, expr: &Expr) -> Option<BasicValueEnum<'ctx>> {
+        match &expr.kind {
+            ExprKind::Const(Const::Int(n)) => {
+                Some(self.context.i32_type().const_int(*n as u64, true).into())
+            }
+            ExprKind::Const(Const::Float(f)) => {
+                Some(self.context.f32_type().const_float(*f as f64).into())
+            }
+            ExprKind::Const(Const::Unit) => Some(self.context.bool_type().const_zero().into()),
+            _ => None,
         }
     }
 

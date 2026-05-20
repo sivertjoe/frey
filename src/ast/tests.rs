@@ -476,4 +476,71 @@ mod tests {
         };
         assert!(matches!(target.kind, TypeExprKind::Function { .. }));
     }
+
+    #[test]
+    fn parses_let_mut() {
+        let decl = parser("let mut x = 5;").parse_declaration().unwrap();
+        assert!(decl.mutable);
+        assert_eq!(decl.name, "x");
+    }
+
+    #[test]
+    fn parses_let_immutable_by_default() {
+        let decl = parser("let x = 5;").parse_declaration().unwrap();
+        assert!(!decl.mutable);
+    }
+
+    #[test]
+    fn parses_assignment() {
+        let expr = parser("x = 5").parse_expr().unwrap();
+        let ExprKind::Assign { target, value } = expr.kind else {
+            panic!("expected assignment");
+        };
+        assert_eq!(target, "x");
+        assert!(matches!(value.kind, ExprKind::Const(Const::Int(5))));
+    }
+
+    #[test]
+    fn assignment_is_right_associative() {
+        // `x = y = 5` → Assign(x, Assign(y, 5))
+        let expr = parser("x = y = 5").parse_expr().unwrap();
+        let ExprKind::Assign { target, value } = expr.kind else {
+            panic!("expected outer assignment");
+        };
+        assert_eq!(target, "x");
+        let ExprKind::Assign { target: inner, .. } = &value.kind else {
+            panic!("expected inner assignment");
+        };
+        assert_eq!(inner, "y");
+    }
+
+    #[test]
+    fn assignment_lower_precedence_than_arithmetic() {
+        // `x = 1 + 2` → Assign(x, Add(1, 2)), NOT (x = 1) + 2
+        let expr = parser("x = 1 + 2").parse_expr().unwrap();
+        let ExprKind::Assign { value, .. } = expr.kind else {
+            panic!("expected assignment");
+        };
+        assert!(matches!(value.kind, ExprKind::Binary { .. }));
+    }
+
+    #[test]
+    fn assign_in_block_statement() {
+        let block = parser("{ x = 5; }").parse_block().unwrap();
+        assert_eq!(block.items.len(), 1);
+        let BlockItem::Statement(stmt) = &block.items[0] else {
+            panic!("expected statement");
+        };
+        let StatementKind::Expr(expr) = &stmt.kind else {
+            panic!("expected expression statement");
+        };
+        assert!(matches!(expr.kind, ExprKind::Assign { .. }));
+    }
+
+    #[test]
+    fn assignment_to_non_identifier_errors() {
+        // `1 + 2 = 3` should error — LHS isn't an identifier
+        let result = parser("1 + 2 = 3").parse_expr();
+        assert!(result.is_err());
+    }
 }

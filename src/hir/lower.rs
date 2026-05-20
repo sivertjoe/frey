@@ -111,6 +111,7 @@ impl Lower {
         Ok(Declaration {
             id,
             span: d.span,
+            mutable: d.mutable,
             name: d.name,
             ty,
             value,
@@ -307,6 +308,23 @@ impl Lower {
                     kind: ExprKind::Cast {
                         target: ty.clone(),
                         expr: Box::new(self.lower_expr(*expr)?),
+                    },
+                })
+            }
+            ast::ExprKind::Assign { target, value } => {
+                let Some(target_id) = self.resolve(&target) else {
+                    return Err(Error {
+                        span: e.span,
+                        kind: ErrorKind::NameNotFound { name: target },
+                    });
+                };
+                let value = self.lower_expr(*value)?;
+                Ok(Expr {
+                    span: e.span,
+                    ty: Ty::Unit,
+                    kind: ExprKind::Assign {
+                        target: target_id,
+                        value: Box::new(value),
                     },
                 })
             }

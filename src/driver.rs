@@ -57,9 +57,7 @@ pub fn build(program: Program, output_path: &Path) -> Result<(), Error> {
     let mut cmd = Command::new("clang");
 
     #[cfg(target_os = "windows")]
-    if let Some(tool) =
-        cc::windows_registry::find_tool("x86_64-pc-windows-msvc", "cl.exe")
-    {
+    if let Some(tool) = cc::windows_registry::find_tool("x86_64-pc-windows-msvc", "cl.exe") {
         for (k, v) in tool.env() {
             cmd.env(k, v);
         }
@@ -72,7 +70,9 @@ pub fn build(program: Program, output_path: &Path) -> Result<(), Error> {
         .arg(output_path)
         .status()?;
     if !status.success() {
-        return Err(Error::ClangFailed { code: status.code() });
+        return Err(Error::ClangFailed {
+            code: status.code(),
+        });
     }
 
     Ok(())
