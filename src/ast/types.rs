@@ -57,6 +57,10 @@ pub enum TypeExprKind {
     U64,
     F32,
     F64,
+    Array {
+        element_ty: Box<TypeExpr>,
+        count: usize,
+    },
     Function {
         params: Vec<TypeExpr>,
         return_ty: Box<TypeExpr>,
@@ -103,6 +107,7 @@ pub enum ExprKind {
         return_ty: Option<TypeExpr>,
         body: Block,
     },
+    Array(Vec<Expr>),
     Cast {
         expr: Box<Expr>,
         target: TypeExpr,
@@ -122,7 +127,7 @@ pub enum ExprKind {
         rhs: Box<Expr>,
     },
     Assign {
-        target: String,
+        target: Box<Expr>,
         value: Box<Expr>,
     },
     Block(Block),
@@ -130,6 +135,10 @@ pub enum ExprKind {
         condition: Box<Expr>,
         then_branch: Block,
         else_branch: Option<Box<Expr>>,
+    },
+    Subscript {
+        expr: Box<Expr>,
+        index: Box<Expr>,
     },
 }
 

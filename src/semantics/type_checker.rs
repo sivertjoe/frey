@@ -9,7 +9,6 @@ use crate::semantics::error::{Error, ErrorKind};
 #[derive(Clone)]
 struct BindingInfo {
     name: String,
-    ty: Ty,
     mutable: bool,
 }
 
@@ -38,7 +37,6 @@ impl Typechecker {
                 decl.id,
                 BindingInfo {
                     name: decl.name.clone(),
-                    ty: decl.ty.clone(),
                     mutable: decl.mutable,
                 },
             );
@@ -57,7 +55,6 @@ impl Typechecker {
             d.id,
             BindingInfo {
                 name: d.name.clone(),
-                ty: d.ty.clone(),
                 mutable: d.mutable,
             },
         );
@@ -127,10 +124,14 @@ impl Typechecker {
                 Ok(())
             }
             ExprKind::Assign { target, value } => {
+                self.check_expr(target)?;
                 self.check_expr(value)?;
+                // Walk through any place-expression chain (e.g. `a[i][j]`)
+                // to the root binding to check mutability.
+                let root_id = assignment_root(target);
                 let binding = self
                     .bindings
-                    .get(target)
+                    .get(&root_id)
                     .expect("resolved LocalId must be in the bindings table")
                     .clone();
                 if !binding.mutable {
@@ -141,11 +142,11 @@ impl Typechecker {
                         },
                     });
                 }
-                if value.ty != binding.ty {
+                if value.ty != target.ty {
                     return Err(Error {
                         span: value.span,
                         kind: ErrorKind::TypeMismatch {
-                            expected: binding.ty,
+                            expected: target.ty.clone(),
                             found: value.ty.clone(),
                         },
                     });
@@ -180,6 +181,44 @@ impl Typechecker {
                 }
                 Ok(())
             }
+            ExprKind::Array(items) => {
+                // Lowering already picked the first element's type as the
+                // array's element type; here we just verify the rest match.
+                let Ty::Array { element, .. } = &e.ty else {
+                    unreachable!("array literal has Array type from lowering");
+                };
+                for item in items {
+                    self.check_expr(item)?;
+                    if &item.ty != element.as_ref() {
+                        return Err(Error {
+                            span: item.span,
+                            kind: ErrorKind::TypeMismatch {
+                                expected: (**element).clone(),
+                                found: item.ty.clone(),
+                            },
+                        });
+                    }
+                }
+                Ok(())
+            }
+            ExprKind::Subscript { expr, index } => {
+                self.check_expr(expr)?;
+                self.check_expr(index)?;
+                // Lowering rejected non-array targets, but assert defensively.
+                if !matches!(expr.ty, Ty::Array { .. }) {
+                    unreachable!("subscript target has Array type from lowering");
+                }
+                if !index.ty.is_integer() {
+                    return Err(Error {
+                        span: index.span,
+                        kind: ErrorKind::TypeMismatch {
+                            expected: Ty::Int,
+                            found: index.ty.clone(),
+                        },
+                    });
+                }
+                Ok(())
+            }
         }
     }
 
@@ -192,7 +231,6 @@ impl Typechecker {
                 p.id,
                 BindingInfo {
                     name: p.name.clone(),
-                    ty: p.ty.clone(),
                     mutable: false,
                 },
             );
@@ -371,5 +409,17 @@ impl Typechecker {
             }
         }
         Ok(())
+    }
+}
+
+/// Walks through a place expression (e.g. `arr[i][j]`) to find the root
+/// `LocalId` whose mutability gates the assignment. The parser guarantees
+/// the assignment target is a place expression, so this never recurses
+/// past a non-place node.
+fn assignment_root(target: &Expr) -> LocalId {
+    match &target.kind {
+        ExprKind::Local(id) => *id,
+        ExprKind::Subscript { expr, .. } => assignment_root(expr),
+        _ => unreachable!("assignment target must be a place expression"),
     }
 }

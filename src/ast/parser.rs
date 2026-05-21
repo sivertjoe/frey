@@ -23,8 +23,13 @@ statement ::=
     <const>
     | <ident>
     | <function-literal>
-    | <identifier> "(" [ <expr> [ { "," <expr> } ] ] ")"
+    | <expr> "(" [ <expr> { "," <expr> } ] ")"
+    | <expr> "[" <expr> "]"
+    | "[" [ <expr> { "," <expr> } ] "]"
     | <unary-op> <expr>
+    | <expr> "as" <type>
+    | <expr> <binary-op> <expr>
+    | <expr> "=" <expr>
     | if <expr> <block> [ "else" <expr> ]
 
 <function-literal> ::= "(" [<params>] ")" [ "->" <type> ] <block>
@@ -33,7 +38,17 @@ statement ::=
 
 <type> ::=
     "Int"
+    | "i8"
+    | "i32"
+    | "i64"
+    | "UInt"
+    | "u8"
+    | "i32"
+    | "u64"
     | <function-type>
+    | <array-type>
+
+<array-type> ::= "[" <type> ";" <integer-literal> "]"
 
 <function-type> ::= "(" [<type-list>] ")" "->" <type>
 <type-list> ::= <type> { "," <type> }
@@ -125,6 +140,7 @@ impl Parser {
             TokenKind::F32 => TypeExprKind::F32,
             TokenKind::F64 => TypeExprKind::F64,
             TokenKind::LeftParen => return self.parse_function_type(),
+            TokenKind::LeftBracket => return self.parse_array_type(),
             _ => return Err(Error::unexpected(tok, "type")),
         };
         let span = self.iter.consume().unwrap().span;
@@ -132,6 +148,31 @@ impl Parser {
             id: self.id_gen.fresh(),
             span,
             kind,
+        })
+    }
+
+    pub(super) fn parse_array_type(&mut self) -> Result<TypeExpr, Error> {
+        let start = self.expect(TokenKind::LeftBracket)?.span;
+        let element_ty = Box::new(self.parse_type()?);
+        self.expect(TokenKind::Semicolon)?;
+
+        let count_tok = self.iter.consume().expect("lexer emits eof");
+        let count = match count_tok.kind {
+            TokenKind::Literal(Literal::Int(n)) if n >= 0 => n as usize,
+            _ => {
+                return Err(Error::unexpected(
+                    &count_tok,
+                    "non-negative integer literal",
+                ));
+            }
+        };
+
+        let end = self.expect(TokenKind::RightBracket)?.span;
+        let span = start.join(end);
+        Ok(TypeExpr {
+            id: self.id_gen.fresh(),
+            span,
+            kind: TypeExprKind::Array { element_ty, count },
         })
     }
 
@@ -251,28 +292,26 @@ impl Parser {
 
     pub(super) fn parse_expr(&mut self) -> Result<Expr, Error> {
         let lhs = self.parse_binary_expr(0)?;
-        // Assignment: lowest precedence, right-associative, LHS must be a name.
+        // Assignment: lowest precedence, right-associative, LHS must be a
+        // place expression (identifier or subscript).
         if self.check(TokenKind::Equal) {
             self.expect(TokenKind::Equal)?;
+            if !is_place_expr(&lhs) {
+                return Err(Error::unexpected(
+                    &Token {
+                        kind: TokenKind::Equal,
+                        span: lhs.span,
+                    },
+                    "assignable place expression on the left of `=`",
+                ));
+            }
             let value = self.parse_expr()?;
             let span = lhs.span.join(value.span);
-            let target = match lhs.kind {
-                ExprKind::Identifier(name) => name,
-                _ => {
-                    return Err(Error::unexpected(
-                        &Token {
-                            kind: TokenKind::Equal,
-                            span: lhs.span,
-                        },
-                        "assignable name on the left of `=`",
-                    ));
-                }
-            };
             return Ok(Expr {
                 id: self.id_gen.fresh(),
                 span,
                 kind: ExprKind::Assign {
-                    target,
+                    target: Box::new(lhs),
                     value: Box::new(value),
                 },
             });
@@ -349,8 +388,14 @@ impl Parser {
 
     fn parse_postfix(&mut self) -> Result<Expr, Error> {
         let mut e = self.parse_primary()?;
-        while self.check(TokenKind::LeftParen) {
-            e = self.parse_call_suffix(e)?;
+        loop {
+            if self.check(TokenKind::LeftParen) {
+                e = self.parse_call_suffix(e)?;
+            } else if self.check(TokenKind::LeftBracket) {
+                e = self.parse_subscript_suffix(e)?;
+            } else {
+                break;
+            }
         }
         Ok(e)
     }
@@ -386,6 +431,28 @@ impl Parser {
                     id: self.id_gen.fresh(),
                     span,
                     kind: ExprKind::Identifier(name),
+                })
+            }
+            TokenKind::LeftBracket => {
+                let start = self.expect(TokenKind::LeftBracket)?.span;
+
+                let mut exprs = Vec::new();
+                while !self.check(TokenKind::RightBracket) {
+                    if !exprs.is_empty() {
+                        self.expect(TokenKind::Comma)?;
+                    }
+                    let expr = self.parse_expr()?;
+                    exprs.push(expr);
+                }
+
+                let end = self.expect(TokenKind::RightBracket)?.span;
+
+                let span = start.join(end);
+
+                Ok(Expr {
+                    id: self.id_gen.fresh(),
+                    span,
+                    kind: ExprKind::Array(exprs),
                 })
             }
             TokenKind::LeftParen => {
@@ -507,6 +574,21 @@ impl Parser {
             },
         })
     }
+
+    fn parse_subscript_suffix(&mut self, target: Expr) -> Result<Expr, Error> {
+        self.expect(TokenKind::LeftBracket)?;
+        let index = self.parse_expr()?;
+        let end = self.expect(TokenKind::RightBracket)?.span;
+        let span = target.span.join(end);
+        Ok(Expr {
+            id: self.id_gen.fresh(),
+            span,
+            kind: ExprKind::Subscript {
+                expr: Box::new(target),
+                index: Box::new(index),
+            },
+        })
+    }
 }
 
 impl Parser {
@@ -551,6 +633,13 @@ impl Parser {
 
 fn is_block_like(expr: &Expr) -> bool {
     matches!(expr.kind, ExprKind::Block(_) | ExprKind::If { .. })
+}
+
+fn is_place_expr(expr: &Expr) -> bool {
+    matches!(
+        expr.kind,
+        ExprKind::Identifier(_) | ExprKind::Subscript { .. }
+    )
 }
 
 fn binary_precedence(kind: &TokenKind) -> Option<(i32, BinaryOperator)> {

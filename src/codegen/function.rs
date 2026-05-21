@@ -1,4 +1,5 @@
-use inkwell::values::BasicValueEnum;
+use inkwell::types::{ArrayType, BasicTypeEnum};
+use inkwell::values::{ArrayValue, BasicValueEnum};
 
 use crate::codegen::{Codegen, Error};
 use crate::hir::types::{Block, BlockItem, Const, Declaration, Expr, ExprKind};
@@ -43,6 +44,15 @@ impl<'ctx> Codegen<'ctx> {
                 Some(self.context.f32_type().const_float(*f as f64).into())
             }
             ExprKind::Const(Const::Unit) => Some(self.context.bool_type().const_zero().into()),
+            ExprKind::Array(items) => {
+                // An array literal whose every element is itself a constant
+                // can become a constant LLVM aggregate.
+                let elem_vals: Option<Vec<BasicValueEnum<'ctx>>> =
+                    items.iter().map(|it| self.const_initializer(it)).collect();
+                let elem_vals = elem_vals?;
+                let arr_llvm_ty = self.lower_ty(&expr.ty).into_array_type();
+                Some(const_array_from(arr_llvm_ty, &elem_vals).into())
+            }
             _ => None,
         }
     }
@@ -102,5 +112,26 @@ impl<'ctx> Codegen<'ctx> {
         self.builder.build_store(slot, value)?;
         self.locals.insert(decl.id, slot);
         Ok(())
+    }
+}
+
+fn const_array_from<'ctx>(
+    arr_ty: ArrayType<'ctx>,
+    elems: &[BasicValueEnum<'ctx>],
+) -> ArrayValue<'ctx> {
+    match arr_ty.get_element_type() {
+        BasicTypeEnum::IntType(t) => {
+            let vs: Vec<_> = elems.iter().map(|v| v.into_int_value()).collect();
+            t.const_array(&vs)
+        }
+        BasicTypeEnum::FloatType(t) => {
+            let vs: Vec<_> = elems.iter().map(|v| v.into_float_value()).collect();
+            t.const_array(&vs)
+        }
+        BasicTypeEnum::ArrayType(t) => {
+            let vs: Vec<_> = elems.iter().map(|v| v.into_array_value()).collect();
+            t.const_array(&vs)
+        }
+        _ => unreachable!("unsupported const array element type"),
     }
 }

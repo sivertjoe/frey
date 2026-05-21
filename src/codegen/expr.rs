@@ -1,4 +1,4 @@
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, IntValue, ValueKind};
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, IntValue, PointerValue, ValueKind};
 
 use crate::codegen::{Codegen, Error};
 use crate::hir::types::{Const, Expr, ExprKind, Statement, StatementKind};
@@ -276,10 +276,7 @@ impl<'ctx> Codegen<'ctx> {
             }
             ExprKind::Assign { target, value } => {
                 let val = self.lower_expr(*value)?;
-                let ptr = *self
-                    .locals
-                    .get(&target)
-                    .expect("assignable local is in the locals table");
+                let ptr = self.lower_place(*target)?;
                 self.builder.build_store(ptr, val)?;
                 // Assignment returns Unit.
                 Ok(self.context.bool_type().const_zero().into())
@@ -290,6 +287,26 @@ impl<'ctx> Codegen<'ctx> {
                 then_branch,
                 else_branch,
             } => self.lower_if(*condition, *then_branch, *else_branch),
+            ExprKind::Array(items) => {
+                // Build the array value by repeatedly inserting each element
+                // into an undef array of the right LLVM type.
+                let arr_llvm_ty = self.lower_ty(&expr.ty).into_array_type();
+                let mut agg: inkwell::values::AggregateValueEnum<'ctx> =
+                    arr_llvm_ty.get_undef().into();
+                for (i, item) in items.into_iter().enumerate() {
+                    let v = self.lower_expr(item)?;
+                    agg = self.builder.build_insert_value(agg, v, i as u32, "")?;
+                }
+                Ok(agg.into_array_value().into())
+            }
+            ExprKind::Subscript { expr: arr, index } => {
+                // Element value: GEP to the element's storage and load it.
+                // If the array source is a place, GEP directly; otherwise
+                // spill the rvalue array into an alloca first.
+                let elem_llvm_ty = self.lower_ty(&expr.ty);
+                let ptr = self.build_subscript_ptr(*arr, *index)?;
+                Ok(self.builder.build_load(elem_llvm_ty, ptr, "")?)
+            }
             ExprKind::Call(FunctionCall { callee, args }) => {
                 let arg_vals: Vec<BasicValueEnum<'ctx>> = args
                     .into_iter()
@@ -322,6 +339,47 @@ impl<'ctx> Codegen<'ctx> {
                 }
             }
         }
+    }
+
+    /// Lowers a place expression to its storage pointer. Only `Local` and
+    /// `Subscript` are valid places (enforced by the parser).
+    fn lower_place(&mut self, expr: Expr) -> Result<PointerValue<'ctx>, Error> {
+        match expr.kind {
+            ExprKind::Local(id) => Ok(*self
+                .locals
+                .get(&id)
+                .expect("assignable local is in the locals table")),
+            ExprKind::Subscript { expr: arr, index } => self.build_subscript_ptr(*arr, *index),
+            _ => unreachable!("assignment target must be a place expression"),
+        }
+    }
+
+    /// Computes a pointer to the indexed element of an array. If the array
+    /// expression is itself a place, GEP off its existing pointer; otherwise
+    /// (e.g. a call result), spill the rvalue array to a fresh alloca first
+    /// so we have a pointer to GEP into.
+    fn build_subscript_ptr(
+        &mut self,
+        arr: Expr,
+        index: Expr,
+    ) -> Result<PointerValue<'ctx>, Error> {
+        let array_llvm_ty = self.lower_ty(&arr.ty);
+        let array_ptr = if is_place(&arr) {
+            self.lower_place(arr)?
+        } else {
+            let arr_val = self.lower_expr(arr)?;
+            let slot = self.builder.build_alloca(array_llvm_ty, "")?;
+            self.builder.build_store(slot, arr_val)?;
+            slot
+        };
+        let index_val = self.lower_expr(index)?.into_int_value();
+        let zero = self.context.i32_type().const_zero();
+        // [N x T]* -> T*  via  gep [N x T], ptr, 0, idx
+        let elem_ptr = unsafe {
+            self.builder
+                .build_in_bounds_gep(array_llvm_ty, array_ptr, &[zero, index_val], "")?
+        };
+        Ok(elem_ptr)
     }
 
     fn lower_numeric_cast(
@@ -572,4 +630,8 @@ impl<'ctx> Codegen<'ctx> {
         }
         Ok(())
     }
+}
+
+fn is_place(e: &Expr) -> bool {
+    matches!(e.kind, ExprKind::Local(_) | ExprKind::Subscript { .. })
 }

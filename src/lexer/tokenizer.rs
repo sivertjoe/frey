@@ -37,6 +37,12 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, Error> {
             ')' => {
                 tokens.push(cursor.single(TokenKind::RightParen));
             }
+            '[' => {
+                tokens.push(cursor.single(TokenKind::LeftBracket));
+            }
+            ']' => {
+                tokens.push(cursor.single(TokenKind::RightBracket));
+            }
             '=' => match cursor.peek_second() {
                 Some('=') => tokens.push(cursor.double(TokenKind::EqualEqual)),
                 _ => tokens.push(cursor.single(TokenKind::Equal)),

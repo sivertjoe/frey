@@ -312,20 +312,57 @@ impl Lower {
                 })
             }
             ast::ExprKind::Assign { target, value } => {
-                let Some(target_id) = self.resolve(&target) else {
-                    return Err(Error {
-                        span: e.span,
-                        kind: ErrorKind::NameNotFound { name: target },
-                    });
-                };
+                // The parser guarantees `target` is a place expression
+                // (Identifier or Subscript). Lower it like any other expr
+                // — Identifier becomes Local, Subscript becomes Subscript.
+                let target = self.lower_expr(*target)?;
                 let value = self.lower_expr(*value)?;
                 Ok(Expr {
                     span: e.span,
                     ty: Ty::Unit,
                     kind: ExprKind::Assign {
-                        target: target_id,
+                        target: Box::new(target),
                         value: Box::new(value),
                     },
+                })
+            }
+            ast::ExprKind::Subscript { expr, index } => {
+                let target = self.lower_expr(*expr)?;
+                let index = self.lower_expr(*index)?;
+                let Ty::Array { element, .. } = target.ty.clone() else {
+                    return Err(Error {
+                        span: target.span,
+                        kind: ErrorKind::NotIndexable {
+                            found: target.ty.clone(),
+                        },
+                    });
+                };
+                Ok(Expr {
+                    span: e.span,
+                    ty: *element,
+                    kind: ExprKind::Subscript {
+                        expr: Box::new(target),
+                        index: Box::new(index),
+                    },
+                })
+            }
+            ast::ExprKind::Array(items) => {
+                if items.is_empty() {
+                    return Err(Error {
+                        span: e.span,
+                        kind: ErrorKind::EmptyArrayLiteral,
+                    });
+                }
+                let lowered: Vec<Expr> = items
+                    .into_iter()
+                    .map(|x| self.lower_expr(x))
+                    .collect::<Result<_, _>>()?;
+                let element = Box::new(lowered[0].ty.clone());
+                let count = lowered.len();
+                Ok(Expr {
+                    span: e.span,
+                    ty: Ty::Array { element, count },
+                    kind: ExprKind::Array(lowered),
                 })
             }
         }
@@ -390,6 +427,13 @@ impl Lower {
             ast::TypeExprKind::U64 => Ok(Ty::U64),
             ast::TypeExprKind::F32 => Ok(Ty::F32),
             ast::TypeExprKind::F64 => Ok(Ty::F64),
+            ast::TypeExprKind::Array { element_ty, count } => {
+                let element = Box::new(self.lower_type(element_ty)?);
+                Ok(Ty::Array {
+                    element,
+                    count: *count,
+                })
+            }
             ast::TypeExprKind::Function { params, return_ty } => {
                 let params = params
                     .iter()

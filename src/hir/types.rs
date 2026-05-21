@@ -40,7 +40,14 @@ pub enum Ty {
     U64,
     F32,
     F64,
-    Function { params: Vec<Ty>, return_ty: Box<Ty> },
+    Function {
+        params: Vec<Ty>,
+        return_ty: Box<Ty>,
+    },
+    Array {
+        element: Box<Ty>,
+        count: usize,
+    },
 }
 
 impl Ty {
@@ -125,8 +132,13 @@ pub enum ExprKind {
         else_branch: Box<Expr>,
     },
     Assign {
-        target: LocalId,
+        target: Box<Expr>,
         value: Box<Expr>,
+    },
+    Array(Vec<Expr>),
+    Subscript {
+        expr: Box<Expr>,
+        index: Box<Expr>,
     },
 }
 
@@ -200,6 +212,7 @@ impl fmt::Debug for Ty {
                 }
                 write!(f, ") -> {return_ty:?}")
             }
+            Ty::Array { element, count } => write!(f, "[{element:?}; {count}]"),
         }
     }
 }
@@ -247,8 +260,10 @@ impl fmt::Debug for ExprKind {
                 else_branch,
             } => write!(f, "If({condition:?}, {then_branch:?}, {else_branch:?})"),
             ExprKind::Assign { target, value } => {
-                write!(f, "Assign(Local({}), {value:?})", target.0)
+                write!(f, "Assign({target:?}, {value:?})")
             }
+            ExprKind::Array(items) => write!(f, "Array{items:?}"),
+            ExprKind::Subscript { expr, index } => write!(f, "Subscript({expr:?}, {index:?})"),
         }
     }
 }

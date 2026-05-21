@@ -1,5 +1,5 @@
 use inkwell::AddressSpace;
-use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, FunctionType};
+use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType};
 
 use crate::codegen::Codegen;
 use crate::hir::types::{Param, Ty};
@@ -15,6 +15,9 @@ impl<'ctx> Codegen<'ctx> {
             Ty::Float | Ty::F32 => self.context.f32_type().into(),
             Ty::F64 => self.context.f64_type().into(),
             Ty::Function { .. } => self.context.ptr_type(AddressSpace::default()).into(),
+            Ty::Array { element, count } => {
+                self.lower_ty(element).array_type(*count as u32).into()
+            }
         }
     }
 
@@ -50,6 +53,10 @@ impl<'ctx> Codegen<'ctx> {
             Ty::Function { .. } => self
                 .context
                 .ptr_type(AddressSpace::default())
+                .fn_type(param_types, false),
+            Ty::Array { element, count } => self
+                .lower_ty(element)
+                .array_type(*count as u32)
                 .fn_type(param_types, false),
         }
     }

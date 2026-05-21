@@ -13,6 +13,8 @@ pub enum ErrorKind {
     NameNotFound { name: String },
     AlreadyDefined { name: String },
     NotCallable { found: Ty },
+    NotIndexable { found: Ty },
+    EmptyArrayLiteral,
 }
 
 impl fmt::Display for Error {
@@ -36,6 +38,15 @@ impl fmt::Display for ErrorKind {
             }
             ErrorKind::NotCallable { found } => {
                 write!(f, "cannot call non-function value of type {found:?}")
+            }
+            ErrorKind::NotIndexable { found } => {
+                write!(f, "cannot subscript non-array value of type {found:?}")
+            }
+            ErrorKind::EmptyArrayLiteral => {
+                write!(
+                    f,
+                    "empty array literals are not supported (element type cannot be inferred)"
+                )
             }
         }
     }

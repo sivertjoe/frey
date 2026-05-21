@@ -490,13 +490,20 @@ mod tests {
         assert!(!decl.mutable);
     }
 
+    fn assert_assign_target_named(target: &Expr, expected: &str) {
+        let ExprKind::Identifier(name) = &target.kind else {
+            panic!("expected identifier assignment target, got {:?}", target.kind);
+        };
+        assert_eq!(name, expected);
+    }
+
     #[test]
     fn parses_assignment() {
         let expr = parser("x = 5").parse_expr().unwrap();
         let ExprKind::Assign { target, value } = expr.kind else {
             panic!("expected assignment");
         };
-        assert_eq!(target, "x");
+        assert_assign_target_named(&target, "x");
         assert!(matches!(value.kind, ExprKind::Const(Const::Int(5))));
     }
 
@@ -507,11 +514,11 @@ mod tests {
         let ExprKind::Assign { target, value } = expr.kind else {
             panic!("expected outer assignment");
         };
-        assert_eq!(target, "x");
+        assert_assign_target_named(&target, "x");
         let ExprKind::Assign { target: inner, .. } = &value.kind else {
             panic!("expected inner assignment");
         };
-        assert_eq!(inner, "y");
+        assert_assign_target_named(inner, "y");
     }
 
     #[test]
@@ -541,6 +548,242 @@ mod tests {
     fn assignment_to_non_identifier_errors() {
         // `1 + 2 = 3` should error — LHS isn't an identifier
         let result = parser("1 + 2 = 3").parse_expr();
+        assert!(result.is_err());
+    }
+
+    // ----------------------------------------------------------------------
+    // Array tests — array literals, subscript, and `[T; N]` types.
+    // ----------------------------------------------------------------------
+
+    // ---- Array types ----
+
+    #[test]
+    fn parses_array_type() {
+        // `[Int; 3]` → Array { element_ty: Int, count: 3 }
+        let ty = parser("[Int; 3]").parse_type().unwrap();
+        let TypeExprKind::Array { element_ty, count } = ty.kind else {
+            panic!("expected array type");
+        };
+        assert!(matches!(element_ty.kind, TypeExprKind::Int));
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn parses_array_type_with_float_element() {
+        let ty = parser("[Float; 5]").parse_type().unwrap();
+        let TypeExprKind::Array { element_ty, count } = ty.kind else {
+            panic!("expected array type");
+        };
+        assert!(matches!(element_ty.kind, TypeExprKind::Float));
+        assert_eq!(count, 5);
+    }
+
+    #[test]
+    fn parses_nested_array_type() {
+        // `[[Int; 2]; 3]` — array-of-arrays
+        let ty = parser("[[Int; 2]; 3]").parse_type().unwrap();
+        let TypeExprKind::Array { element_ty, count } = ty.kind else {
+            panic!("expected outer array type");
+        };
+        assert_eq!(count, 3);
+        let TypeExprKind::Array { element_ty: inner, count: inner_n } = element_ty.kind else {
+            panic!("expected inner array type");
+        };
+        assert!(matches!(inner.kind, TypeExprKind::Int));
+        assert_eq!(inner_n, 2);
+    }
+
+    #[test]
+    fn parses_function_returning_array() {
+        // `() -> [Float; 5]` — array as a function's return type
+        let ty = parser("() -> [Float; 5]").parse_type().unwrap();
+        let TypeExprKind::Function { return_ty, .. } = ty.kind else {
+            panic!("expected function type");
+        };
+        let TypeExprKind::Array { element_ty, count } = return_ty.kind else {
+            panic!("expected array return type");
+        };
+        assert!(matches!(element_ty.kind, TypeExprKind::Float));
+        assert_eq!(count, 5);
+    }
+
+    // ---- Array literals ----
+
+    #[test]
+    fn parses_array_literal() {
+        // `[1, 2, 3]` → ExprKind::Array(3 elements)
+        let expr = parser("[1, 2, 3]").parse_expr().unwrap();
+        let ExprKind::Array(items) = expr.kind else {
+            panic!("expected array literal");
+        };
+        assert_eq!(items.len(), 3);
+        assert!(matches!(items[0].kind, ExprKind::Const(Const::Int(1))));
+        assert!(matches!(items[1].kind, ExprKind::Const(Const::Int(2))));
+        assert!(matches!(items[2].kind, ExprKind::Const(Const::Int(3))));
+    }
+
+    #[test]
+    fn parses_singleton_array_literal() {
+        let expr = parser("[42]").parse_expr().unwrap();
+        let ExprKind::Array(items) = expr.kind else {
+            panic!("expected array literal");
+        };
+        assert_eq!(items.len(), 1);
+        assert!(matches!(items[0].kind, ExprKind::Const(Const::Int(42))));
+    }
+
+    #[test]
+    fn parses_array_literal_in_declaration() {
+        // `let xs = [1, 2, 3];`
+        let decl = parser("let xs = [1, 2, 3];").parse_declaration().unwrap();
+        assert_eq!(decl.name, "xs");
+        let ExprKind::Array(items) = &decl.value.kind else {
+            panic!("expected array literal as declaration value");
+        };
+        assert_eq!(items.len(), 3);
+    }
+
+    #[test]
+    fn parses_heterogeneous_array_literal_at_parse_time() {
+        // `[1, 2.0]` — parser accepts it; typechecker will reject later.
+        let expr = parser("[1, 2.0]").parse_expr().unwrap();
+        let ExprKind::Array(items) = expr.kind else {
+            panic!("expected array literal");
+        };
+        assert_eq!(items.len(), 2);
+        assert!(matches!(items[0].kind, ExprKind::Const(Const::Int(_))));
+        assert!(matches!(items[1].kind, ExprKind::Const(Const::Float(_))));
+    }
+
+    // ---- Subscript ----
+
+    #[test]
+    fn parses_subscript() {
+        // `foo[0]` → Subscript(foo, 0)
+        let expr = parser("foo[0]").parse_expr().unwrap();
+        let ExprKind::Subscript { expr: inner, index } = expr.kind else {
+            panic!("expected subscript, got {:?}", expr.kind);
+        };
+        let ExprKind::Identifier(name) = &inner.kind else {
+            panic!("expected identifier inside subscript");
+        };
+        assert_eq!(name, "foo");
+        assert!(matches!(index.kind, ExprKind::Const(Const::Int(0))));
+    }
+
+    #[test]
+    fn parses_nested_subscript() {
+        // `m[i][j]` → Subscript(Subscript(m, i), j)
+        let expr = parser("m[i][j]").parse_expr().unwrap();
+        let ExprKind::Subscript { expr: outer_target, index: outer_idx } = expr.kind else {
+            panic!("expected outer subscript");
+        };
+        let ExprKind::Identifier(j) = &outer_idx.kind else {
+            panic!("expected identifier `j`");
+        };
+        assert_eq!(j, "j");
+        let ExprKind::Subscript { expr: inner_target, index: inner_idx } = &outer_target.kind else {
+            panic!("expected inner subscript");
+        };
+        let ExprKind::Identifier(m) = &inner_target.kind else {
+            panic!("expected identifier `m`");
+        };
+        assert_eq!(m, "m");
+        let ExprKind::Identifier(i) = &inner_idx.kind else {
+            panic!("expected identifier `i`");
+        };
+        assert_eq!(i, "i");
+    }
+
+    #[test]
+    fn subscript_binds_tighter_than_unary() {
+        // `-arr[0]` should parse as `-(arr[0])`, NOT `(-arr)[0]`.
+        let expr = parser("-arr[0]").parse_expr().unwrap();
+        let ExprKind::Unary { op, expr: inner } = expr.kind else {
+            panic!("expected unary at top, got {:?}", expr.kind);
+        };
+        assert!(matches!(op, UnaryOperator::Minus));
+        assert!(matches!(inner.kind, ExprKind::Subscript { .. }));
+    }
+
+    #[test]
+    fn subscript_on_call_result() {
+        // `foo()[0]` — postfix chain: subscript over call result.
+        let expr = parser("foo()[0]").parse_expr().unwrap();
+        let ExprKind::Subscript { expr: target, .. } = expr.kind else {
+            panic!("expected subscript at top");
+        };
+        assert!(matches!(target.kind, ExprKind::Call { .. }));
+    }
+
+    #[test]
+    fn call_on_subscript_result() {
+        // `funcs[0]()` — postfix chain: call over subscript result.
+        let expr = parser("funcs[0]()").parse_expr().unwrap();
+        let ExprKind::Call { callee, .. } = expr.kind else {
+            panic!("expected call at top");
+        };
+        assert!(matches!(callee.kind, ExprKind::Subscript { .. }));
+    }
+
+    #[test]
+    fn subscript_binds_tighter_than_binary() {
+        // `arr[0] + 1` parses as `(arr[0]) + 1`.
+        let expr = parser("arr[0] + 1").parse_expr().unwrap();
+        let ExprKind::Binary { op, lhs, .. } = expr.kind else {
+            panic!("expected binary at top");
+        };
+        assert_eq!(op, BinaryOperator::Add);
+        assert!(matches!(lhs.kind, ExprKind::Subscript { .. }));
+    }
+
+    #[test]
+    fn subscript_index_can_be_expression() {
+        // `arr[i + 1]` — index is an arbitrary expression.
+        let expr = parser("arr[i + 1]").parse_expr().unwrap();
+        let ExprKind::Subscript { index, .. } = expr.kind else {
+            panic!("expected subscript");
+        };
+        assert!(matches!(index.kind, ExprKind::Binary { .. }));
+    }
+
+    // ---- Indexed assignment ----
+
+    #[test]
+    fn parses_subscript_assignment() {
+        // `arr[0] = 5` — assignment to a subscript place expression.
+        let expr = parser("arr[0] = 5").parse_expr().unwrap();
+        let ExprKind::Assign { target, value } = expr.kind else {
+            panic!("expected assignment");
+        };
+        let ExprKind::Subscript { expr: arr, index } = &target.kind else {
+            panic!("expected subscript on lhs of `=`");
+        };
+        let ExprKind::Identifier(name) = &arr.kind else {
+            panic!("expected identifier inside subscript");
+        };
+        assert_eq!(name, "arr");
+        assert!(matches!(index.kind, ExprKind::Const(Const::Int(0))));
+        assert!(matches!(value.kind, ExprKind::Const(Const::Int(5))));
+    }
+
+    #[test]
+    fn parses_nested_subscript_assignment() {
+        // `m[i][j] = 0` — assignment to a chained subscript.
+        let expr = parser("m[i][j] = 0").parse_expr().unwrap();
+        let ExprKind::Assign { target, .. } = expr.kind else {
+            panic!("expected assignment");
+        };
+        let ExprKind::Subscript { expr: outer, .. } = &target.kind else {
+            panic!("expected outer subscript as lhs");
+        };
+        assert!(matches!(outer.kind, ExprKind::Subscript { .. }));
+    }
+
+    #[test]
+    fn assignment_to_call_result_errors() {
+        // `foo() = 5` — call result isn't a place expression.
+        let result = parser("foo() = 5").parse_expr();
         assert!(result.is_err());
     }
 }

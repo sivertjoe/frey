@@ -32,6 +32,8 @@ pub enum TokenKind {
     RightBrace,
     LeftParen,
     RightParen,
+    LeftBracket,
+    RightBracket,
 
     Let,
     Mut,
@@ -96,6 +98,8 @@ impl std::fmt::Display for TokenKind {
             TokenKind::RightBrace => write!(f, "`}}`"),
             TokenKind::LeftParen => write!(f, "`(`"),
             TokenKind::RightParen => write!(f, "`)`"),
+            TokenKind::LeftBracket => write!(f, "`[`"),
+            TokenKind::RightBracket => write!(f, "`]`"),
             TokenKind::Let => write!(f, "`let`"),
             TokenKind::Mut => write!(f, "`mut`"),
             TokenKind::Int => write!(f, "`Int`"),
