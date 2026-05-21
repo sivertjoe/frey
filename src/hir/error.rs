@@ -15,6 +15,7 @@ pub enum ErrorKind {
     NotCallable { found: Ty },
     NotIndexable { found: Ty },
     EmptyArrayLiteral,
+    LiteralOutOfRange { value: i32, target: Ty },
 }
 
 impl fmt::Display for Error {
@@ -47,6 +48,9 @@ impl fmt::Display for ErrorKind {
                     f,
                     "empty array literals are not supported (element type cannot be inferred)"
                 )
+            }
+            ErrorKind::LiteralOutOfRange { value, target } => {
+                write!(f, "literal {value} is out of range for type {target:?}")
             }
         }
     }

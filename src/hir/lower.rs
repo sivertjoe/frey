@@ -198,12 +198,8 @@ impl Lower {
             }
             ast::ExprKind::Call { callee, args } => {
                 let callee = self.lower_expr(*callee)?;
-                let args = args
-                    .into_iter()
-                    .map(|a| self.lower_expr(a))
-                    .collect::<Result<Vec<_>, _>>()?;
 
-                let Ty::Function { return_ty, .. } = &callee.ty else {
+                let Ty::Function { params, return_ty } = callee.ty.clone() else {
                     return Err(Error {
                         span: callee.span,
                         kind: ErrorKind::NotCallable {
@@ -211,7 +207,18 @@ impl Lower {
                         },
                     });
                 };
-                let result_ty = (**return_ty).clone();
+                let result_ty = *return_ty;
+
+                let mut lowered_args = Vec::with_capacity(args.len());
+                for (i, a) in args.into_iter().enumerate() {
+                    let arg = self.lower_expr(a)?;
+                    let arg = match params.get(i) {
+                        Some(pty) => coerce_int_literal(arg, pty)?,
+                        None => arg,
+                    };
+                    lowered_args.push(arg);
+                }
+                let args = lowered_args;
 
                 Ok(Expr {
                     span: e.span,
@@ -239,6 +246,19 @@ impl Lower {
                 use crate::ast::BinaryOperator as B;
                 let lhs = self.lower_expr(*lhs)?;
                 let rhs = self.lower_expr(*rhs)?;
+                let (lhs, rhs) = if lhs.ty != rhs.ty {
+                    if rhs.ty.is_number() && rhs.ty != Ty::Int {
+                        let target = rhs.ty.clone();
+                        (coerce_int_literal(lhs, &target)?, rhs)
+                    } else if lhs.ty.is_number() && lhs.ty != Ty::Int {
+                        let target = lhs.ty.clone();
+                        (lhs, coerce_int_literal(rhs, &target)?)
+                    } else {
+                        (lhs, rhs)
+                    }
+                } else {
+                    (lhs, rhs)
+                };
                 let ty = match op {
                     // Arithmetic preserves the operand type (operands must match —
                     // typechecker enforces this).
@@ -317,6 +337,7 @@ impl Lower {
                 // — Identifier becomes Local, Subscript becomes Subscript.
                 let target = self.lower_expr(*target)?;
                 let value = self.lower_expr(*value)?;
+                let value = coerce_int_literal(value, &target.ty)?;
                 Ok(Expr {
                     span: e.span,
                     ty: Ty::Unit,
@@ -476,6 +497,60 @@ impl Lower {
         }
         None
     }
+}
+
+fn const_int_literal(e: &Expr) -> Option<i32> {
+    if e.ty != Ty::Int {
+        return None;
+    }
+    match &e.kind {
+        ExprKind::Const(Const::Int(n)) => Some(*n),
+        ExprKind::Unary { op, operand } if matches!(op, UnaryOperator::Minus) => {
+            match &operand.kind {
+                ExprKind::Const(Const::Int(n)) => n.checked_neg(),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn fits_in_ty(v: i32, ty: &Ty) -> bool {
+    match ty {
+        Ty::Int | Ty::I32 | Ty::I64 => true,
+        Ty::I8 => i8::try_from(v).is_ok(),
+        Ty::U8 => u8::try_from(v).is_ok(),
+        Ty::UInt | Ty::U32 | Ty::U64 => v >= 0,
+        Ty::Float | Ty::F32 | Ty::F64 => true,
+        _ => false,
+    }
+}
+
+fn coerce_int_literal(expr: Expr, target: &Ty) -> Result<Expr, Error> {
+    if expr.ty == *target || *target == Ty::Int || !target.is_number() {
+        return Ok(expr);
+    }
+    let Some(value) = const_int_literal(&expr) else {
+        return Ok(expr);
+    };
+    if !fits_in_ty(value, target) {
+        return Err(Error {
+            span: expr.span,
+            kind: ErrorKind::LiteralOutOfRange {
+                value,
+                target: target.clone(),
+            },
+        });
+    }
+    let span = expr.span;
+    Ok(Expr {
+        span,
+        ty: target.clone(),
+        kind: ExprKind::Cast {
+            target: target.clone(),
+            expr: Box::new(expr),
+        },
+    })
 }
 
 fn unit_expr(span: crate::lexer::types::Span) -> Expr {
