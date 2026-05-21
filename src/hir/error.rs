@@ -17,6 +17,13 @@ pub enum ErrorKind {
     EmptyArrayLiteral,
     LiteralOutOfRange { value: i32, target: Ty },
     NotDereferencable { found: Ty },
+    UnknownType { name: String },
+    UnknownField { struct_name: String, field: String },
+    MissingFields { struct_name: String, missing: Vec<String> },
+    DuplicateField { struct_name: String, field: String },
+    NotAStruct { found: Ty },
+    DirectStructRecursion { name: String },
+    StructDefNotAllowedHere,
 }
 
 impl fmt::Display for Error {
@@ -55,6 +62,37 @@ impl fmt::Display for ErrorKind {
             }
             ErrorKind::NotDereferencable { found } => {
                 write!(f, "cannot dereference non-pointer value of type {found:?}")
+            }
+            ErrorKind::UnknownType { name } => {
+                write!(f, "unknown type `{name}`")
+            }
+            ErrorKind::UnknownField { struct_name, field } => {
+                write!(f, "struct `{struct_name}` has no field `{field}`")
+            }
+            ErrorKind::MissingFields { struct_name, missing } => {
+                write!(
+                    f,
+                    "struct literal for `{struct_name}` is missing fields: {}",
+                    missing.join(", ")
+                )
+            }
+            ErrorKind::DuplicateField { struct_name, field } => {
+                write!(
+                    f,
+                    "field `{field}` is specified more than once in `{struct_name}` literal"
+                )
+            }
+            ErrorKind::NotAStruct { found } => {
+                write!(f, "field access requires a struct, got {found:?}")
+            }
+            ErrorKind::DirectStructRecursion { name } => {
+                write!(
+                    f,
+                    "struct `{name}` directly contains itself (infinite size); use `*{name}` for self-references"
+                )
+            }
+            ErrorKind::StructDefNotAllowedHere => {
+                write!(f, "struct definitions are only allowed as `let X = struct {{...}};`")
             }
         }
     }

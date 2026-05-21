@@ -8,9 +8,10 @@ use std::collections::HashMap;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
+use inkwell::types::StructType;
 use inkwell::values::{FunctionValue, PointerValue};
 
-use crate::hir::types::{LocalId, Program};
+use crate::hir::types::{LocalId, Program, StructDef};
 
 pub use error::Error;
 
@@ -20,6 +21,8 @@ pub struct Codegen<'ctx> {
     builder: Builder<'ctx>,
     locals: HashMap<LocalId, PointerValue<'ctx>>,
     functions: HashMap<LocalId, FunctionValue<'ctx>>,
+    pub(crate) struct_defs: HashMap<String, StructDef>,
+    pub(crate) struct_llvm: HashMap<String, StructType<'ctx>>,
 }
 
 impl<'ctx> Codegen<'ctx> {
@@ -31,10 +34,30 @@ impl<'ctx> Codegen<'ctx> {
             builder: context.create_builder(),
             locals: HashMap::new(),
             functions: HashMap::new(),
+            struct_defs: HashMap::new(),
+            struct_llvm: HashMap::new(),
         }
     }
 
     pub fn lower(&mut self, program: Program) -> Result<(), Error> {
+        // Two-step struct setup so self-referential pointers work: first
+        // declare every struct as an opaque LLVM type, then fill in bodies
+        // referencing those opaque types.
+        for (name, def) in &program.structs {
+            let llvm_ty = self.context.opaque_struct_type(name);
+            self.struct_llvm.insert(name.clone(), llvm_ty);
+            self.struct_defs.insert(name.clone(), def.clone());
+        }
+        for (name, def) in &program.structs {
+            let body: Vec<_> = def
+                .fields
+                .iter()
+                .map(|(_, ty)| self.lower_ty(ty))
+                .collect();
+            let llvm_ty = self.struct_llvm[name];
+            llvm_ty.set_body(&body, false);
+        }
+
         for decl in &program.declarations {
             self.declare_top_level(decl);
         }

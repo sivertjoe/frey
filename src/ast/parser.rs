@@ -84,7 +84,7 @@ use crate::{
         error::Error,
         token_iter::TokenIter,
         types::{
-            BinaryOperator, Block, BlockItem, Const, Declaration, Expr, ExprKind, NodeIdGen, Param,
+            BinaryOperator, Block, BlockItem, Const, Declaration, Expr, ExprKind, NodeIdGen, Param, StructLiteralField, StructTypeField,
             Program, Statement, StatementKind, TypeExpr, TypeExprKind,
         },
     },
@@ -163,6 +163,7 @@ impl Parser {
             TokenKind::U64 => TypeExprKind::U64,
             TokenKind::F32 => TypeExprKind::F32,
             TokenKind::F64 => TypeExprKind::F64,
+            TokenKind::Identifier(name) => TypeExprKind::Named(name.clone()),
             TokenKind::Star => return self.parse_ptr_type(),
             TokenKind::LeftParen => return self.parse_function_type(),
             TokenKind::LeftBracket => return self.parse_array_type(),
@@ -434,11 +435,115 @@ impl Parser {
                 e = self.parse_call_suffix(e)?;
             } else if self.check(TokenKind::LeftBracket) {
                 e = self.parse_subscript_suffix(e)?;
+            } else if self.check(TokenKind::Dot) {
+                e = self.parse_field_suffix(e)?;
             } else {
                 break;
             }
         }
         Ok(e)
+    }
+
+    fn parse_field_suffix(&mut self, target: Expr) -> Result<Expr, Error> {
+        self.expect(TokenKind::Dot)?;
+        let name_tok = self.iter.consume().expect("lexer emits eof");
+        let TokenKind::Identifier(name) = name_tok.kind else {
+            return Err(Error::unexpected(&name_tok, "field name"));
+        };
+        let span = target.span.join(name_tok.span);
+        Ok(Expr {
+            id: self.id_gen.fresh(),
+            span,
+            kind: ExprKind::Field {
+                target: Box::new(target),
+                name,
+            },
+        })
+    }
+
+    /// `Identifier { Identifier :` or `Identifier { }` — disambiguates a
+    /// struct literal from an identifier followed by a block.
+    fn looks_like_struct_literal(&self) -> bool {
+        if !matches!(
+            self.iter.peek_nth(1).map(|t| &t.kind),
+            Some(TokenKind::LeftBrace)
+        ) {
+            return false;
+        }
+        match (
+            self.iter.peek_nth(2).map(|t| &t.kind),
+            self.iter.peek_nth(3).map(|t| &t.kind),
+        ) {
+            (Some(TokenKind::RightBrace), _) => true,
+            (Some(TokenKind::Identifier(_)), Some(TokenKind::Colon)) => true,
+            _ => false,
+        }
+    }
+
+    fn parse_struct_literal(&mut self) -> Result<Expr, Error> {
+        let name_tok = self.iter.consume().expect("checked by caller");
+        let start = name_tok.span;
+        let TokenKind::Identifier(name) = name_tok.kind else {
+            unreachable!("caller verified identifier");
+        };
+        self.expect(TokenKind::LeftBrace)?;
+        let mut fields = Vec::new();
+        while !self.check(TokenKind::RightBrace) {
+            if !fields.is_empty() {
+                self.expect(TokenKind::Comma)?;
+                if self.check(TokenKind::RightBrace) {
+                    break;
+                }
+            }
+            let field_start = self.iter.peek().expect("lexer emits eof").span;
+            let field_name = self.ident()?;
+            self.expect(TokenKind::Colon)?;
+            let value = self.parse_expr()?;
+            let span = field_start.join(value.span);
+            fields.push(StructLiteralField {
+                id: self.id_gen.fresh(),
+                span,
+                name: field_name,
+                value,
+            });
+        }
+        let end = self.expect(TokenKind::RightBrace)?.span;
+        Ok(Expr {
+            id: self.id_gen.fresh(),
+            span: start.join(end),
+            kind: ExprKind::StructLiteral { name, fields },
+        })
+    }
+
+    fn parse_struct_def(&mut self) -> Result<Expr, Error> {
+        let start = self.expect(TokenKind::Struct)?.span;
+        self.expect(TokenKind::LeftBrace)?;
+        let mut fields = Vec::new();
+        while !self.check(TokenKind::RightBrace) {
+            if !fields.is_empty() {
+                self.expect(TokenKind::Comma)?;
+                if self.check(TokenKind::RightBrace) {
+                    break;
+                }
+            }
+            let field_start = self.iter.peek().expect("lexer emits eof").span;
+            let name = self.ident()?;
+            self.expect(TokenKind::Colon)?;
+            let ty = self.parse_type()?;
+            let span = field_start.join(ty.span);
+            fields.push(StructTypeField {
+                id: self.id_gen.fresh(),
+                span,
+                name,
+                ty,
+            });
+        }
+        let end = self.expect(TokenKind::RightBrace)?.span;
+        Ok(Expr {
+            id: self.id_gen.fresh(),
+            span: start.join(end),
+            kind: ExprKind::StructDef { fields },
+        })
     }
 
     fn parse_primary(&mut self) -> Result<Expr, Error> {
@@ -466,6 +571,9 @@ impl Parser {
                 })
             }
             TokenKind::Identifier(_) => {
+                if self.looks_like_struct_literal() {
+                    return self.parse_struct_literal();
+                }
                 let span = tok.span;
                 let name = self.ident()?;
                 Ok(Expr {
@@ -474,6 +582,7 @@ impl Parser {
                     kind: ExprKind::Identifier(name),
                 })
             }
+            TokenKind::Struct => return self.parse_struct_def(),
             TokenKind::LeftBracket => {
                 let start = self.expect(TokenKind::LeftBracket)?.span;
 
@@ -679,7 +788,10 @@ fn is_block_like(expr: &Expr) -> bool {
 fn is_place_expr(expr: &Expr) -> bool {
     matches!(
         expr.kind,
-        ExprKind::Identifier(_) | ExprKind::Subscript { .. } | ExprKind::Deref(_)
+        ExprKind::Identifier(_)
+            | ExprKind::Subscript { .. }
+            | ExprKind::Deref(_)
+            | ExprKind::Field { .. }
     )
 }
 

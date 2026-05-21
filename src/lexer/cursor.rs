@@ -115,6 +115,7 @@ impl<'a> Cursor<'a> {
             "else" => TokenKind::Else,
             "return" => TokenKind::Return,
             "as" => TokenKind::As,
+            "struct" => TokenKind::Struct,
             _ => TokenKind::Identifier(raw.to_string()),
         };
 

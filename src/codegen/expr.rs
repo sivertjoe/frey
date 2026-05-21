@@ -313,6 +313,41 @@ impl<'ctx> Codegen<'ctx> {
                 let ptr = self.lower_expr(*target)?.into_pointer_value();
                 Ok(self.builder.build_load(elem_llvm_ty, ptr, "")?)
             }
+            ExprKind::StructLiteral { fields } => {
+                let struct_llvm_ty = self.lower_ty(&expr.ty).into_struct_type();
+                let mut agg: inkwell::values::AggregateValueEnum<'ctx> =
+                    struct_llvm_ty.get_undef().into();
+                for (i, (_, value)) in fields.into_iter().enumerate() {
+                    let v = self.lower_expr(value)?;
+                    agg = self.builder.build_insert_value(agg, v, i as u32, "")?;
+                }
+                Ok(agg.into_struct_value().into())
+            }
+            ExprKind::Field { target, index, .. } => {
+                let field_llvm_ty = self.lower_ty(&expr.ty);
+                if is_place(&target) {
+                    let struct_name = match &target.ty {
+                        crate::hir::types::Ty::Struct(n) => n.clone(),
+                        _ => unreachable!("Field target has Struct type from lowering"),
+                    };
+                    let struct_llvm_ty = self.struct_llvm[&struct_name];
+                    let struct_ptr = self.lower_place(*target)?;
+                    let field_ptr = self.builder.build_struct_gep(
+                        struct_llvm_ty,
+                        struct_ptr,
+                        index as u32,
+                        "",
+                    )?;
+                    Ok(self.builder.build_load(field_llvm_ty, field_ptr, "")?)
+                } else {
+                    // Field on an rvalue struct (e.g. function-call result):
+                    // just extract from the value.
+                    let agg = self.lower_expr(*target)?;
+                    Ok(self
+                        .builder
+                        .build_extract_value(agg.into_struct_value(), index as u32, "")?)
+                }
+            }
             ExprKind::Call(FunctionCall { callee, args }) => {
                 let arg_vals: Vec<BasicValueEnum<'ctx>> = args
                     .into_iter()
@@ -358,6 +393,20 @@ impl<'ctx> Codegen<'ctx> {
                 .expect("assignable local is in the locals table")),
             ExprKind::Subscript { expr: arr, index } => self.build_subscript_ptr(*arr, *index),
             ExprKind::Deref(target) => Ok(self.lower_expr(*target)?.into_pointer_value()),
+            ExprKind::Field { target, index, .. } => {
+                let struct_name = match &target.ty {
+                    crate::hir::types::Ty::Struct(n) => n.clone(),
+                    _ => unreachable!("Field target has Struct type from lowering"),
+                };
+                let struct_llvm_ty = self.struct_llvm[&struct_name];
+                let struct_ptr = self.lower_place(*target)?;
+                Ok(self.builder.build_struct_gep(
+                    struct_llvm_ty,
+                    struct_ptr,
+                    index as u32,
+                    "",
+                )?)
+            }
             _ => unreachable!("assignment target must be a place expression"),
         }
     }
@@ -643,6 +692,9 @@ impl<'ctx> Codegen<'ctx> {
 fn is_place(e: &Expr) -> bool {
     matches!(
         e.kind,
-        ExprKind::Local(_) | ExprKind::Subscript { .. } | ExprKind::Deref(_)
+        ExprKind::Local(_)
+            | ExprKind::Subscript { .. }
+            | ExprKind::Deref(_)
+            | ExprKind::Field { .. }
     )
 }

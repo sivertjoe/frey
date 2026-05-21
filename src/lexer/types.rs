@@ -41,6 +41,7 @@ pub enum TokenKind {
     As,
     If,
     Else,
+    Struct,
 
     Int,
     UInt,
@@ -81,6 +82,7 @@ pub enum TokenKind {
     Semicolon,
     Comma,
     Colon,
+    Dot,
 
     Eof,
 }
@@ -138,10 +140,12 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Semicolon => write!(f, "`;`"),
             TokenKind::Comma => write!(f, "`,`"),
             TokenKind::Colon => write!(f, "`:`"),
+            TokenKind::Dot => write!(f, "`.`"),
             TokenKind::Return => write!(f, "`return`"),
             TokenKind::If => write!(f, "`if`"),
             TokenKind::Else => write!(f, "`else`"),
             TokenKind::As => write!(f, "`as`"),
+            TokenKind::Struct => write!(f, "`struct`"),
 
             TokenKind::Eof => write!(f, "end of input"),
         }

@@ -97,6 +97,9 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, Error> {
                 let tok = cursor.number()?;
                 tokens.push(tok);
             }
+            '.' => {
+                tokens.push(cursor.single(TokenKind::Dot));
+            }
             _ => {
                 let start = cursor.position();
                 cursor.bump();

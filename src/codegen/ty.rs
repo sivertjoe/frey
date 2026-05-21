@@ -20,6 +20,7 @@ impl<'ctx> Codegen<'ctx> {
             Ty::Array { element, count } => {
                 self.lower_ty(element).array_type(*count as u32).into()
             }
+            Ty::Struct(name) => self.struct_llvm[name].into(),
         }
     }
 
@@ -60,6 +61,7 @@ impl<'ctx> Codegen<'ctx> {
                 .lower_ty(element)
                 .array_type(*count as u32)
                 .fn_type(param_types, false),
+            Ty::Struct(name) => self.struct_llvm[name].fn_type(param_types, false),
         }
     }
 }

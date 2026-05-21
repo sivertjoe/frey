@@ -936,4 +936,219 @@ mod tests {
         };
         assert!(matches!(inner.kind, ExprKind::Ref(_)));
     }
+
+    // ---- Structs ----
+
+    #[test]
+    fn parses_named_type() {
+        let ty = parser("Point").parse_type().unwrap();
+        let TypeExprKind::Named(name) = ty.kind else {
+            panic!("expected named type, got {:?}", ty.kind);
+        };
+        assert_eq!(name, "Point");
+    }
+
+    #[test]
+    fn parses_struct_def() {
+        let decl = parser("let Point = struct { x: Int, y: Int };")
+            .parse_declaration()
+            .unwrap();
+        assert_eq!(decl.name, "Point");
+        let ExprKind::StructDef { fields } = decl.value.kind else {
+            panic!("expected struct def, got {:?}", decl.value.kind);
+        };
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].name, "x");
+        assert!(matches!(fields[0].ty.kind, TypeExprKind::Int));
+        assert_eq!(fields[1].name, "y");
+        assert!(matches!(fields[1].ty.kind, TypeExprKind::Int));
+    }
+
+    #[test]
+    fn parses_empty_struct_def() {
+        let decl = parser("let Empty = struct {};").parse_declaration().unwrap();
+        let ExprKind::StructDef { fields } = decl.value.kind else {
+            panic!("expected struct def");
+        };
+        assert!(fields.is_empty());
+    }
+
+    #[test]
+    fn parses_struct_def_with_trailing_comma() {
+        let decl = parser("let Point = struct { x: Int, y: Int, };")
+            .parse_declaration()
+            .unwrap();
+        let ExprKind::StructDef { fields } = decl.value.kind else {
+            panic!("expected struct def");
+        };
+        assert_eq!(fields.len(), 2);
+    }
+
+    #[test]
+    fn parses_recursive_struct_type() {
+        // The parser doesn't validate type names; that's the lowering pass.
+        let decl = parser("let Node = struct { value: Int, next: *Node };")
+            .parse_declaration()
+            .unwrap();
+        let ExprKind::StructDef { fields } = decl.value.kind else {
+            panic!("expected struct def");
+        };
+        assert_eq!(fields[1].name, "next");
+        let TypeExprKind::Ptr(inner) = &fields[1].ty.kind else {
+            panic!("expected pointer type for next");
+        };
+        assert!(matches!(inner.kind, TypeExprKind::Named(ref n) if n == "Node"));
+    }
+
+    #[test]
+    fn parses_struct_literal() {
+        let expr = parser("Point { x: 1, y: 2 }").parse_expr().unwrap();
+        let ExprKind::StructLiteral { name, fields } = expr.kind else {
+            panic!("expected struct literal, got {:?}", expr.kind);
+        };
+        assert_eq!(name, "Point");
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].name, "x");
+        assert!(matches!(fields[0].value.kind, ExprKind::Const(Const::Int(1))));
+        assert_eq!(fields[1].name, "y");
+        assert!(matches!(fields[1].value.kind, ExprKind::Const(Const::Int(2))));
+    }
+
+    #[test]
+    fn parses_empty_struct_literal() {
+        let expr = parser("Empty {}").parse_expr().unwrap();
+        let ExprKind::StructLiteral { name, fields } = expr.kind else {
+            panic!("expected struct literal");
+        };
+        assert_eq!(name, "Empty");
+        assert!(fields.is_empty());
+    }
+
+    #[test]
+    fn parses_struct_literal_with_trailing_comma() {
+        let expr = parser("Point { x: 1, y: 2, }").parse_expr().unwrap();
+        let ExprKind::StructLiteral { fields, .. } = expr.kind else {
+            panic!("expected struct literal");
+        };
+        assert_eq!(fields.len(), 2);
+    }
+
+    #[test]
+    fn parses_field_access() {
+        let expr = parser("p.x").parse_expr().unwrap();
+        let ExprKind::Field { target, name } = expr.kind else {
+            panic!("expected field access, got {:?}", expr.kind);
+        };
+        assert_eq!(name, "x");
+        let ExprKind::Identifier(target_name) = &target.kind else {
+            panic!("expected identifier target");
+        };
+        assert_eq!(target_name, "p");
+    }
+
+    #[test]
+    fn parses_nested_field_access() {
+        // `p.pos.x` → (p.pos).x
+        let expr = parser("p.pos.x").parse_expr().unwrap();
+        let ExprKind::Field { target, name } = expr.kind else {
+            panic!("expected outer field");
+        };
+        assert_eq!(name, "x");
+        assert!(matches!(target.kind, ExprKind::Field { .. }));
+    }
+
+    #[test]
+    fn parses_field_access_in_arithmetic() {
+        // `p.x + 1` — field access binds tighter than `+`.
+        let expr = parser("p.x + 1").parse_expr().unwrap();
+        let ExprKind::Binary { op, lhs, .. } = expr.kind else {
+            panic!("expected binary");
+        };
+        assert_eq!(op, BinaryOperator::Add);
+        assert!(matches!(lhs.kind, ExprKind::Field { .. }));
+    }
+
+    #[test]
+    fn parses_field_of_call_result() {
+        // `foo().x` — field access on a non-place is still valid syntax.
+        let expr = parser("foo().x").parse_expr().unwrap();
+        let ExprKind::Field { target, name } = expr.kind else {
+            panic!("expected field access");
+        };
+        assert_eq!(name, "x");
+        assert!(matches!(target.kind, ExprKind::Call { .. }));
+    }
+
+    #[test]
+    fn parses_assign_to_field() {
+        let expr = parser("p.x = 5").parse_expr().unwrap();
+        let ExprKind::Assign { target, value } = expr.kind else {
+            panic!("expected assign");
+        };
+        assert!(matches!(target.kind, ExprKind::Field { .. }));
+        assert!(matches!(value.kind, ExprKind::Const(Const::Int(5))));
+    }
+
+    #[test]
+    fn parses_nested_struct_literal() {
+        let expr = parser("Outer { inner: Inner { a: 1 } }")
+            .parse_expr()
+            .unwrap();
+        let ExprKind::StructLiteral { name, fields } = expr.kind else {
+            panic!("expected outer struct literal");
+        };
+        assert_eq!(name, "Outer");
+        assert_eq!(fields.len(), 1);
+        assert!(matches!(fields[0].value.kind, ExprKind::StructLiteral { .. }));
+    }
+
+    #[test]
+    fn struct_literal_with_complex_field_values() {
+        // Each field value can be any expression.
+        let expr = parser("Point { x: 1 + 2, y: foo() }").parse_expr().unwrap();
+        let ExprKind::StructLiteral { fields, .. } = expr.kind else {
+            panic!("expected struct literal");
+        };
+        assert!(matches!(fields[0].value.kind, ExprKind::Binary { .. }));
+        assert!(matches!(fields[1].value.kind, ExprKind::Call { .. }));
+    }
+
+    #[test]
+    fn identifier_not_followed_by_struct_lit_pattern() {
+        // `Point { x }` — there's no `:` after the identifier, so this is
+        // NOT a struct literal. The `{` is a block start, which would only
+        // be valid in places that accept a block. As an expression in
+        // isolation this should still NOT eat the `{` into a struct lit.
+        // We verify by parsing just the identifier — `Point` alone.
+        let mut p = parser("Point { x }");
+        let expr = p.parse_expr().unwrap();
+        assert!(
+            matches!(expr.kind, ExprKind::Identifier(ref n) if n == "Point"),
+            "expected bare identifier (no struct lit), got {:?}",
+            expr.kind
+        );
+    }
+
+    #[test]
+    fn parses_field_assign_through_subscript() {
+        // `arr[0].x = 5` — chain places.
+        let expr = parser("arr[0].x = 5").parse_expr().unwrap();
+        let ExprKind::Assign { target, .. } = expr.kind else {
+            panic!("expected assign");
+        };
+        let ExprKind::Field { target: inner, .. } = &target.kind else {
+            panic!("expected field on subscript");
+        };
+        assert!(matches!(inner.kind, ExprKind::Subscript { .. }));
+    }
+
+    #[test]
+    fn parses_function_taking_named_struct() {
+        let ty = parser("(Point) -> Int").parse_type().unwrap();
+        let TypeExprKind::Function { params, .. } = ty.kind else {
+            panic!("expected function type");
+        };
+        assert_eq!(params.len(), 1);
+        assert!(matches!(params[0].kind, TypeExprKind::Named(ref n) if n == "Point"));
+    }
 }

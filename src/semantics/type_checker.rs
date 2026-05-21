@@ -241,6 +241,16 @@ impl Typechecker {
                 }
                 Ok(())
             }
+            ExprKind::StructLiteral { fields } => {
+                for (_, v) in fields {
+                    self.check_expr(v)?;
+                }
+                Ok(())
+            }
+            ExprKind::Field { target, .. } => {
+                self.check_expr(target)?;
+                Ok(())
+            }
         }
     }
 
@@ -438,7 +448,10 @@ impl Typechecker {
 fn is_addressable(e: &Expr) -> bool {
     matches!(
         e.kind,
-        ExprKind::Local(_) | ExprKind::Subscript { .. } | ExprKind::Deref(_)
+        ExprKind::Local(_)
+            | ExprKind::Subscript { .. }
+            | ExprKind::Deref(_)
+            | ExprKind::Field { .. }
     )
 }
 
@@ -450,6 +463,7 @@ fn assignment_local_root(target: &Expr) -> Option<LocalId> {
     match &target.kind {
         ExprKind::Local(id) => Some(*id),
         ExprKind::Subscript { expr, .. } => assignment_local_root(expr),
+        ExprKind::Field { target, .. } => assignment_local_root(target),
         ExprKind::Deref(_) => None,
         _ => unreachable!("assignment target must be a place expression"),
     }

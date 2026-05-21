@@ -49,6 +49,7 @@ pub enum Ty {
         count: usize,
     },
     Ptr(Box<Ty>),
+    Struct(String),
 }
 
 impl Ty {
@@ -95,6 +96,22 @@ impl Ty {
 pub struct Program {
     pub span: Span,
     pub declarations: Vec<Declaration>,
+    pub structs: std::collections::HashMap<String, StructDef>,
+}
+
+#[derive(Clone)]
+pub struct StructDef {
+    pub name: String,
+    pub fields: Vec<(String, Ty)>,
+}
+
+impl fmt::Debug for StructDef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StructDef")
+            .field("name", &self.name)
+            .field("fields", &self.fields)
+            .finish()
+    }
 }
 
 pub struct Declaration {
@@ -147,6 +164,14 @@ pub enum ExprKind {
     },
     Ref(Box<Expr>),
     Deref(Box<Expr>),
+    StructLiteral {
+        fields: Vec<(String, Expr)>,
+    },
+    Field {
+        target: Box<Expr>,
+        name: String,
+        index: usize,
+    },
 }
 
 pub struct FunctionCall {
@@ -221,6 +246,7 @@ impl fmt::Debug for Ty {
             }
             Ty::Array { element, count } => write!(f, "[{element:?}; {count}]"),
             Ty::Ptr(target) => write!(f, "*{target:?}"),
+            Ty::Struct(name) => write!(f, "{name}"),
         }
     }
 }
@@ -274,6 +300,17 @@ impl fmt::Debug for ExprKind {
             ExprKind::Subscript { expr, index } => write!(f, "Subscript({expr:?}, {index:?})"),
             ExprKind::Ref(target) => write!(f, "Ref({target:?})"),
             ExprKind::Deref(target) => write!(f, "Deref({target:?})"),
+            ExprKind::StructLiteral { fields } => {
+                write!(f, "StructLit{{")?;
+                for (i, (name, value)) in fields.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{name}: {value:?}")?;
+                }
+                write!(f, "}}")
+            }
+            ExprKind::Field { target, name, .. } => write!(f, "{target:?}.{name}"),
         }
     }
 }

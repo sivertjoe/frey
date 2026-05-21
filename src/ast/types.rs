@@ -66,6 +66,7 @@ pub enum TypeExprKind {
         return_ty: Box<TypeExpr>,
     },
     Ptr(Box<TypeExpr>),
+    Named(String),
 }
 
 pub struct Block {
@@ -143,6 +144,33 @@ pub enum ExprKind {
     },
     Ref(Box<Expr>),
     Deref(Box<Expr>),
+    StructDef {
+        fields: Vec<StructTypeField>,
+    },
+    StructLiteral {
+        name: String,
+        fields: Vec<StructLiteralField>,
+    },
+    Field {
+        target: Box<Expr>,
+        name: String,
+    },
+}
+
+#[derive(Debug)]
+pub struct StructTypeField {
+    pub id: NodeId,
+    pub span: Span,
+    pub name: String,
+    pub ty: TypeExpr,
+}
+
+#[derive(Debug)]
+pub struct StructLiteralField {
+    pub id: NodeId,
+    pub span: Span,
+    pub name: String,
+    pub value: Expr,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

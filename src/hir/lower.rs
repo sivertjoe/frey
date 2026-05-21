@@ -8,7 +8,7 @@ use crate::{
         error::{Error, ErrorKind},
         types::{
             Block, BlockItem, Const, Declaration, Expr, ExprKind, Function, FunctionCall, LocalId,
-            LocalIdGen, Param, Program, Statement, StatementKind, Ty,
+            LocalIdGen, Param, Program, Statement, StatementKind, StructDef, Ty,
         },
     },
 };
@@ -16,6 +16,7 @@ use crate::{
 pub struct Lower {
     scopes: Vec<HashMap<String, LocalId>>,
     bindings: HashMap<LocalId, Ty>,
+    structs: HashMap<String, StructDef>,
     id_gen: LocalIdGen,
 }
 
@@ -24,6 +25,7 @@ impl Lower {
         Self {
             scopes: vec![HashMap::default()], // Add the global scope
             bindings: HashMap::default(),
+            structs: HashMap::default(),
             id_gen: LocalIdGen::new(),
         }
     }
@@ -35,18 +37,74 @@ impl Lower {
             .span
             .join(p.declarations.last().unwrap().span);
 
+        // Pass 1: register every struct name with empty fields. This lets a
+        // struct's body (and any other struct's body) reference it via `*T`
+        // or by name before its own body is lowered.
+        for decl in &p.declarations {
+            if let ast::ExprKind::StructDef { .. } = &decl.value.kind {
+                if self.structs.contains_key(&decl.name) {
+                    return Err(Error {
+                        span: decl.span,
+                        kind: ErrorKind::AlreadyDefined {
+                            name: decl.name.clone(),
+                        },
+                    });
+                }
+                self.structs.insert(
+                    decl.name.clone(),
+                    StructDef {
+                        name: decl.name.clone(),
+                        fields: Vec::new(),
+                    },
+                );
+            }
+        }
+
+        // Pass 2: lower struct bodies. Each field type is resolved; struct
+        // names referenced via *T resolve to the placeholder from pass 1.
+        for decl in &p.declarations {
+            if let ast::ExprKind::StructDef { fields } = &decl.value.kind {
+                let mut lowered_fields = Vec::with_capacity(fields.len());
+                for f in fields {
+                    let ty = self.lower_type(&f.ty)?;
+                    if let Ty::Struct(other) = &ty
+                        && other == &decl.name
+                    {
+                        return Err(Error {
+                            span: f.span,
+                            kind: ErrorKind::DirectStructRecursion {
+                                name: decl.name.clone(),
+                            },
+                        });
+                    }
+                    lowered_fields.push((f.name.clone(), ty));
+                }
+                self.structs
+                    .get_mut(&decl.name)
+                    .expect("registered in pass 1")
+                    .fields = lowered_fields;
+            }
+        }
+
+        // Pass 3: function signatures.
         for decl in &p.declarations {
             self.pre_register_top_level(decl)?;
         }
 
+        // Pass 4: lower the remaining declarations. Struct defs are skipped
+        // since they're already recorded in self.structs.
         let mut decls = Vec::new();
         for decl in p.declarations {
+            if matches!(decl.value.kind, ast::ExprKind::StructDef { .. }) {
+                continue;
+            }
             decls.push(self.lower_declaration(decl)?);
         }
 
         Ok(Program {
             span,
             declarations: decls,
+            structs: std::mem::take(&mut self.structs),
         })
     }
 
@@ -434,6 +492,116 @@ impl Lower {
                     kind: ExprKind::Deref(Box::new(target)),
                 })
             }
+            ast::ExprKind::StructDef { .. } => {
+                // Struct definitions at top level are consumed by lower_program
+                // and never reach here. Inside an expression context they have
+                // no runtime value.
+                Err(Error {
+                    span: e.span,
+                    kind: ErrorKind::StructDefNotAllowedHere,
+                })
+            }
+            ast::ExprKind::StructLiteral { name, fields } => {
+                let def = self.structs.get(&name).cloned().ok_or_else(|| Error {
+                    span: e.span,
+                    kind: ErrorKind::UnknownType { name: name.clone() },
+                })?;
+
+                let mut seen: HashMap<String, ()> = HashMap::new();
+                let mut lowered_by_name: HashMap<String, Expr> = HashMap::new();
+                for f in fields {
+                    if seen.insert(f.name.clone(), ()).is_some() {
+                        return Err(Error {
+                            span: f.span,
+                            kind: ErrorKind::DuplicateField {
+                                struct_name: name.clone(),
+                                field: f.name.clone(),
+                            },
+                        });
+                    }
+                    let target_ty = def
+                        .fields
+                        .iter()
+                        .find(|(n, _)| n == &f.name)
+                        .map(|(_, t)| t.clone());
+                    let Some(target_ty) = target_ty else {
+                        return Err(Error {
+                            span: f.span,
+                            kind: ErrorKind::UnknownField {
+                                struct_name: name.clone(),
+                                field: f.name.clone(),
+                            },
+                        });
+                    };
+                    let value = self.lower_expr(f.value)?;
+                    let value = coerce_int_literal(value, &target_ty)?;
+                    lowered_by_name.insert(f.name, value);
+                }
+
+                let mut missing = Vec::new();
+                let mut ordered = Vec::with_capacity(def.fields.len());
+                for (fname, _) in &def.fields {
+                    match lowered_by_name.remove(fname) {
+                        Some(v) => ordered.push((fname.clone(), v)),
+                        None => missing.push(fname.clone()),
+                    }
+                }
+                if !missing.is_empty() {
+                    return Err(Error {
+                        span: e.span,
+                        kind: ErrorKind::MissingFields {
+                            struct_name: name,
+                            missing,
+                        },
+                    });
+                }
+
+                Ok(Expr {
+                    span: e.span,
+                    ty: Ty::Struct(def.name),
+                    kind: ExprKind::StructLiteral { fields: ordered },
+                })
+            }
+            ast::ExprKind::Field { target, name } => {
+                let target = self.lower_expr(*target)?;
+                let struct_name = match &target.ty {
+                    Ty::Struct(n) => n.clone(),
+                    other => {
+                        return Err(Error {
+                            span: target.span,
+                            kind: ErrorKind::NotAStruct {
+                                found: other.clone(),
+                            },
+                        });
+                    }
+                };
+                let def = self
+                    .structs
+                    .get(&struct_name)
+                    .expect("typed Struct must be registered");
+                let (index, field_ty) = def
+                    .fields
+                    .iter()
+                    .enumerate()
+                    .find_map(|(i, (n, t))| (n == &name).then_some((i, t.clone())))
+                    .ok_or_else(|| Error {
+                        span: e.span,
+                        kind: ErrorKind::UnknownField {
+                            struct_name: struct_name.clone(),
+                            field: name.clone(),
+                        },
+                    })?;
+
+                Ok(Expr {
+                    span: e.span,
+                    ty: field_ty,
+                    kind: ExprKind::Field {
+                        target: Box::new(target),
+                        name,
+                        index,
+                    },
+                })
+            }
         }
     }
 
@@ -514,6 +682,16 @@ impl Lower {
             ast::TypeExprKind::Ptr(target) => {
                 let target = Box::new(self.lower_type(target)?);
                 Ok(Ty::Ptr(target))
+            }
+            ast::TypeExprKind::Named(name) => {
+                if self.structs.contains_key(name) {
+                    Ok(Ty::Struct(name.clone()))
+                } else {
+                    Err(Error {
+                        span: t.span,
+                        kind: ErrorKind::UnknownType { name: name.clone() },
+                    })
+                }
             }
         }
     }
