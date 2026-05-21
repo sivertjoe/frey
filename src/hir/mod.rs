@@ -1,3 +1,4 @@
+mod coerce;
 pub mod error;
 mod lower;
 pub mod types;

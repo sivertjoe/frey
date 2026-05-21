@@ -4,6 +4,7 @@ use crate::{
     ast,
     hir::{
         UnaryOperator,
+        coerce::{coerce_int_literal, coerce_through_tails},
         error::{Error, ErrorKind},
         types::{
             Block, BlockItem, Const, Declaration, Expr, ExprKind, Function, FunctionCall, LocalId,
@@ -177,7 +178,14 @@ impl Lower {
                     });
                 }
 
-                let body = self.lower_block(body)?;
+                let mut body = self.lower_block(body)?;
+                if body.tail.ty != return_ty
+                    && return_ty.is_number()
+                    && return_ty != Ty::Int
+                {
+                    let tail = std::mem::replace(&mut body.tail, Box::new(unit_expr(body.span)));
+                    body.tail = Box::new(coerce_through_tails(*tail, &return_ty)?);
+                }
 
                 self.leave_scope();
 
@@ -297,11 +305,10 @@ impl Lower {
                 let condition = self.lower_expr(*condition)?;
 
                 let then_block = self.lower_block(then_branch)?;
-                let then_ty = then_block.tail.ty.clone();
                 let then_span = then_block.span;
                 let then_expr = Expr {
                     span: then_span,
-                    ty: then_ty.clone(),
+                    ty: then_block.tail.ty.clone(),
                     kind: ExprKind::Block(then_block),
                 };
 
@@ -310,9 +317,24 @@ impl Lower {
                     None => unit_expr(end_of(e.span)),
                 };
 
+                let (then_expr, else_expr) = if then_expr.ty != else_expr.ty {
+                    if else_expr.ty.is_number() && else_expr.ty != Ty::Int {
+                        let target = else_expr.ty.clone();
+                        (coerce_through_tails(then_expr, &target)?, else_expr)
+                    } else if then_expr.ty.is_number() && then_expr.ty != Ty::Int {
+                        let target = then_expr.ty.clone();
+                        (then_expr, coerce_through_tails(else_expr, &target)?)
+                    } else {
+                        (then_expr, else_expr)
+                    }
+                } else {
+                    (then_expr, else_expr)
+                };
+
+                let if_ty = then_expr.ty.clone();
                 Ok(Expr {
                     span: e.span,
-                    ty: then_ty,
+                    ty: if_ty,
                     kind: ExprKind::If {
                         condition: Box::new(condition),
                         then_branch: Box::new(then_expr),
@@ -527,60 +549,6 @@ impl Lower {
         }
         None
     }
-}
-
-fn const_int_literal(e: &Expr) -> Option<i32> {
-    if e.ty != Ty::Int {
-        return None;
-    }
-    match &e.kind {
-        ExprKind::Const(Const::Int(n)) => Some(*n),
-        ExprKind::Unary { op, operand } if matches!(op, UnaryOperator::Minus) => {
-            match &operand.kind {
-                ExprKind::Const(Const::Int(n)) => n.checked_neg(),
-                _ => None,
-            }
-        }
-        _ => None,
-    }
-}
-
-fn fits_in_ty(v: i32, ty: &Ty) -> bool {
-    match ty {
-        Ty::Int | Ty::I32 | Ty::I64 => true,
-        Ty::I8 => i8::try_from(v).is_ok(),
-        Ty::U8 => u8::try_from(v).is_ok(),
-        Ty::UInt | Ty::U32 | Ty::U64 => v >= 0,
-        Ty::Float | Ty::F32 | Ty::F64 => true,
-        _ => false,
-    }
-}
-
-fn coerce_int_literal(expr: Expr, target: &Ty) -> Result<Expr, Error> {
-    if expr.ty == *target || *target == Ty::Int || !target.is_number() {
-        return Ok(expr);
-    }
-    let Some(value) = const_int_literal(&expr) else {
-        return Ok(expr);
-    };
-    if !fits_in_ty(value, target) {
-        return Err(Error {
-            span: expr.span,
-            kind: ErrorKind::LiteralOutOfRange {
-                value,
-                target: target.clone(),
-            },
-        });
-    }
-    let span = expr.span;
-    Ok(Expr {
-        span,
-        ty: target.clone(),
-        kind: ExprKind::Cast {
-            target: target.clone(),
-            expr: Box::new(expr),
-        },
-    })
 }
 
 fn unit_expr(span: crate::lexer::types::Span) -> Expr {
