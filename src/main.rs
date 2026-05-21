@@ -1,67 +1,103 @@
 mod ast;
+mod cli;
 mod codegen;
 mod driver;
 mod hir;
 mod lexer;
 mod semantics;
 
-use std::path::PathBuf;
+use std::process::ExitCode;
 
 use lexer::types::Span;
 
-fn main() {
-    let args = std::env::args().collect::<Vec<_>>();
-    let file = args[1].clone();
+fn main() -> ExitCode {
+    let args = match cli::parse() {
+        cli::ParseOutcome::Run(a) => a,
+        cli::ParseOutcome::Help => {
+            print!("{}", cli::HELP);
+            return ExitCode::SUCCESS;
+        }
+        cli::ParseOutcome::Version => {
+            println!("frey {}", env!("CARGO_PKG_VERSION"));
+            return ExitCode::SUCCESS;
+        }
+        cli::ParseOutcome::Error(msg) => {
+            eprintln!("error: {msg}");
+            eprintln!();
+            eprint!("{}", cli::HELP);
+            return ExitCode::FAILURE;
+        }
+    };
 
-    let src = std::fs::read_to_string(&file).unwrap();
+    let file = args.input.to_string_lossy().into_owned();
 
+    let src = match std::fs::read_to_string(&args.input) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: failed to read `{}`: {e}", args.input.display());
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if args.verbose {
+        eprintln!("[frey] lex");
+    }
     let tokens = match lexer::tokenize(&src) {
         Ok(tokens) => tokens,
         Err(err) => {
             report(&file, &src, err.span, &err.kind.to_string());
-            std::process::exit(1);
+            return ExitCode::FAILURE;
         }
     };
 
+    if args.verbose {
+        eprintln!("[frey] parse");
+    }
     let ast = match ast::parse(tokens) {
         Ok(program) => program,
         Err(err) => {
             report(&file, &src, err.span, &err.kind.to_string());
-            std::process::exit(1);
+            return ExitCode::FAILURE;
         }
     };
 
+    if args.verbose {
+        eprintln!("[frey] lower");
+    }
     let hir = match hir::lower(ast) {
         Ok(program) => program,
         Err(err) => {
             report(&file, &src, err.span, &err.kind.to_string());
-            std::process::exit(1);
+            return ExitCode::FAILURE;
         }
     };
 
+    if args.verbose {
+        eprintln!("[frey] typecheck");
+    }
     if let Err(err) = semantics::type_check(&hir) {
         report(&file, &src, err.span, &err.kind.to_string());
-        std::process::exit(1);
+        return ExitCode::FAILURE;
     }
 
-    let output_path = output_path_for(&file);
-    if let Err(err) = driver::build(hir, &output_path) {
+    let output_path = args
+        .output
+        .clone()
+        .unwrap_or_else(|| driver::default_output_path(&args.input, args.emit));
+
+    let options = driver::BuildOptions {
+        emit: args.emit,
+        opt_level: args.opt_level,
+        verbose: args.verbose,
+        output_path,
+    };
+
+    if let Err(err) = driver::build(hir, &options) {
         eprintln!("error: {err}");
-        std::process::exit(1);
+        return ExitCode::FAILURE;
     }
-}
 
-fn output_path_for(input: &str) -> PathBuf {
-    let stem = PathBuf::from(input)
-        .file_stem()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("out"));
-    let ext = std::env::consts::EXE_EXTENSION;
-    if ext.is_empty() {
-        stem
-    } else {
-        stem.with_extension(ext)
-    }
+    ExitCode::SUCCESS
 }
 
 fn report(file: &str, src: &str, span: Span, message: &str) {
