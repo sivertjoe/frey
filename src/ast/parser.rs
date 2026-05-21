@@ -36,7 +36,7 @@ statement ::=
 
 <const> ::= <integer-literal> | <float-literal>
 
-<unary-op> ::= "-" | "!"
+<unary-op> ::= "-" | "!" | "&" | "*"
 
 <binary-op> ::=
       "+" | "-" | "*" | "/" | "%"
@@ -64,6 +64,9 @@ statement ::=
     | "f64"
     | <function-type>
     | <array-type>
+    | <ptr-type>
+
+<ptr-type> ::= "*" <type>
 
 <array-type> ::= "[" <type> ";" <integer-literal> "]"
 
@@ -160,6 +163,7 @@ impl Parser {
             TokenKind::U64 => TypeExprKind::U64,
             TokenKind::F32 => TypeExprKind::F32,
             TokenKind::F64 => TypeExprKind::F64,
+            TokenKind::Star => return self.parse_ptr_type(),
             TokenKind::LeftParen => return self.parse_function_type(),
             TokenKind::LeftBracket => return self.parse_array_type(),
             _ => return Err(Error::unexpected(tok, "type")),
@@ -169,6 +173,17 @@ impl Parser {
             id: self.id_gen.fresh(),
             span,
             kind,
+        })
+    }
+
+    pub(super) fn parse_ptr_type(&mut self) -> Result<TypeExpr, Error> {
+        let start = self.expect(TokenKind::Star)?.span;
+        let target = Box::new(self.parse_type()?);
+        let span = start.join(target.span);
+        Ok(TypeExpr {
+            id: self.id_gen.fresh(),
+            span,
+            kind: TypeExprKind::Ptr(target),
         })
     }
 
@@ -389,21 +404,26 @@ impl Parser {
             return self.parse_postfix();
         }
         let tok = self.iter.consume().unwrap();
-        let op = match tok.kind {
-            TokenKind::Not => UnaryOperator::Not,
-            TokenKind::Minus => UnaryOperator::Minus,
-            _ => unreachable!(),
-        };
         let start = tok.span;
         let operand = self.parse_unary()?;
         let span = start.join(operand.span);
+        let kind = match tok.kind {
+            TokenKind::Not => ExprKind::Unary {
+                op: UnaryOperator::Not,
+                expr: Box::new(operand),
+            },
+            TokenKind::Minus => ExprKind::Unary {
+                op: UnaryOperator::Minus,
+                expr: Box::new(operand),
+            },
+            TokenKind::Ampersand => ExprKind::Ref(Box::new(operand)),
+            TokenKind::Star => ExprKind::Deref(Box::new(operand)),
+            _ => unreachable!(),
+        };
         Ok(Expr {
             id: self.id_gen.fresh(),
             span,
-            kind: ExprKind::Unary {
-                op,
-                expr: Box::new(operand),
-            },
+            kind,
         })
     }
 
@@ -646,7 +666,7 @@ impl Parser {
 
     fn check_is_unop(&self) -> bool {
         match self.iter.peek().expect("should end in eof").kind {
-            TokenKind::Minus | TokenKind::Not => true,
+            TokenKind::Minus | TokenKind::Not | TokenKind::Ampersand | TokenKind::Star => true,
             _ => false,
         }
     }
@@ -659,7 +679,7 @@ fn is_block_like(expr: &Expr) -> bool {
 fn is_place_expr(expr: &Expr) -> bool {
     matches!(
         expr.kind,
-        ExprKind::Identifier(_) | ExprKind::Subscript { .. }
+        ExprKind::Identifier(_) | ExprKind::Subscript { .. } | ExprKind::Deref(_)
     )
 }
 

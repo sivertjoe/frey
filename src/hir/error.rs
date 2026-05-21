@@ -16,6 +16,7 @@ pub enum ErrorKind {
     NotIndexable { found: Ty },
     EmptyArrayLiteral,
     LiteralOutOfRange { value: i32, target: Ty },
+    NotDereferencable { found: Ty },
 }
 
 impl fmt::Display for Error {
@@ -51,6 +52,9 @@ impl fmt::Display for ErrorKind {
             }
             ErrorKind::LiteralOutOfRange { value, target } => {
                 write!(f, "literal {value} is out of range for type {target:?}")
+            }
+            ErrorKind::NotDereferencable { found } => {
+                write!(f, "cannot dereference non-pointer value of type {found:?}")
             }
         }
     }

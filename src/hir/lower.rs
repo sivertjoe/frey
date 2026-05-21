@@ -386,6 +386,32 @@ impl Lower {
                     kind: ExprKind::Array(lowered),
                 })
             }
+            ast::ExprKind::Ref(target) => {
+                let target = self.lower_expr(*target)?;
+                let ty = Ty::Ptr(Box::new(target.ty.clone()));
+                Ok(Expr {
+                    span: e.span,
+                    ty,
+                    kind: ExprKind::Ref(Box::new(target)),
+                })
+            }
+            ast::ExprKind::Deref(target) => {
+                let target = self.lower_expr(*target)?;
+                let ty = match &target.ty {
+                    Ty::Ptr(inner) => (**inner).clone(),
+                    other => {
+                        return Err(Error {
+                            span: target.span,
+                            kind: ErrorKind::NotDereferencable { found: other.clone() },
+                        });
+                    }
+                };
+                Ok(Expr {
+                    span: e.span,
+                    ty,
+                    kind: ExprKind::Deref(Box::new(target)),
+                })
+            }
         }
     }
 
@@ -462,6 +488,10 @@ impl Lower {
                     .collect::<Result<Vec<_>, _>>()?;
                 let return_ty = Box::new(self.lower_type(return_ty)?);
                 Ok(Ty::Function { params, return_ty })
+            }
+            ast::TypeExprKind::Ptr(target) => {
+                let target = Box::new(self.lower_type(target)?);
+                Ok(Ty::Ptr(target))
             }
         }
     }

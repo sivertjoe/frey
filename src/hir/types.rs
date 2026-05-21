@@ -48,9 +48,14 @@ pub enum Ty {
         element: Box<Ty>,
         count: usize,
     },
+    Ptr(Box<Ty>),
 }
 
 impl Ty {
+    pub fn is_pointer(&self) -> bool {
+        matches!(self, Ty::Ptr(_))
+    }
+
     /// Any signed integer type.
     pub fn is_int(&self) -> bool {
         matches!(self, Ty::Int | Ty::I8 | Ty::I32 | Ty::I64)
@@ -140,6 +145,8 @@ pub enum ExprKind {
         expr: Box<Expr>,
         index: Box<Expr>,
     },
+    Ref(Box<Expr>),
+    Deref(Box<Expr>),
 }
 
 pub struct FunctionCall {
@@ -213,6 +220,7 @@ impl fmt::Debug for Ty {
                 write!(f, ") -> {return_ty:?}")
             }
             Ty::Array { element, count } => write!(f, "[{element:?}; {count}]"),
+            Ty::Ptr(target) => write!(f, "*{target:?}"),
         }
     }
 }
@@ -264,6 +272,8 @@ impl fmt::Debug for ExprKind {
             }
             ExprKind::Array(items) => write!(f, "Array{items:?}"),
             ExprKind::Subscript { expr, index } => write!(f, "Subscript({expr:?}, {index:?})"),
+            ExprKind::Ref(target) => write!(f, "Ref({target:?})"),
+            ExprKind::Deref(target) => write!(f, "Deref({target:?})"),
         }
     }
 }

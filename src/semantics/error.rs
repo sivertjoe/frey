@@ -29,6 +29,7 @@ pub enum ErrorKind {
     AssignToImmutable {
         name: String,
     },
+    NotAddressable,
 }
 
 impl fmt::Display for Error {
@@ -64,6 +65,9 @@ impl fmt::Display for ErrorKind {
             }
             ErrorKind::AssignToImmutable { name } => {
                 write!(f, "cannot assign to immutable binding `{name}`")
+            }
+            ErrorKind::NotAddressable => {
+                write!(f, "cannot take the address of this expression")
             }
         }
     }

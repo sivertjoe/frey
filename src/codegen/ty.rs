@@ -14,7 +14,9 @@ impl<'ctx> Codegen<'ctx> {
             Ty::I64 | Ty::U64 => self.context.i64_type().into(),
             Ty::Float | Ty::F32 => self.context.f32_type().into(),
             Ty::F64 => self.context.f64_type().into(),
-            Ty::Function { .. } => self.context.ptr_type(AddressSpace::default()).into(),
+            Ty::Function { .. } | Ty::Ptr(_) => {
+                self.context.ptr_type(AddressSpace::default()).into()
+            }
             Ty::Array { element, count } => {
                 self.lower_ty(element).array_type(*count as u32).into()
             }
@@ -50,7 +52,7 @@ impl<'ctx> Codegen<'ctx> {
             Ty::I64 | Ty::U64 => self.context.i64_type().fn_type(param_types, false),
             Ty::Float | Ty::F32 => self.context.f32_type().fn_type(param_types, false),
             Ty::F64 => self.context.f64_type().fn_type(param_types, false),
-            Ty::Function { .. } => self
+            Ty::Function { .. } | Ty::Ptr(_) => self
                 .context
                 .ptr_type(AddressSpace::default())
                 .fn_type(param_types, false),

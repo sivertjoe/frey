@@ -126,21 +126,24 @@ impl Typechecker {
             ExprKind::Assign { target, value } => {
                 self.check_expr(target)?;
                 self.check_expr(value)?;
-                // Walk through any place-expression chain (e.g. `a[i][j]`)
-                // to the root binding to check mutability.
-                let root_id = assignment_root(target);
-                let binding = self
-                    .bindings
-                    .get(&root_id)
-                    .expect("resolved LocalId must be in the bindings table")
-                    .clone();
-                if !binding.mutable {
-                    return Err(Error {
-                        span: e.span,
-                        kind: ErrorKind::AssignToImmutable {
-                            name: binding.name,
-                        },
-                    });
+                // For chains rooted in a local (a, a[i], a[i][j]), require the
+                // local to be mut. For chains rooted in a deref (*p, (*p)[i]),
+                // the pointer itself is the gate — writing through a pointer
+                // doesn't require its binding to be mut.
+                if let Some(root_id) = assignment_local_root(target) {
+                    let binding = self
+                        .bindings
+                        .get(&root_id)
+                        .expect("resolved LocalId must be in the bindings table")
+                        .clone();
+                    if !binding.mutable {
+                        return Err(Error {
+                            span: e.span,
+                            kind: ErrorKind::AssignToImmutable {
+                                name: binding.name,
+                            },
+                        });
+                    }
                 }
                 if value.ty != target.ty {
                     return Err(Error {
@@ -216,6 +219,25 @@ impl Typechecker {
                             found: index.ty.clone(),
                         },
                     });
+                }
+                Ok(())
+            }
+            ExprKind::Ref(target) => {
+                self.check_expr(target)?;
+                if !is_addressable(target) {
+                    return Err(Error {
+                        span: target.span,
+                        kind: ErrorKind::NotAddressable,
+                    });
+                }
+                Ok(())
+            }
+            ExprKind::Deref(target) => {
+                self.check_expr(target)?;
+                // Lowering already rejected non-pointer operands; assert
+                // defensively in case the HIR is fed from elsewhere.
+                if !matches!(target.ty, Ty::Ptr(_)) {
+                    unreachable!("deref operand has Ptr type from lowering");
                 }
                 Ok(())
             }
@@ -412,14 +434,23 @@ impl Typechecker {
     }
 }
 
-/// Walks through a place expression (e.g. `arr[i][j]`) to find the root
-/// `LocalId` whose mutability gates the assignment. The parser guarantees
-/// the assignment target is a place expression, so this never recurses
-/// past a non-place node.
-fn assignment_root(target: &Expr) -> LocalId {
+/// Whether `&e` is valid: e is a place we can take the address of.
+fn is_addressable(e: &Expr) -> bool {
+    matches!(
+        e.kind,
+        ExprKind::Local(_) | ExprKind::Subscript { .. } | ExprKind::Deref(_)
+    )
+}
+
+/// Walks through a place expression chain to find the local whose mutability
+/// gates the assignment. Returns None when the chain is rooted in a deref —
+/// `*p = v` doesn't need `p` to be mut, only the pointer's pointee to be
+/// writable, which the type system doesn't currently distinguish.
+fn assignment_local_root(target: &Expr) -> Option<LocalId> {
     match &target.kind {
-        ExprKind::Local(id) => *id,
-        ExprKind::Subscript { expr, .. } => assignment_root(expr),
+        ExprKind::Local(id) => Some(*id),
+        ExprKind::Subscript { expr, .. } => assignment_local_root(expr),
+        ExprKind::Deref(_) => None,
         _ => unreachable!("assignment target must be a place expression"),
     }
 }

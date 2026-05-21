@@ -786,4 +786,154 @@ mod tests {
         let result = parser("foo() = 5").parse_expr();
         assert!(result.is_err());
     }
+
+    // ---- Pointer types ----
+
+    #[test]
+    fn parses_ptr_type() {
+        let ty = parser("*Int").parse_type().unwrap();
+        let TypeExprKind::Ptr(inner) = ty.kind else {
+            panic!("expected pointer type, got {:?}", ty.kind);
+        };
+        assert!(matches!(inner.kind, TypeExprKind::Int));
+    }
+
+    #[test]
+    fn parses_nested_ptr_type() {
+        let ty = parser("**u8").parse_type().unwrap();
+        let TypeExprKind::Ptr(inner) = ty.kind else {
+            panic!("expected outer pointer");
+        };
+        let TypeExprKind::Ptr(innermost) = inner.kind else {
+            panic!("expected inner pointer");
+        };
+        assert!(matches!(innermost.kind, TypeExprKind::U8));
+    }
+
+    #[test]
+    fn parses_ptr_to_array_type() {
+        let ty = parser("*[Int; 4]").parse_type().unwrap();
+        let TypeExprKind::Ptr(inner) = ty.kind else {
+            panic!("expected pointer");
+        };
+        let TypeExprKind::Array { element_ty, count } = inner.kind else {
+            panic!("expected array as pointee");
+        };
+        assert_eq!(count, 4);
+        assert!(matches!(element_ty.kind, TypeExprKind::Int));
+    }
+
+    #[test]
+    fn parses_function_taking_ptr() {
+        let ty = parser("(*u8) -> Int").parse_type().unwrap();
+        let TypeExprKind::Function { params, return_ty } = ty.kind else {
+            panic!("expected function type");
+        };
+        assert_eq!(params.len(), 1);
+        let TypeExprKind::Ptr(inner) = &params[0].kind else {
+            panic!("expected pointer param");
+        };
+        assert!(matches!(inner.kind, TypeExprKind::U8));
+        assert!(matches!(return_ty.kind, TypeExprKind::Int));
+    }
+
+    // ---- Address-of (&) ----
+
+    #[test]
+    fn parses_ref_of_identifier() {
+        let expr = parser("&x").parse_expr().unwrap();
+        let ExprKind::Ref(target) = expr.kind else {
+            panic!("expected ref, got {:?}", expr.kind);
+        };
+        let ExprKind::Identifier(name) = &target.kind else {
+            panic!("expected identifier inside ref");
+        };
+        assert_eq!(name, "x");
+    }
+
+    #[test]
+    fn parses_ref_of_subscript() {
+        let expr = parser("&a[0]").parse_expr().unwrap();
+        let ExprKind::Ref(target) = expr.kind else {
+            panic!("expected ref");
+        };
+        assert!(matches!(target.kind, ExprKind::Subscript { .. }));
+    }
+
+    #[test]
+    fn binary_bitand_still_parses() {
+        // Make sure adding unary `&` didn't break `a & b`.
+        let expr = parser("a & b").parse_expr().unwrap();
+        let ExprKind::Binary { op, .. } = expr.kind else {
+            panic!("expected binary, got {:?}", expr.kind);
+        };
+        assert_eq!(op, BinaryOperator::BitAnd);
+    }
+
+    // ---- Dereference (*) ----
+
+    #[test]
+    fn parses_deref_of_identifier() {
+        let expr = parser("*p").parse_expr().unwrap();
+        let ExprKind::Deref(target) = expr.kind else {
+            panic!("expected deref, got {:?}", expr.kind);
+        };
+        let ExprKind::Identifier(name) = &target.kind else {
+            panic!("expected identifier inside deref");
+        };
+        assert_eq!(name, "p");
+    }
+
+    #[test]
+    fn parses_double_deref() {
+        let expr = parser("**p").parse_expr().unwrap();
+        let ExprKind::Deref(outer) = expr.kind else {
+            panic!("expected outer deref");
+        };
+        let ExprKind::Deref(_) = outer.kind else {
+            panic!("expected inner deref");
+        };
+    }
+
+    #[test]
+    fn parses_deref_in_arithmetic() {
+        // `*p + 1` — deref binds tighter than `+`.
+        let expr = parser("*p + 1").parse_expr().unwrap();
+        let ExprKind::Binary { op, lhs, .. } = expr.kind else {
+            panic!("expected binary");
+        };
+        assert_eq!(op, BinaryOperator::Add);
+        assert!(matches!(lhs.kind, ExprKind::Deref(_)));
+    }
+
+    #[test]
+    fn parses_assign_through_deref() {
+        // `*p = 5` is a valid assignment (deref is a place).
+        let expr = parser("*p = 5").parse_expr().unwrap();
+        let ExprKind::Assign { target, value } = expr.kind else {
+            panic!("expected assignment, got {:?}", expr.kind);
+        };
+        assert!(matches!(target.kind, ExprKind::Deref(_)));
+        assert!(matches!(value.kind, ExprKind::Const(Const::Int(5))));
+    }
+
+    #[test]
+    fn binary_mul_still_parses() {
+        // Make sure adding unary `*` didn't break `a * b`.
+        let expr = parser("a * b").parse_expr().unwrap();
+        let ExprKind::Binary { op, .. } = expr.kind else {
+            panic!("expected binary, got {:?}", expr.kind);
+        };
+        assert_eq!(op, BinaryOperator::Mul);
+    }
+
+    #[test]
+    fn ref_and_deref_round_trip() {
+        // `*&x` — taking the address and dereferencing right back.
+        let expr = parser("*&x").parse_expr().unwrap();
+        let ExprKind::Deref(inner) = expr.kind else {
+            panic!("expected outer deref");
+        };
+        assert!(matches!(inner.kind, ExprKind::Ref(_)));
+    }
 }

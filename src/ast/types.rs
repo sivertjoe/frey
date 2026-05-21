@@ -65,6 +65,7 @@ pub enum TypeExprKind {
         params: Vec<TypeExpr>,
         return_ty: Box<TypeExpr>,
     },
+    Ptr(Box<TypeExpr>),
 }
 
 pub struct Block {
@@ -140,6 +141,8 @@ pub enum ExprKind {
         expr: Box<Expr>,
         index: Box<Expr>,
     },
+    Ref(Box<Expr>),
+    Deref(Box<Expr>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

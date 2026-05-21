@@ -307,6 +307,12 @@ impl<'ctx> Codegen<'ctx> {
                 let ptr = self.build_subscript_ptr(*arr, *index)?;
                 Ok(self.builder.build_load(elem_llvm_ty, ptr, "")?)
             }
+            ExprKind::Ref(target) => Ok(self.lower_place(*target)?.into()),
+            ExprKind::Deref(target) => {
+                let elem_llvm_ty = self.lower_ty(&expr.ty);
+                let ptr = self.lower_expr(*target)?.into_pointer_value();
+                Ok(self.builder.build_load(elem_llvm_ty, ptr, "")?)
+            }
             ExprKind::Call(FunctionCall { callee, args }) => {
                 let arg_vals: Vec<BasicValueEnum<'ctx>> = args
                     .into_iter()
@@ -341,8 +347,9 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
 
-    /// Lowers a place expression to its storage pointer. Only `Local` and
-    /// `Subscript` are valid places (enforced by the parser).
+    /// Lowers a place expression to its storage pointer. Valid places are
+    /// `Local`, `Subscript`, and `Deref` (the pointer value itself is the
+    /// storage address).
     fn lower_place(&mut self, expr: Expr) -> Result<PointerValue<'ctx>, Error> {
         match expr.kind {
             ExprKind::Local(id) => Ok(*self
@@ -350,6 +357,7 @@ impl<'ctx> Codegen<'ctx> {
                 .get(&id)
                 .expect("assignable local is in the locals table")),
             ExprKind::Subscript { expr: arr, index } => self.build_subscript_ptr(*arr, *index),
+            ExprKind::Deref(target) => Ok(self.lower_expr(*target)?.into_pointer_value()),
             _ => unreachable!("assignment target must be a place expression"),
         }
     }
@@ -633,5 +641,8 @@ impl<'ctx> Codegen<'ctx> {
 }
 
 fn is_place(e: &Expr) -> bool {
-    matches!(e.kind, ExprKind::Local(_) | ExprKind::Subscript { .. })
+    matches!(
+        e.kind,
+        ExprKind::Local(_) | ExprKind::Subscript { .. } | ExprKind::Deref(_)
+    )
 }
