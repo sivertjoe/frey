@@ -8,7 +8,7 @@ let main = () -> Int {
 This should turn into
 
 program ::= { <declaration> }
-declaration ::= "let" <ident> "=" <expr>
+declaration ::= "let" [ "mut" ] <ident> "=" <expr> ";"
 
 block ::= "{" { <block-item> } [<expr>] "}"
 block-item ::=
@@ -23,6 +23,8 @@ statement ::=
     <const>
     | <ident>
     | <function-literal>
+    | <block>
+    | "(" <expr> ")"
     | <expr> "(" [ <expr> { "," <expr> } ] ")"
     | <expr> "[" <expr> "]"
     | "[" [ <expr> { "," <expr> } ] "]"
@@ -32,19 +34,34 @@ statement ::=
     | <expr> "=" <expr>
     | if <expr> <block> [ "else" <expr> ]
 
+<const> ::= <integer-literal> | <float-literal>
+
+<unary-op> ::= "-" | "!"
+
+<binary-op> ::=
+      "+" | "-" | "*" | "/" | "%"
+    | "<<" | ">>"
+    | "<" | "<=" | ">" | ">="
+    | "==" | "!="
+    | "&" | "^" | "|"
+    | "&&" | "||"
+
 <function-literal> ::= "(" [<params>] ")" [ "->" <type> ] <block>
 <params> ::= <param> { "," <param> }
 <param>  ::= <ident> ":" <type>
 
 <type> ::=
     "Int"
+    | "UInt"
+    | "Float"
     | "i8"
     | "i32"
     | "i64"
-    | "UInt"
     | "u8"
-    | "i32"
+    | "u32"
     | "u64"
+    | "f32"
+    | "f64"
     | <function-type>
     | <array-type>
 
@@ -52,6 +69,10 @@ statement ::=
 
 <function-type> ::= "(" [<type-list>] ")" "->" <type>
 <type-list> ::= <type> { "," <type> }
+
+<ident> is any identifier matching [A-Za-z_][A-Za-z0-9_]*.
+<integer-literal> and <float-literal> are decimal numeric literals; the
+integer form is parsed as i32.
 */
 
 use crate::{
