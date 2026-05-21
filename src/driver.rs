@@ -48,7 +48,7 @@ pub fn build(program: Program, output_path: &Path) -> Result<(), Error> {
     codegen.lower(program)?;
 
     let ir_path = output_path.with_extension("ll");
-    std::fs::write(&ir_path, codegen.module_ir())?;
+    codegen.write_ir_to_file(&ir_path)?;
 
     if Command::new("clang").arg("--version").output().is_err() {
         return Err(Error::ClangNotFound);

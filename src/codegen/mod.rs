@@ -44,7 +44,9 @@ impl<'ctx> Codegen<'ctx> {
         Ok(())
     }
 
-    pub fn module_ir(&self) -> String {
-        self.module.print_to_string().to_string()
+    pub fn write_ir_to_file(&self, path: &std::path::Path) -> Result<(), Error> {
+        self.module
+            .print_to_file(path)
+            .map_err(|e| Error::IrWrite(e.to_string()))
     }
 }
