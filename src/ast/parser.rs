@@ -853,7 +853,10 @@ impl Parser {
 }
 
 fn is_block_like(expr: &Expr) -> bool {
-    matches!(expr.kind, ExprKind::Block(_) | ExprKind::If { .. })
+    matches!(
+        expr.kind,
+        ExprKind::Block(_) | ExprKind::If { .. } | ExprKind::While { .. }
+    )
 }
 
 fn is_place_expr(expr: &Expr) -> bool {
