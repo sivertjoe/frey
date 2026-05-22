@@ -563,7 +563,18 @@ impl Lower {
                 })
             }
             ast::ExprKind::Field { target, name } => {
-                let target = self.lower_expr(*target)?;
+                let mut target = self.lower_expr(*target)?;
+                // Auto-deref through any chain of pointers so `p.x` works
+                // when `p: *T`, `**T`, etc. If the chain doesn't end in a
+                // struct, the NotAStruct check below catches it.
+                while let Ty::Ptr(inner) = target.ty.clone() {
+                    let pointee_ty = *inner;
+                    target = Expr {
+                        span: target.span,
+                        ty: pointee_ty,
+                        kind: ExprKind::Deref(Box::new(target)),
+                    };
+                }
                 let struct_name = match &target.ty {
                     Ty::Struct(n) => n.clone(),
                     other => {
