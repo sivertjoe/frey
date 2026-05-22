@@ -698,4 +698,69 @@ mod tests {
         assert_eq!(kinds[5], &TokenKind::Int);
         assert_eq!(kinds[6], &TokenKind::Semicolon);
     }
+
+    // ---- String literals ----
+
+    #[test]
+    fn tokenizes_simple_string() {
+        let tokens = tokenize("\"hello\"").unwrap();
+        assert!(matches!(
+            &tokens[0].kind,
+            TokenKind::Literal(Literal::Str(s)) if s == "hello"
+        ));
+    }
+
+    #[test]
+    fn tokenizes_empty_string() {
+        let tokens = tokenize("\"\"").unwrap();
+        assert!(matches!(
+            &tokens[0].kind,
+            TokenKind::Literal(Literal::Str(s)) if s.is_empty()
+        ));
+    }
+
+    #[test]
+    fn string_escapes_newline_and_tab() {
+        let tokens = tokenize("\"a\\nb\\tc\"").unwrap();
+        let TokenKind::Literal(Literal::Str(s)) = &tokens[0].kind else {
+            panic!("expected string literal");
+        };
+        assert_eq!(s, "a\nb\tc");
+    }
+
+    #[test]
+    fn string_escape_null_and_backslash() {
+        let tokens = tokenize("\"\\0\\\\\"").unwrap();
+        let TokenKind::Literal(Literal::Str(s)) = &tokens[0].kind else {
+            panic!("expected string literal");
+        };
+        assert_eq!(s, "\0\\");
+    }
+
+    #[test]
+    fn string_escape_quote() {
+        let tokens = tokenize("\"\\\"\"").unwrap();
+        let TokenKind::Literal(Literal::Str(s)) = &tokens[0].kind else {
+            panic!("expected string literal");
+        };
+        assert_eq!(s, "\"");
+    }
+
+    #[test]
+    fn unterminated_string_is_error() {
+        let result = tokenize("\"oops");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn invalid_escape_is_error() {
+        let result = tokenize("\"\\q\"");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn newline_in_string_is_error() {
+        let result = tokenize("\"line1\nline2\"");
+        assert!(result.is_err());
+    }
 }

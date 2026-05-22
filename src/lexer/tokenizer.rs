@@ -88,6 +88,10 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, Error> {
                 Some('>') => tokens.push(cursor.double(TokenKind::PipeArrow)),
                 _ => tokens.push(cursor.single(TokenKind::Pipe)),
             },
+            '"' => {
+                let tok = cursor.string()?;
+                tokens.push(tok);
+            }
             'a'..='z' | 'A'..='Z' | '_' => {
                 tokens.push(cursor.identifier_or_keyword());
             }

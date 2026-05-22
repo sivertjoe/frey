@@ -116,6 +116,8 @@ impl<'a> Cursor<'a> {
             "return" => TokenKind::Return,
             "as" => TokenKind::As,
             "struct" => TokenKind::Struct,
+            "while" => TokenKind::While,
+            "break" => TokenKind::Break,
             _ => TokenKind::Identifier(raw.to_string()),
         };
 
@@ -204,5 +206,74 @@ impl<'a> Cursor<'a> {
                 kind: TokenKind::Literal(Literal::Int(value)),
             })
         }
+    }
+
+    pub fn string(&mut self) -> Result<Token, Error> {
+        let start = self.position();
+        self.bump(); // opening "
+
+        let mut s = String::new();
+        loop {
+            match self.peek() {
+                None | Some('\n') => {
+                    return Err(Error {
+                        kind: ErrorKind::UnterminatedString,
+                        span: Span {
+                            start,
+                            end: self.position(),
+                        },
+                    });
+                }
+                Some('"') => {
+                    self.bump();
+                    break;
+                }
+                Some('\\') => {
+                    self.bump();
+                    let esc_start = self.position();
+                    let ch = match self.peek() {
+                        Some('n') => '\n',
+                        Some('t') => '\t',
+                        Some('r') => '\r',
+                        Some('0') => '\0',
+                        Some('\\') => '\\',
+                        Some('"') => '"',
+                        Some(other) => {
+                            self.bump();
+                            return Err(Error {
+                                kind: ErrorKind::InvalidEscape(other),
+                                span: Span {
+                                    start: esc_start,
+                                    end: self.position(),
+                                },
+                            });
+                        }
+                        None => {
+                            return Err(Error {
+                                kind: ErrorKind::UnterminatedString,
+                                span: Span {
+                                    start,
+                                    end: self.position(),
+                                },
+                            });
+                        }
+                    };
+                    self.bump();
+                    s.push(ch);
+                }
+                Some(ch) => {
+                    self.bump();
+                    s.push(ch);
+                }
+            }
+        }
+
+        Ok(Token {
+            kind: TokenKind::Literal(Literal::Str(s)),
+            span: Span {
+                start,
+                end: self.position(),
+            },
+        })
     }
 }

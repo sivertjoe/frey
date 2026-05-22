@@ -188,6 +188,11 @@ impl Lower {
                 ty: Ty::Float,
                 kind: ExprKind::Const(Const::Float(f)),
             }),
+            ast::ExprKind::Const(ast::Const::Str(s)) => Ok(Expr {
+                span: e.span,
+                ty: Ty::Ptr(Box::new(Ty::U8)),
+                kind: ExprKind::Const(Const::Str(s)),
+            }),
             ast::ExprKind::Identifier(name) => {
                 let Some(local_id) = self.resolve(&name) else {
                     return Err(Error {
@@ -562,6 +567,18 @@ impl Lower {
                     kind: ExprKind::StructLiteral { fields: ordered },
                 })
             }
+            ast::ExprKind::While { condition, body } => {
+                let condition = self.lower_expr(*condition)?;
+                let body = self.lower_block(body)?;
+                Ok(Expr {
+                    span: e.span,
+                    ty: Ty::Unit,
+                    kind: ExprKind::While {
+                        condition: Box::new(condition),
+                        body,
+                    },
+                })
+            }
             ast::ExprKind::Field { target, name } => {
                 let mut target = self.lower_expr(*target)?;
                 // Auto-deref through any chain of pointers so `p.x` works
@@ -657,6 +674,7 @@ impl Lower {
                 let expr = self.lower_expr(expr)?;
                 StatementKind::Expr(expr)
             }
+            ast::StatementKind::Break => StatementKind::Break,
         };
 
         Ok(Statement { span: s.span, kind })

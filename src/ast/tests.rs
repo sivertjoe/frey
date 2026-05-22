@@ -1220,6 +1220,62 @@ mod tests {
         assert!(result.is_err());
     }
 
+    // ---- While + break ----
+
+    #[test]
+    fn parses_while_expression() {
+        let expr = parser("while 1 { }").parse_expr().unwrap();
+        let ExprKind::While { condition, body } = expr.kind else {
+            panic!("expected while, got {:?}", expr.kind);
+        };
+        assert!(matches!(condition.kind, ExprKind::Const(Const::Int(1))));
+        assert!(body.items.is_empty());
+    }
+
+    #[test]
+    fn parses_while_with_body_and_break() {
+        let expr = parser("while 1 { break; }").parse_expr().unwrap();
+        let ExprKind::While { body, .. } = expr.kind else {
+            panic!("expected while");
+        };
+        assert_eq!(body.items.len(), 1);
+        let BlockItem::Statement(s) = &body.items[0] else {
+            panic!("expected statement");
+        };
+        assert!(matches!(s.kind, StatementKind::Break));
+    }
+
+    #[test]
+    fn parses_while_with_condition_using_comparison() {
+        // Make sure `while i < 10 { }` parses with `<` as comparison, not as
+        // some lexer weirdness.
+        let expr = parser("while i < 10 { }").parse_expr().unwrap();
+        let ExprKind::While { condition, .. } = expr.kind else {
+            panic!("expected while");
+        };
+        assert!(matches!(condition.kind, ExprKind::Binary { .. }));
+    }
+
+    // ---- String literals ----
+
+    #[test]
+    fn parses_string_literal() {
+        let expr = parser("\"hello\"").parse_expr().unwrap();
+        let ExprKind::Const(Const::Str(s)) = expr.kind else {
+            panic!("expected string literal, got {:?}", expr.kind);
+        };
+        assert_eq!(s, "hello");
+    }
+
+    #[test]
+    fn parses_string_in_declaration() {
+        let decl = parser("let s = \"hi\";").parse_declaration().unwrap();
+        let ExprKind::Const(Const::Str(s)) = decl.value.kind else {
+            panic!("expected string literal");
+        };
+        assert_eq!(s, "hi");
+    }
+
     #[test]
     fn pipe_into_method_chain() {
         // `5 |> foo.bar(3)` desugars to `foo.bar(5, 3)` — the call we splice

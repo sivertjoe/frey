@@ -21,6 +21,7 @@ impl<'ctx> Codegen<'ctx> {
                 let f32_ty = self.context.f32_type();
                 Ok(f32_ty.const_float(f as f64).into())
             }
+            ExprKind::Const(Const::Str(s)) => Ok(self.string_global_for(&s).into()),
             ExprKind::Const(Const::Unit) => Ok(self.context.bool_type().const_zero().into()),
             ExprKind::Local(id) => {
                 if let Some(func) = self.functions.get(&id) {
@@ -287,6 +288,7 @@ impl<'ctx> Codegen<'ctx> {
                 then_branch,
                 else_branch,
             } => self.lower_if(*condition, *then_branch, *else_branch),
+            ExprKind::While { condition, body } => self.lower_while(*condition, body),
             ExprKind::Array(items) => {
                 // Build the array value by repeatedly inserting each element
                 // into an undef array of the right LLVM type.
@@ -684,8 +686,59 @@ impl<'ctx> Codegen<'ctx> {
             StatementKind::Expr(expr) => {
                 let _ = self.lower_expr(expr)?;
             }
+            StatementKind::Break => {
+                let exit = *self
+                    .loop_exit_stack
+                    .last()
+                    .expect("typechecker guarantees break is inside a loop");
+                self.builder.build_unconditional_branch(exit)?;
+            }
         }
         Ok(())
+    }
+
+    fn lower_while(
+        &mut self,
+        condition: Expr,
+        body: crate::hir::types::Block,
+    ) -> Result<inkwell::values::BasicValueEnum<'ctx>, Error> {
+        let function = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_parent()
+            .unwrap();
+        let header_bb = self.context.append_basic_block(function, "while.cond");
+        let body_bb = self.context.append_basic_block(function, "while.body");
+        let exit_bb = self.context.append_basic_block(function, "while.exit");
+
+        self.builder.build_unconditional_branch(header_bb)?;
+
+        // Header: evaluate condition, branch to body or exit.
+        self.builder.position_at_end(header_bb);
+        let cond_val = self.lower_expr(condition)?.into_int_value();
+        let zero = self.context.i32_type().const_zero();
+        let cond_i1 = self.builder.build_int_compare(
+            inkwell::IntPredicate::NE,
+            cond_val,
+            zero,
+            "",
+        )?;
+        self.builder
+            .build_conditional_branch(cond_i1, body_bb, exit_bb)?;
+
+        // Body: lower with the exit block pushed so `break` can find it.
+        self.builder.position_at_end(body_bb);
+        self.loop_exit_stack.push(exit_bb);
+        let _ = self.lower_block_value(body)?;
+        self.loop_exit_stack.pop();
+        if !self.current_block_terminated() {
+            self.builder.build_unconditional_branch(header_bb)?;
+        }
+
+        self.builder.position_at_end(exit_bb);
+        // While expressions evaluate to Unit.
+        Ok(self.context.bool_type().const_zero().into())
     }
 }
 

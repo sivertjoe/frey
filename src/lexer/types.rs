@@ -42,6 +42,8 @@ pub enum TokenKind {
     If,
     Else,
     Struct,
+    While,
+    Break,
 
     Int,
     UInt,
@@ -92,6 +94,7 @@ pub enum TokenKind {
 pub enum Literal {
     Int(i32),
     Float(f32),
+    Str(String),
 }
 
 impl std::fmt::Display for TokenKind {
@@ -148,6 +151,8 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Else => write!(f, "`else`"),
             TokenKind::As => write!(f, "`as`"),
             TokenKind::Struct => write!(f, "`struct`"),
+            TokenKind::While => write!(f, "`while`"),
+            TokenKind::Break => write!(f, "`break`"),
 
             TokenKind::Eof => write!(f, "end of input"),
         }
@@ -159,6 +164,7 @@ impl std::fmt::Display for Literal {
         match self {
             Literal::Int(n) => write!(f, "`{n}`"),
             Literal::Float(fl) => write!(f, "`{fl}`"),
+            Literal::Str(_) => write!(f, "string literal"),
         }
     }
 }

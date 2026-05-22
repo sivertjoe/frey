@@ -153,6 +153,10 @@ pub enum ExprKind {
         then_branch: Box<Expr>,
         else_branch: Box<Expr>,
     },
+    While {
+        condition: Box<Expr>,
+        body: Block,
+    },
     Assign {
         target: Box<Expr>,
         value: Box<Expr>,
@@ -182,6 +186,7 @@ pub struct FunctionCall {
 pub enum Const {
     Int(i32),
     Float(f32),
+    Str(String),
     Unit,
 }
 
@@ -217,6 +222,7 @@ pub struct Statement {
 pub enum StatementKind {
     Return(Expr),
     Expr(Expr),
+    Break,
 }
 
 impl fmt::Debug for Ty {
@@ -293,6 +299,7 @@ impl fmt::Debug for ExprKind {
                 then_branch,
                 else_branch,
             } => write!(f, "If({condition:?}, {then_branch:?}, {else_branch:?})"),
+            ExprKind::While { condition, body } => write!(f, "While({condition:?}, {body:?})"),
             ExprKind::Assign { target, value } => {
                 write!(f, "Assign({target:?}, {value:?})")
             }
@@ -320,6 +327,7 @@ impl fmt::Debug for Const {
         match self {
             Const::Int(n) => write!(f, "Int({n})"),
             Const::Float(n) => write!(f, "Float({n})"),
+            Const::Str(s) => write!(f, "Str({s:?})"),
             Const::Unit => write!(f, "Unit"),
         }
     }
@@ -374,6 +382,7 @@ impl fmt::Debug for StatementKind {
         match self {
             StatementKind::Return(e) => write!(f, "Return({e:?})"),
             StatementKind::Expr(e) => write!(f, "Expr({e:?})"),
+            StatementKind::Break => write!(f, "Break"),
         }
     }
 }

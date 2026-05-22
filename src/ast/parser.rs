@@ -17,6 +17,7 @@ block-item ::=
 
 statement ::=
     "return" [<expr>] ";"
+    | "break" ";"
     | <expr> ";"
 
 <expr> ::=
@@ -33,6 +34,7 @@ statement ::=
     | <expr> <binary-op> <expr>
     | <expr> "=" <expr>
     | if <expr> <block> [ "else" <expr> ]
+    | while <expr> <block>
 
 <const> ::= <integer-literal> | <float-literal>
 
@@ -279,6 +281,15 @@ impl Parser {
                         id: self.id_gen.fresh(),
                         span: start.join(end),
                         kind: StatementKind::Return(expr),
+                    }));
+                }
+                TokenKind::Break => {
+                    let start = self.expect(TokenKind::Break)?.span;
+                    let end = self.expect(TokenKind::Semicolon)?.span;
+                    items.push(BlockItem::Statement(Statement {
+                        id: self.id_gen.fresh(),
+                        span: start.join(end),
+                        kind: StatementKind::Break,
                     }));
                 }
                 _ => {
@@ -606,6 +617,16 @@ impl Parser {
                     kind: ExprKind::Const(Const::Float(value)),
                 })
             }
+            TokenKind::Literal(Literal::Str(s)) => {
+                let value = s.clone();
+                let span = tok.span;
+                self.iter.consume();
+                Ok(Expr {
+                    id: self.id_gen.fresh(),
+                    span,
+                    kind: ExprKind::Const(Const::Str(value)),
+                })
+            }
             TokenKind::Identifier(_) => {
                 if self.looks_like_struct_literal() {
                     return self.parse_struct_literal();
@@ -731,6 +752,20 @@ impl Parser {
                         condition: Box::new(condition),
                         then_branch,
                         else_branch,
+                    },
+                })
+            }
+            TokenKind::While => {
+                let start = self.expect(TokenKind::While)?.span;
+                let condition = self.parse_expr()?;
+                let body = self.parse_block()?;
+                let span = start.join(body.span);
+                Ok(Expr {
+                    id: self.id_gen.fresh(),
+                    span,
+                    kind: ExprKind::While {
+                        condition: Box::new(condition),
+                        body,
                     },
                 })
             }

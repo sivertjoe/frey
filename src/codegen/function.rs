@@ -35,7 +35,7 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
 
-    fn const_initializer(&self, expr: &Expr) -> Option<BasicValueEnum<'ctx>> {
+    fn const_initializer(&mut self, expr: &Expr) -> Option<BasicValueEnum<'ctx>> {
         match &expr.kind {
             ExprKind::Const(Const::Int(n)) => {
                 Some(self.context.i32_type().const_int(*n as u64, true).into())
@@ -44,11 +44,17 @@ impl<'ctx> Codegen<'ctx> {
                 Some(self.context.f32_type().const_float(*f as f64).into())
             }
             ExprKind::Const(Const::Unit) => Some(self.context.bool_type().const_zero().into()),
+            ExprKind::Const(Const::Str(s)) => {
+                let s = s.clone();
+                Some(self.string_global_for(&s).into())
+            }
             ExprKind::Array(items) => {
                 // An array literal whose every element is itself a constant
                 // can become a constant LLVM aggregate.
-                let elem_vals: Option<Vec<BasicValueEnum<'ctx>>> =
-                    items.iter().map(|it| self.const_initializer(it)).collect();
+                let elem_vals: Option<Vec<BasicValueEnum<'ctx>>> = items
+                    .iter()
+                    .map(|it| self.const_initializer(it))
+                    .collect();
                 let elem_vals = elem_vals?;
                 let arr_llvm_ty = self.lower_ty(&expr.ty).into_array_type();
                 Some(const_array_from(arr_llvm_ty, &elem_vals).into())

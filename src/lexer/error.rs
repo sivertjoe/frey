@@ -12,6 +12,8 @@ pub enum ErrorKind {
     UnexpectedChar(char),
     UnexpectedText(String),
     InvalidInt(String),
+    UnterminatedString,
+    InvalidEscape(char),
 }
 
 impl fmt::Display for Error {
@@ -34,6 +36,12 @@ impl fmt::Display for ErrorKind {
             }
             ErrorKind::InvalidInt(int) => {
                 write!(f, "invalid integer: `{}`", int)
+            }
+            ErrorKind::UnterminatedString => {
+                write!(f, "unterminated string literal")
+            }
+            ErrorKind::InvalidEscape(ch) => {
+                write!(f, "invalid escape sequence: `\\{ch}`")
             }
         }
     }

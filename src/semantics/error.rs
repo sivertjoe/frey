@@ -30,6 +30,7 @@ pub enum ErrorKind {
         name: String,
     },
     NotAddressable,
+    BreakOutsideLoop,
 }
 
 impl fmt::Display for Error {
@@ -68,6 +69,9 @@ impl fmt::Display for ErrorKind {
             }
             ErrorKind::NotAddressable => {
                 write!(f, "cannot take the address of this expression")
+            }
+            ErrorKind::BreakOutsideLoop => {
+                write!(f, "`break` is only valid inside a `while` loop")
             }
         }
     }

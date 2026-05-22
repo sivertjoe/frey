@@ -19,6 +19,7 @@ pub fn type_check(program: &Program) -> Result<(), Error> {
 struct Typechecker {
     expected_return: Vec<Ty>,
     bindings: HashMap<LocalId, BindingInfo>,
+    loop_depth: u32,
 }
 
 impl Typechecker {
@@ -26,6 +27,7 @@ impl Typechecker {
         Self {
             expected_return: Vec::new(),
             bindings: HashMap::new(),
+            loop_depth: 0,
         }
     }
 
@@ -251,7 +253,43 @@ impl Typechecker {
                 self.check_expr(target)?;
                 Ok(())
             }
+            ExprKind::While { condition, body } => {
+                self.check_expr(condition)?;
+                if !condition.ty.is_integer() {
+                    return Err(Error {
+                        span: condition.span,
+                        kind: ErrorKind::TypeMismatch {
+                            expected: Ty::Int,
+                            found: condition.ty.clone(),
+                        },
+                    });
+                }
+                self.loop_depth += 1;
+                let result = self.check_body_block(body, &Ty::Unit);
+                self.loop_depth -= 1;
+                result
+            }
         }
+    }
+
+    fn check_body_block(&mut self, body: &Block, expected_tail_ty: &Ty) -> Result<(), Error> {
+        for item in &body.items {
+            match item {
+                BlockItem::Declaration(d) => self.check_declaration(d)?,
+                BlockItem::Statement(s) => self.check_statement(s)?,
+            }
+        }
+        self.check_expr(&body.tail)?;
+        if &body.tail.ty != expected_tail_ty {
+            return Err(Error {
+                span: body.tail.span,
+                kind: ErrorKind::TypeMismatch {
+                    expected: expected_tail_ty.clone(),
+                    found: body.tail.ty.clone(),
+                },
+            });
+        }
+        Ok(())
     }
 
     fn check_function(&mut self, f: &Function) -> Result<(), Error> {
@@ -321,6 +359,15 @@ impl Typechecker {
                 Ok(())
             }
             StatementKind::Expr(e) => self.check_expr(e),
+            StatementKind::Break => {
+                if self.loop_depth == 0 {
+                    return Err(Error {
+                        span: s.span,
+                        kind: ErrorKind::BreakOutsideLoop,
+                    });
+                }
+                Ok(())
+            }
         }
     }
 

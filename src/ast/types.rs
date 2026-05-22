@@ -92,6 +92,7 @@ pub struct Statement {
 pub enum StatementKind {
     Return(Option<Expr>),
     Expr(Expr),
+    Break,
 }
 
 pub struct Expr {
@@ -137,6 +138,10 @@ pub enum ExprKind {
         condition: Box<Expr>,
         then_branch: Block,
         else_branch: Option<Box<Expr>>,
+    },
+    While {
+        condition: Box<Expr>,
+        body: Block,
     },
     Subscript {
         expr: Box<Expr>,
@@ -206,6 +211,7 @@ pub struct Param {
 pub enum Const {
     Int(i32),
     Float(f32),
+    Str(String),
 }
 
 #[derive(Debug)]
