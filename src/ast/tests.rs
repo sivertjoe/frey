@@ -1151,4 +1151,86 @@ mod tests {
         assert_eq!(params.len(), 1);
         assert!(matches!(params[0].kind, TypeExprKind::Named(ref n) if n == "Point"));
     }
+
+    // ---- Pipe operator ----
+
+    #[test]
+    fn pipe_no_arg_call() {
+        // `5 |> foo()` desugars to `foo(5)`.
+        let expr = parser("5 |> foo()").parse_expr().unwrap();
+        let ExprKind::Call { callee, args } = expr.kind else {
+            panic!("expected call, got {:?}", expr.kind);
+        };
+        assert_callee_named(&callee, "foo");
+        assert_eq!(args.len(), 1);
+        assert!(matches!(args[0].kind, ExprKind::Const(Const::Int(5))));
+    }
+
+    #[test]
+    fn pipe_with_existing_args() {
+        // `5 |> add(3)` desugars to `add(5, 3)`.
+        let expr = parser("5 |> add(3)").parse_expr().unwrap();
+        let ExprKind::Call { callee, args } = expr.kind else {
+            panic!("expected call");
+        };
+        assert_callee_named(&callee, "add");
+        assert_eq!(args.len(), 2);
+        assert!(matches!(args[0].kind, ExprKind::Const(Const::Int(5))));
+        assert!(matches!(args[1].kind, ExprKind::Const(Const::Int(3))));
+    }
+
+    #[test]
+    fn pipe_chains_left_associative() {
+        // `5 |> f() |> g()` desugars to `g(f(5))`.
+        let expr = parser("5 |> f() |> g()").parse_expr().unwrap();
+        let ExprKind::Call { callee, args } = expr.kind else {
+            panic!("expected outer call");
+        };
+        assert_callee_named(&callee, "g");
+        assert_eq!(args.len(), 1);
+        let ExprKind::Call { callee: inner_callee, args: inner_args } = &args[0].kind else {
+            panic!("expected inner call");
+        };
+        assert_callee_named(inner_callee, "f");
+        assert_eq!(inner_args.len(), 1);
+        assert!(matches!(inner_args[0].kind, ExprKind::Const(Const::Int(5))));
+    }
+
+    #[test]
+    fn pipe_lhs_takes_full_arithmetic() {
+        // `2 + 3 |> f()` desugars to `f(2 + 3)`, not `2 + f(3)`.
+        let expr = parser("2 + 3 |> f()").parse_expr().unwrap();
+        let ExprKind::Call { callee, args } = expr.kind else {
+            panic!("expected call");
+        };
+        assert_callee_named(&callee, "f");
+        assert_eq!(args.len(), 1);
+        assert!(matches!(args[0].kind, ExprKind::Binary { .. }));
+    }
+
+    #[test]
+    fn pipe_rhs_must_be_call() {
+        let result = parser("5 |> 7").parse_expr();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn pipe_rhs_bare_identifier_errors() {
+        let result = parser("5 |> foo").parse_expr();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn pipe_into_method_chain() {
+        // `5 |> foo.bar(3)` desugars to `foo.bar(5, 3)` — the call we splice
+        // into is the outermost one, even if the callee itself is a field
+        // access expression.
+        let expr = parser("5 |> foo.bar(3)").parse_expr().unwrap();
+        let ExprKind::Call { callee, args } = expr.kind else {
+            panic!("expected call");
+        };
+        // callee is foo.bar, a Field expression
+        assert!(matches!(callee.kind, ExprKind::Field { .. }));
+        assert_eq!(args.len(), 2);
+    }
 }

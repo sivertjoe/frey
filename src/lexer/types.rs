@@ -75,6 +75,7 @@ pub enum TokenKind {
     Caret,
     AmpAmp,
     PipePipe,
+    PipeArrow,
     Not,
 
     Literal(Literal),
@@ -135,6 +136,7 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Caret => write!(f, "`^`"),
             TokenKind::AmpAmp => write!(f, "`&&`"),
             TokenKind::PipePipe => write!(f, "`||`"),
+            TokenKind::PipeArrow => write!(f, "`|>`"),
             TokenKind::Not => write!(f, "`!`"),
             TokenKind::Literal(lit) => write!(f, "{lit}"),
             TokenKind::Semicolon => write!(f, "`;`"),

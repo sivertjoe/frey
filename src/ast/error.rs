@@ -12,6 +12,7 @@ pub enum ErrorKind {
     Unexpected { expected: String, found: TokenKind },
     #[allow(dead_code)] // reserved for when type expressions can fail to resolve
     UnknownType(String),
+    PipeRhsNotCall,
 }
 
 impl Error {
@@ -44,6 +45,9 @@ impl fmt::Display for ErrorKind {
             }
             ErrorKind::UnknownType(name) => {
                 write!(f, "unknown type: `{name}`")
+            }
+            ErrorKind::PipeRhsNotCall => {
+                write!(f, "right-hand side of `|>` must be a function call")
             }
         }
     }

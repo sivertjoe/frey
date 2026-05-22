@@ -46,6 +46,10 @@ statement ::=
     | "&" | "^" | "|"
     | "&&" | "||"
 
+`|>` is the pipe operator: `a |> f(b, c)` desugars to `f(a, b, c)`.
+Left-associative, lowest precedence among binary operators. The right
+operand must syntactically be a call.
+
 <function-literal> ::= "(" [<params>] ")" [ "->" <type> ] <block>
 <params> ::= <param> { "," <param> }
 <param>  ::= <ident> ":" <type>
@@ -360,6 +364,20 @@ impl Parser {
         let mut lhs = self.parse_unary_with_cast()?;
 
         loop {
+            // `|>` desugars to a function call. It sits at the lowest binary
+            // precedence (below `||`), is left-associative, and the RHS must
+            // syntactically be a call.
+            if self.check(TokenKind::PipeArrow) {
+                const PIPE_PREC: i32 = 1;
+                if PIPE_PREC < min_prec {
+                    break;
+                }
+                self.expect(TokenKind::PipeArrow)?;
+                let rhs = self.parse_binary_expr(PIPE_PREC + 1)?;
+                lhs = self.splice_pipe(lhs, rhs)?;
+                continue;
+            }
+
             let Some((prec, op)) = self.iter.peek().and_then(|t| binary_precedence(&t.kind)) else {
                 break;
             };
@@ -380,6 +398,24 @@ impl Parser {
             };
         }
         Ok(lhs)
+    }
+
+    fn splice_pipe(&mut self, lhs: Expr, rhs: Expr) -> Result<Expr, Error> {
+        let span = lhs.span.join(rhs.span);
+        match rhs.kind {
+            ExprKind::Call { callee, mut args } => {
+                args.insert(0, lhs);
+                Ok(Expr {
+                    id: self.id_gen.fresh(),
+                    span,
+                    kind: ExprKind::Call { callee, args },
+                })
+            }
+            _ => Err(Error {
+                span: rhs.span,
+                kind: crate::ast::error::ErrorKind::PipeRhsNotCall,
+            }),
+        }
     }
 
     fn parse_unary_with_cast(&mut self) -> Result<Expr, Error> {

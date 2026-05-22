@@ -85,6 +85,7 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, Error> {
             },
             '|' => match cursor.peek_second() {
                 Some('|') => tokens.push(cursor.double(TokenKind::PipePipe)),
+                Some('>') => tokens.push(cursor.double(TokenKind::PipeArrow)),
                 _ => tokens.push(cursor.single(TokenKind::Pipe)),
             },
             'a'..='z' | 'A'..='Z' | '_' => {
