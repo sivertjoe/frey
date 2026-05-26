@@ -68,6 +68,17 @@ pub enum ErrorKind {
         name: String,
     },
     StructDefNotAllowedHere,
+    MissingTypeArguments {
+        name: String,
+    },
+    UnexpectedTypeArguments {
+        name: String,
+    },
+    TypeArgArityMismatch {
+        name: String,
+        expected: usize,
+        found: usize,
+    },
 }
 
 impl fmt::Display for Error {
@@ -164,6 +175,22 @@ impl fmt::Display for ErrorKind {
             }
             ErrorKind::TypeMismatch { expected, found } => {
                 write!(f, "type mismatch: expected {expected:?}, found {found:?}")
+            }
+            ErrorKind::MissingTypeArguments { name } => {
+                write!(f, "struct `{name}` is generic; provide type arguments like `{name}<...>`")
+            }
+            ErrorKind::UnexpectedTypeArguments { name } => {
+                write!(f, "struct `{name}` is not generic and takes no type arguments")
+            }
+            ErrorKind::TypeArgArityMismatch {
+                name,
+                expected,
+                found,
+            } => {
+                write!(
+                    f,
+                    "struct `{name}` expects {expected} type argument(s), got {found}"
+                )
             }
         }
     }

@@ -67,6 +67,10 @@ pub enum TypeExprKind {
     },
     Ptr(Box<TypeExpr>),
     Named(String),
+    NamedGeneric {
+        name: String,
+        args: Vec<TypeExpr>,
+    },
 }
 
 pub struct Block {
@@ -150,6 +154,7 @@ pub enum ExprKind {
     Ref(Box<Expr>),
     Deref(Box<Expr>),
     StructDef {
+        type_params: Vec<String>,
         fields: Vec<StructTypeField>,
     },
     StructLiteral {

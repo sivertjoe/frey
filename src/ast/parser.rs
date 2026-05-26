@@ -170,7 +170,19 @@ impl Parser {
             TokenKind::U64 => TypeExprKind::U64,
             TokenKind::F32 => TypeExprKind::F32,
             TokenKind::F64 => TypeExprKind::F64,
-            TokenKind::Identifier(name) => TypeExprKind::Named(name.clone()),
+            TokenKind::Identifier(name) => {
+                let name = name.clone();
+                // `Identifier<` in type position is a generic application
+                // like `Vec<Int>`. The angle brackets are unambiguous here
+                // because comparisons don't occur in type positions.
+                if matches!(
+                    self.iter.peek_nth(1).map(|t| &t.kind),
+                    Some(TokenKind::LessThan)
+                ) {
+                    return self.parse_named_generic_type(name);
+                }
+                TypeExprKind::Named(name)
+            }
             TokenKind::Star => return self.parse_ptr_type(),
             TokenKind::LeftParen => return self.parse_function_type(),
             TokenKind::LeftBracket => return self.parse_array_type(),
@@ -182,6 +194,27 @@ impl Parser {
             id: self.id_gen.fresh(),
             span,
             kind,
+        })
+    }
+
+    fn parse_named_generic_type(&mut self, name: String) -> Result<TypeExpr, Error> {
+        let start = self.iter.consume().unwrap().span; // consume the Identifier
+        self.expect(TokenKind::LessThan)?;
+        let mut args = Vec::new();
+        while !self.check(TokenKind::GreaterThan) {
+            if !args.is_empty() {
+                self.expect(TokenKind::Comma)?;
+                if self.check(TokenKind::GreaterThan) {
+                    break;
+                }
+            }
+            args.push(self.parse_type()?);
+        }
+        let end = self.expect(TokenKind::GreaterThan)?.span;
+        Ok(TypeExpr {
+            id: self.id_gen.fresh(),
+            span: start.join(end),
+            kind: TypeExprKind::NamedGeneric { name, args },
         })
     }
 
@@ -585,6 +618,37 @@ impl Parser {
 
     fn parse_struct_def(&mut self) -> Result<Expr, Error> {
         let start = self.expect(TokenKind::Struct)?.span;
+
+        // Optional type parameter list: struct<$K, $V> { ... }
+        let mut type_params: Vec<String> = Vec::new();
+        if self.check(TokenKind::LessThan) {
+            self.expect(TokenKind::LessThan)?;
+            while !self.check(TokenKind::GreaterThan) {
+                if !type_params.is_empty() {
+                    self.expect(TokenKind::Comma)?;
+                    if self.check(TokenKind::GreaterThan) {
+                        break;
+                    }
+                }
+                self.expect(TokenKind::Dollar)?;
+                let name_tok = self.iter.consume().expect("lexer emits eof");
+                let TokenKind::Identifier(name) = name_tok.kind else {
+                    return Err(Error::unexpected(&name_tok, "generic type name"));
+                };
+                if type_params.iter().any(|n| n == &name) {
+                    return Err(Error::unexpected(
+                        &Token {
+                            kind: TokenKind::Identifier(name.clone()),
+                            span: name_tok.span,
+                        },
+                        "unique generic type name",
+                    ));
+                }
+                type_params.push(name);
+            }
+            self.expect(TokenKind::GreaterThan)?;
+        }
+
         self.expect(TokenKind::LeftBrace)?;
         let mut fields = Vec::new();
         while !self.check(TokenKind::RightBrace) {
@@ -610,7 +674,10 @@ impl Parser {
         Ok(Expr {
             id: self.id_gen.fresh(),
             span: start.join(end),
-            kind: ExprKind::StructDef { fields },
+            kind: ExprKind::StructDef {
+                type_params,
+                fields,
+            },
         })
     }
 

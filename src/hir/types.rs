@@ -103,6 +103,7 @@ pub struct Program {
 #[derive(Clone)]
 pub struct StructDef {
     pub name: String,
+    pub type_var_ids: Vec<TypeVarId>,
     pub fields: Vec<(String, Ty)>,
 }
 

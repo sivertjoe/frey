@@ -48,6 +48,13 @@ pub struct Lower {
     // body is processed, so recursive calls find the in-progress entry.
     specialization_cache: HashMap<(LocalId, Vec<Ty>), LocalId>,
     pending_specializations: Vec<Declaration>,
+
+    // Generic struct templates, keyed by name. Concrete (specialized)
+    // struct definitions live in `structs` and get codegen'd directly.
+    struct_templates: HashMap<String, StructDef>,
+    // Cache: (template name, concrete arg types in declaration order) →
+    // specialized struct name.
+    struct_specialization_cache: HashMap<(String, Vec<Ty>), String>,
 }
 
 impl Lower {
@@ -63,6 +70,8 @@ impl Lower {
             templates: HashMap::default(),
             specialization_cache: HashMap::default(),
             pending_specializations: Vec::default(),
+            struct_templates: HashMap::default(),
+            struct_specialization_cache: HashMap::default(),
         }
     }
 
@@ -95,12 +104,16 @@ impl Lower {
             .span
             .join(p.declarations.last().unwrap().span);
 
-        // Pass 1: register every struct name with empty fields. This lets a
-        // struct's body (and any other struct's body) reference it via `*T`
-        // or by name before its own body is lowered.
+        // Pass 1: register every struct name. Non-generic structs go into
+        // `structs` with an empty fields list (filled in pass 2); generic
+        // structs go into `struct_templates` similarly. This lets a struct's
+        // body reference its own name (via `*T`) and other structs by name
+        // before their bodies are lowered.
         for decl in &p.declarations {
-            if let ast::ExprKind::StructDef { .. } = &decl.value.kind {
-                if self.structs.contains_key(&decl.name) {
+            if let ast::ExprKind::StructDef { type_params, .. } = &decl.value.kind {
+                if self.structs.contains_key(&decl.name)
+                    || self.struct_templates.contains_key(&decl.name)
+                {
                     return Err(Error {
                         span: decl.span,
                         kind: ErrorKind::AlreadyDefined {
@@ -108,39 +121,104 @@ impl Lower {
                         },
                     });
                 }
-                self.structs.insert(
-                    decl.name.clone(),
-                    StructDef {
-                        name: decl.name.clone(),
-                        fields: Vec::new(),
-                    },
-                );
+                if type_params.is_empty() {
+                    self.structs.insert(
+                        decl.name.clone(),
+                        StructDef {
+                            name: decl.name.clone(),
+                            type_var_ids: Vec::new(),
+                            fields: Vec::new(),
+                        },
+                    );
+                } else {
+                    self.struct_templates.insert(
+                        decl.name.clone(),
+                        StructDef {
+                            name: decl.name.clone(),
+                            type_var_ids: Vec::new(),
+                            fields: Vec::new(),
+                        },
+                    );
+                }
             }
         }
 
-        // Pass 2: lower struct bodies. Each field type is resolved; struct
-        // names referenced via *T resolve to the placeholder from pass 1.
+        // Pass 2: lower struct bodies. For generic structs, push a fresh
+        // type-var scope, register each type param as a TypeVarId, then
+        // lower fields. Field types may contain TypeVars and stay as
+        // templates until a concrete use site triggers specialization.
         for decl in &p.declarations {
-            if let ast::ExprKind::StructDef { fields } = &decl.value.kind {
-                let mut lowered_fields = Vec::with_capacity(fields.len());
-                for f in fields {
-                    let ty = self.lower_type(&f.ty)?;
-                    if let Ty::Struct(other) = &ty
-                        && other == &decl.name
-                    {
-                        return Err(Error {
-                            span: f.span,
-                            kind: ErrorKind::DirectStructRecursion {
-                                name: decl.name.clone(),
-                            },
-                        });
+            if let ast::ExprKind::StructDef { type_params, fields } = &decl.value.kind {
+                if type_params.is_empty() {
+                    let mut lowered_fields = Vec::with_capacity(fields.len());
+                    for f in fields {
+                        let ty = self.lower_type(&f.ty)?;
+                        if let Ty::Struct(other) = &ty
+                            && other == &decl.name
+                        {
+                            return Err(Error {
+                                span: f.span,
+                                kind: ErrorKind::DirectStructRecursion {
+                                    name: decl.name.clone(),
+                                },
+                            });
+                        }
+                        lowered_fields.push((f.name.clone(), ty));
                     }
-                    lowered_fields.push((f.name.clone(), ty));
+                    self.structs
+                        .get_mut(&decl.name)
+                        .expect("registered in pass 1")
+                        .fields = lowered_fields;
+                } else {
+                    // Generic struct: type params are introduced from the
+                    // explicit `<$K, $V>` list.
+                    self.push_type_var_scope();
+                    let mut tv_ids = Vec::with_capacity(type_params.len());
+                    for name in type_params {
+                        if self.structs.contains_key(name)
+                            || self.struct_templates.contains_key(name)
+                        {
+                            self.pop_type_var_scope();
+                            return Err(Error {
+                                span: decl.span,
+                                kind: ErrorKind::GenericIsAlsoAStruct {
+                                    name: name.clone(),
+                                },
+                            });
+                        }
+                        let id = self.fresh_type_var_id(name.clone());
+                        self.type_var_scopes
+                            .last_mut()
+                            .unwrap()
+                            .insert(name.clone(), id);
+                        tv_ids.push(id);
+                    }
+
+                    let mut lowered_fields = Vec::with_capacity(fields.len());
+                    for f in fields {
+                        let ty = self.lower_type(&f.ty)?;
+                        if let Ty::Struct(other) = &ty
+                            && other == &decl.name
+                        {
+                            self.pop_type_var_scope();
+                            return Err(Error {
+                                span: f.span,
+                                kind: ErrorKind::DirectStructRecursion {
+                                    name: decl.name.clone(),
+                                },
+                            });
+                        }
+                        lowered_fields.push((f.name.clone(), ty));
+                    }
+                    self.pop_type_var_scope();
+
+                    let entry = self
+                        .struct_templates
+                        .get_mut(&decl.name)
+                        .expect("registered in pass 1");
+                    entry.type_var_ids = tv_ids;
+                    entry.fields = lowered_fields;
                 }
-                self.structs
-                    .get_mut(&decl.name)
-                    .expect("registered in pass 1")
-                    .fields = lowered_fields;
             }
         }
 
@@ -703,64 +781,18 @@ impl Lower {
                 })
             }
             ast::ExprKind::StructLiteral { name, fields } => {
-                let def = self.structs.get(&name).cloned().ok_or_else(|| Error {
+                // Concrete-struct path: existing behavior.
+                if let Some(def) = self.structs.get(&name).cloned() {
+                    return self.lower_struct_literal(def, name, fields, e.span);
+                }
+                // Generic-struct path: infer type args from the provided field
+                // values, then specialize.
+                if let Some(template) = self.struct_templates.get(&name).cloned() {
+                    return self.lower_generic_struct_literal(template, name, fields, e.span);
+                }
+                Err(Error {
                     span: e.span,
                     kind: ErrorKind::UnknownType { name: name.clone() },
-                })?;
-
-                let mut seen: HashMap<String, ()> = HashMap::new();
-                let mut lowered_by_name: HashMap<String, Expr> = HashMap::new();
-                for f in fields {
-                    if seen.insert(f.name.clone(), ()).is_some() {
-                        return Err(Error {
-                            span: f.span,
-                            kind: ErrorKind::DuplicateField {
-                                struct_name: name.clone(),
-                                field: f.name.clone(),
-                            },
-                        });
-                    }
-                    let target_ty = def
-                        .fields
-                        .iter()
-                        .find(|(n, _)| n == &f.name)
-                        .map(|(_, t)| t.clone());
-                    let Some(target_ty) = target_ty else {
-                        return Err(Error {
-                            span: f.span,
-                            kind: ErrorKind::UnknownField {
-                                struct_name: name.clone(),
-                                field: f.name.clone(),
-                            },
-                        });
-                    };
-                    let value = self.lower_expr(f.value)?;
-                    let value = coerce_int_literal(value, &target_ty)?;
-                    lowered_by_name.insert(f.name, value);
-                }
-
-                let mut missing = Vec::new();
-                let mut ordered = Vec::with_capacity(def.fields.len());
-                for (fname, _) in &def.fields {
-                    match lowered_by_name.remove(fname) {
-                        Some(v) => ordered.push((fname.clone(), v)),
-                        None => missing.push(fname.clone()),
-                    }
-                }
-                if !missing.is_empty() {
-                    return Err(Error {
-                        span: e.span,
-                        kind: ErrorKind::MissingFields {
-                            struct_name: name,
-                            missing,
-                        },
-                    });
-                }
-
-                Ok(Expr {
-                    span: e.span,
-                    ty: Ty::Struct(def.name),
-                    kind: ExprKind::StructLiteral { fields: ordered },
                 })
             }
             ast::ExprKind::While { condition, body } => {
@@ -998,6 +1030,11 @@ impl Lower {
                     Ok(Ty::TypeVar(id))
                 } else if self.structs.contains_key(name) {
                     Ok(Ty::Struct(name.clone()))
+                } else if self.struct_templates.contains_key(name) {
+                    Err(Error {
+                        span: t.span,
+                        kind: ErrorKind::MissingTypeArguments { name: name.clone() },
+                    })
                 } else if let Some(id) = self.lookup_type_var(name) {
                     Ok(Ty::TypeVar(id))
                 } else {
@@ -1007,7 +1044,265 @@ impl Lower {
                     })
                 }
             }
+            ast::TypeExprKind::NamedGeneric { name, args } => {
+                // Concrete struct? Then `Foo<...>` is wrong — Foo isn't generic.
+                if self.structs.contains_key(name) {
+                    return Err(Error {
+                        span: t.span,
+                        kind: ErrorKind::UnexpectedTypeArguments {
+                            name: name.clone(),
+                        },
+                    });
+                }
+                let template = self
+                    .struct_templates
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| Error {
+                        span: t.span,
+                        kind: ErrorKind::UnknownType { name: name.clone() },
+                    })?;
+                if template.type_var_ids.len() != args.len() {
+                    return Err(Error {
+                        span: t.span,
+                        kind: ErrorKind::TypeArgArityMismatch {
+                            name: name.clone(),
+                            expected: template.type_var_ids.len(),
+                            found: args.len(),
+                        },
+                    });
+                }
+                let lowered_args: Vec<Ty> = args
+                    .iter()
+                    .map(|a| self.lower_type(a))
+                    .collect::<Result<_, _>>()?;
+                let specialized = self.specialize_struct(&template, lowered_args, t.span)?;
+                Ok(Ty::Struct(specialized))
+            }
         }
+    }
+
+    fn lower_struct_literal(
+        &mut self,
+        def: StructDef,
+        name: String,
+        fields: Vec<ast::StructLiteralField>,
+        span: Span,
+    ) -> Result<Expr, Error> {
+        let mut seen: HashMap<String, ()> = HashMap::new();
+        let mut lowered_by_name: HashMap<String, Expr> = HashMap::new();
+        for f in fields {
+            if seen.insert(f.name.clone(), ()).is_some() {
+                return Err(Error {
+                    span: f.span,
+                    kind: ErrorKind::DuplicateField {
+                        struct_name: name.clone(),
+                        field: f.name.clone(),
+                    },
+                });
+            }
+            let target_ty = def
+                .fields
+                .iter()
+                .find(|(n, _)| n == &f.name)
+                .map(|(_, t)| t.clone());
+            let Some(target_ty) = target_ty else {
+                return Err(Error {
+                    span: f.span,
+                    kind: ErrorKind::UnknownField {
+                        struct_name: name.clone(),
+                        field: f.name.clone(),
+                    },
+                });
+            };
+            let value = self.lower_expr(f.value)?;
+            let value = coerce_int_literal(value, &target_ty)?;
+            lowered_by_name.insert(f.name, value);
+        }
+
+        let mut missing = Vec::new();
+        let mut ordered = Vec::with_capacity(def.fields.len());
+        for (fname, _) in &def.fields {
+            match lowered_by_name.remove(fname) {
+                Some(v) => ordered.push((fname.clone(), v)),
+                None => missing.push(fname.clone()),
+            }
+        }
+        if !missing.is_empty() {
+            return Err(Error {
+                span,
+                kind: ErrorKind::MissingFields {
+                    struct_name: name,
+                    missing,
+                },
+            });
+        }
+
+        Ok(Expr {
+            span,
+            ty: Ty::Struct(def.name),
+            kind: ExprKind::StructLiteral { fields: ordered },
+        })
+    }
+
+    fn lower_generic_struct_literal(
+        &mut self,
+        template: StructDef,
+        name: String,
+        fields: Vec<ast::StructLiteralField>,
+        span: Span,
+    ) -> Result<Expr, Error> {
+        // First pass: lower each provided field value (no coercion yet — the
+        // template field type may be a TypeVar so we don't know what to coerce
+        // to). Detect duplicate and unknown field names while we're here.
+        let mut seen: HashMap<String, ()> = HashMap::new();
+        let mut lowered_by_name: HashMap<String, Expr> = HashMap::new();
+        let mut spans_by_name: HashMap<String, Span> = HashMap::new();
+        for f in fields {
+            if seen.insert(f.name.clone(), ()).is_some() {
+                return Err(Error {
+                    span: f.span,
+                    kind: ErrorKind::DuplicateField {
+                        struct_name: name.clone(),
+                        field: f.name.clone(),
+                    },
+                });
+            }
+            if !template.fields.iter().any(|(n, _)| n == &f.name) {
+                return Err(Error {
+                    span: f.span,
+                    kind: ErrorKind::UnknownField {
+                        struct_name: name.clone(),
+                        field: f.name.clone(),
+                    },
+                });
+            }
+            // Coerce the value against the template's field type up front.
+            // For TypeVar fields this is a no-op (TypeVar isn't a number);
+            // for concrete fields it handles literal-to-numeric coercion so
+            // unify doesn't have to reason about `Int → UInt`.
+            let template_field_ty = template
+                .fields
+                .iter()
+                .find(|(n, _)| n == &f.name)
+                .map(|(_, t)| t.clone())
+                .expect("checked above");
+            let value = self.lower_expr(f.value)?;
+            let value = coerce_int_literal(value, &template_field_ty)?;
+            spans_by_name.insert(f.name.clone(), value.span);
+            lowered_by_name.insert(f.name, value);
+        }
+
+        // Check no fields are missing — we need every value provided to
+        // potentially help infer the type args.
+        let mut missing = Vec::new();
+        for (fname, _) in &template.fields {
+            if !lowered_by_name.contains_key(fname) {
+                missing.push(fname.clone());
+            }
+        }
+        if !missing.is_empty() {
+            return Err(Error {
+                span,
+                kind: ErrorKind::MissingFields {
+                    struct_name: name,
+                    missing,
+                },
+            });
+        }
+
+        // Second pass: unify each provided value's type against the template
+        // field's type to deduce type arguments.
+        let mut subst: HashMap<TypeVarId, Ty> = HashMap::new();
+        for (fname, template_ty) in &template.fields {
+            let value = lowered_by_name.get(fname).expect("checked above");
+            let field_span = spans_by_name.get(fname).copied().unwrap_or(span);
+            unify(template_ty, &value.ty, field_span, &mut subst)?;
+        }
+        for tv in &template.type_var_ids {
+            if !subst.contains_key(tv) {
+                let tv_name = self
+                    .type_vars
+                    .get(tv.0 as usize)
+                    .map(|v| v.name.clone())
+                    .unwrap_or_else(|| format!("T{}", tv.0));
+                return Err(Error {
+                    span,
+                    kind: ErrorKind::CannotInferTypeArg { name: tv_name },
+                });
+            }
+        }
+
+        // Specialize and coerce values against the concrete field types.
+        let args: Vec<Ty> = template
+            .type_var_ids
+            .iter()
+            .map(|id| subst[id].clone())
+            .collect();
+        let specialized_name = self.specialize_struct(&template, args, span)?;
+        let def = self
+            .structs
+            .get(&specialized_name)
+            .cloned()
+            .expect("just inserted by specialize_struct");
+
+        let mut ordered = Vec::with_capacity(def.fields.len());
+        for (fname, target_ty) in &def.fields {
+            let value = lowered_by_name
+                .remove(fname)
+                .expect("checked above");
+            let value = coerce_int_literal(value, target_ty)?;
+            ordered.push((fname.clone(), value));
+        }
+
+        Ok(Expr {
+            span,
+            ty: Ty::Struct(specialized_name),
+            kind: ExprKind::StructLiteral { fields: ordered },
+        })
+    }
+
+    /// Generates (or returns the cached) specialization of a generic struct
+    /// `template` for the given concrete type arguments. The specialized
+    /// struct lives in `self.structs` with a mangled name, ready for codegen.
+    fn specialize_struct(
+        &mut self,
+        template: &StructDef,
+        args: Vec<Ty>,
+        _span: Span,
+    ) -> Result<String, Error> {
+        let cache_key = (template.name.clone(), args.clone());
+        if let Some(cached) = self.struct_specialization_cache.get(&cache_key) {
+            return Ok(cached.clone());
+        }
+
+        let mangled = mangle_struct_specialization(&template.name, &args);
+        // Reserve the cache slot BEFORE substituting so a self-referential
+        // pointer field (`*Self<T>`) finds the in-progress entry.
+        self.struct_specialization_cache
+            .insert(cache_key, mangled.clone());
+
+        let mut subst = HashMap::new();
+        for (tv, ty) in template.type_var_ids.iter().zip(args.iter()) {
+            subst.insert(*tv, ty.clone());
+        }
+
+        let new_fields = template
+            .fields
+            .iter()
+            .map(|(n, ty)| (n.clone(), substitute_ty(ty, &subst)))
+            .collect();
+
+        self.structs.insert(
+            mangled.clone(),
+            StructDef {
+                name: mangled.clone(),
+                type_var_ids: Vec::new(),
+                fields: new_fields,
+            },
+        );
+
+        Ok(mangled)
     }
 
     fn lower_unary(&self, op: ast::UnaryOperator) -> UnaryOperator {
@@ -1275,6 +1570,10 @@ fn mangle_specialization(name: &str, tys: &[Ty]) -> String {
         s.push_str(&format!("{t:?}"));
     }
     s
+}
+
+fn mangle_struct_specialization(name: &str, tys: &[Ty]) -> String {
+    mangle_specialization(name, tys)
 }
 
 impl Lower {

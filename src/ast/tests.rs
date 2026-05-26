@@ -989,7 +989,7 @@ mod tests {
             .parse_declaration()
             .unwrap();
         assert_eq!(decl.name, "Point");
-        let ExprKind::StructDef { fields } = decl.value.kind else {
+        let ExprKind::StructDef { fields, .. } = decl.value.kind else {
             panic!("expected struct def, got {:?}", decl.value.kind);
         };
         assert_eq!(fields.len(), 2);
@@ -1004,7 +1004,7 @@ mod tests {
         let decl = parser("let Empty = struct {};")
             .parse_declaration()
             .unwrap();
-        let ExprKind::StructDef { fields } = decl.value.kind else {
+        let ExprKind::StructDef { fields, .. } = decl.value.kind else {
             panic!("expected struct def");
         };
         assert!(fields.is_empty());
@@ -1015,7 +1015,7 @@ mod tests {
         let decl = parser("let Point = struct { x: Int, y: Int, };")
             .parse_declaration()
             .unwrap();
-        let ExprKind::StructDef { fields } = decl.value.kind else {
+        let ExprKind::StructDef { fields, .. } = decl.value.kind else {
             panic!("expected struct def");
         };
         assert_eq!(fields.len(), 2);
@@ -1027,7 +1027,7 @@ mod tests {
         let decl = parser("let Node = struct { value: Int, next: *Node };")
             .parse_declaration()
             .unwrap();
-        let ExprKind::StructDef { fields } = decl.value.kind else {
+        let ExprKind::StructDef { fields, .. } = decl.value.kind else {
             panic!("expected struct def");
         };
         assert_eq!(fields[1].name, "next");
@@ -1196,6 +1196,69 @@ mod tests {
         };
         assert_eq!(params.len(), 1);
         assert!(matches!(params[0].kind, TypeExprKind::Named(ref n) if n == "Point"));
+    }
+
+    // ---- Generic struct syntax ----
+
+    #[test]
+    fn parses_generic_struct_def() {
+        let decl = parser("let Box = struct<$T> { value: T };")
+            .parse_declaration()
+            .unwrap();
+        let ExprKind::StructDef {
+            type_params,
+            fields,
+        } = decl.value.kind
+        else {
+            panic!("expected struct def");
+        };
+        assert_eq!(type_params, vec!["T".to_string()]);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].name, "value");
+        assert!(matches!(fields[0].ty.kind, TypeExprKind::Named(ref n) if n == "T"));
+    }
+
+    #[test]
+    fn parses_multi_param_generic_struct() {
+        let decl = parser("let Pair = struct<$A, $B> { fst: A, snd: B };")
+            .parse_declaration()
+            .unwrap();
+        let ExprKind::StructDef { type_params, .. } = decl.value.kind else {
+            panic!("expected struct def");
+        };
+        assert_eq!(type_params, vec!["A".to_string(), "B".to_string()]);
+    }
+
+    #[test]
+    fn parses_generic_type_use_site() {
+        let ty = parser("Vec<Int>").parse_type().unwrap();
+        let TypeExprKind::NamedGeneric { name, args } = ty.kind else {
+            panic!("expected NamedGeneric, got {:?}", ty.kind);
+        };
+        assert_eq!(name, "Vec");
+        assert_eq!(args.len(), 1);
+        assert!(matches!(args[0].kind, TypeExprKind::Int));
+    }
+
+    #[test]
+    fn parses_multi_arg_generic_type_use() {
+        let ty = parser("Map<Int, u8>").parse_type().unwrap();
+        let TypeExprKind::NamedGeneric { name, args } = ty.kind else {
+            panic!("expected NamedGeneric");
+        };
+        assert_eq!(name, "Map");
+        assert_eq!(args.len(), 2);
+        assert!(matches!(args[0].kind, TypeExprKind::Int));
+        assert!(matches!(args[1].kind, TypeExprKind::U8));
+    }
+
+    #[test]
+    fn parses_pointer_to_named_generic_type() {
+        let ty = parser("*Vec<Int>").parse_type().unwrap();
+        let TypeExprKind::Ptr(inner) = ty.kind else {
+            panic!("expected pointer");
+        };
+        assert!(matches!(inner.kind, TypeExprKind::NamedGeneric { .. }));
     }
 
     // ---- Pipe operator ----
