@@ -29,13 +29,12 @@ impl LocalIdGen {
 #[derive(Clone, PartialEq, Eq)]
 pub struct TypeVar {
     pub name: String,
-    pub definition: bool,
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TypeVarId(pub u32);
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Ty {
     Unit,
     Int,
@@ -116,6 +115,7 @@ impl fmt::Debug for StructDef {
     }
 }
 
+#[derive(Clone)]
 pub struct Declaration {
     pub id: LocalId,
     pub span: Span,
@@ -125,12 +125,14 @@ pub struct Declaration {
     pub value: Expr,
 }
 
+#[derive(Clone)]
 pub struct Expr {
     pub span: Span,
     pub ty: Ty,
     pub kind: ExprKind,
 }
 
+#[derive(Clone)]
 pub enum ExprKind {
     Const(Const),
     Local(LocalId),
@@ -180,11 +182,13 @@ pub enum ExprKind {
     },
 }
 
+#[derive(Clone)]
 pub struct FunctionCall {
     pub callee: Box<Expr>,
     pub args: Vec<Expr>,
 }
 
+#[derive(Clone)]
 pub enum Const {
     Int(i32),
     Float(f32),
@@ -192,12 +196,14 @@ pub enum Const {
     Unit,
 }
 
+#[derive(Clone)]
 pub struct Function {
     pub params: Vec<Param>,
     pub return_ty: Ty,
     pub body: Block,
 }
 
+#[derive(Clone)]
 pub struct Param {
     pub id: LocalId,
     pub span: Span,
@@ -205,22 +211,26 @@ pub struct Param {
     pub ty: Ty,
 }
 
+#[derive(Clone)]
 pub struct Block {
     pub span: Span,
     pub items: Vec<BlockItem>,
     pub tail: Box<Expr>,
 }
 
+#[derive(Clone)]
 pub enum BlockItem {
     Declaration(Declaration),
     Statement(Statement),
 }
 
+#[derive(Clone)]
 pub struct Statement {
     pub span: Span,
     pub kind: StatementKind,
 }
 
+#[derive(Clone)]
 pub enum StatementKind {
     Return(Expr),
     Expr(Expr),

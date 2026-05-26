@@ -1,5 +1,6 @@
 mod coerce;
 pub mod error;
+mod generics;
 mod lower;
 pub mod types;
 

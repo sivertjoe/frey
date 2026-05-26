@@ -214,7 +214,7 @@ pub enum Const {
     Str(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum UnaryOperator {
     Not,
     Minus,

@@ -48,6 +48,19 @@ pub enum ErrorKind {
     GenericIsAlsoAStruct {
         name: String,
     },
+    GenericAlreadyDefined {
+        name: String,
+    },
+    GenericOutsideFunctionSignature {
+        name: String,
+    },
+    CannotInferTypeArg {
+        name: String,
+    },
+    TypeMismatch {
+        expected: Ty,
+        found: Ty,
+    },
     NotAStruct {
         found: Ty,
     },
@@ -133,6 +146,24 @@ impl fmt::Display for ErrorKind {
             }
             ErrorKind::GenericIsAlsoAStruct { name } => {
                 write!(f, "the generic type {name} is already defined as a struct")
+            }
+            ErrorKind::GenericAlreadyDefined { name } => {
+                write!(
+                    f,
+                    "generic type `${name}` is already declared in this function; use `{name}` to refer to it"
+                )
+            }
+            ErrorKind::GenericOutsideFunctionSignature { name } => {
+                write!(
+                    f,
+                    "generic type `${name}` can only be declared in a function signature"
+                )
+            }
+            ErrorKind::CannotInferTypeArg { name } => {
+                write!(f, "cannot infer type for generic argument `{name}`")
+            }
+            ErrorKind::TypeMismatch { expected, found } => {
+                write!(f, "type mismatch: expected {expected:?}, found {found:?}")
             }
         }
     }
