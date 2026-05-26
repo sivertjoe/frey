@@ -12,6 +12,7 @@ use crate::{
             LocalIdGen, Param, Program, Statement, StatementKind, StructDef, Ty,
         },
     },
+    lexer::types::Span,
 };
 
 struct PendingFnSig {
@@ -23,7 +24,7 @@ struct PendingFnSig {
 #[derive(Clone)]
 pub(crate) struct GenericTemplate {
     pub name: String,
-    pub span: crate::lexer::types::Span,
+    pub span: Span,
     pub type_var_ids: Vec<TypeVarId>,
     pub params: Vec<Param>,
     pub return_ty: Ty,
@@ -36,29 +37,16 @@ pub struct Lower {
     structs: HashMap<String, StructDef>,
     id_gen: LocalIdGen,
 
-    // Global pool of TypeVars; TypeVarId is an index into this Vec.
     type_vars: Vec<TypeVar>,
-    // Stack of per-function type-variable scopes. `$T` declares into the
-    // top; bare `T` resolves by walking down.
     type_var_scopes: Vec<HashMap<String, TypeVarId>>,
-    // Signatures lowered during pre-register, indexed by the function's
-    // LocalId. The lower_declaration pass for that function reuses the saved
-    // scope AND the already-lowered param/return types so $T isn't lowered
-    // twice (which would error as "already declared").
     pending_fn_sigs: HashMap<LocalId, PendingFnSig>,
 
-    // Generic-function templates, keyed by the function's LocalId. Stored
-    // once after the body is lowered (TypeVars left in). At each concrete
-    // call site, a specialization is generated from the template.
     pub(crate) templates: HashMap<LocalId, GenericTemplate>,
 
     // Cache: (template id, concrete arg types in TypeVarId order) →
     // specialization LocalId. The id is reserved BEFORE the specialization's
     // body is processed, so recursive calls find the in-progress entry.
     specialization_cache: HashMap<(LocalId, Vec<Ty>), LocalId>,
-
-    // Specializations produced during lowering. Drained into
-    // Program.declarations after the main pass.
     pending_specializations: Vec<Declaration>,
 }
 
@@ -82,7 +70,9 @@ impl Lower {
         self.type_var_scopes.push(HashMap::new());
     }
     fn pop_type_var_scope(&mut self) -> HashMap<String, TypeVarId> {
-        self.type_var_scopes.pop().expect("type_var_scopes underflow")
+        self.type_var_scopes
+            .pop()
+            .expect("type_var_scopes underflow")
     }
     fn lookup_type_var(&self, name: &str) -> Option<TypeVarId> {
         for s in self.type_var_scopes.iter().rev() {
@@ -198,8 +188,8 @@ impl Lower {
         let ExprKind::Function(func) = &decl.value.kind else {
             return false;
         };
-        let is_generic = func.params.iter().any(|p| ty_has_typevars(&p.ty))
-            || ty_has_typevars(&func.return_ty);
+        let is_generic =
+            func.params.iter().any(|p| ty_has_typevars(&p.ty)) || ty_has_typevars(&func.return_ty);
         if !is_generic {
             return false;
         }
@@ -302,8 +292,7 @@ impl Lower {
                 unreachable!("pre_registered guarantees Function");
             };
 
-            let value =
-                self.lower_top_level_function_body(params, body, sig, d.value.span)?;
+            let value = self.lower_top_level_function_body(params, body, sig, d.value.span)?;
             let ty = value.ty.clone();
             return Ok(Declaration {
                 id,
@@ -361,10 +350,7 @@ impl Lower {
         self.pop_type_var_scope();
 
         let mut body = body_result?;
-        if body.tail.ty != sig.return_ty
-            && sig.return_ty.is_number()
-            && sig.return_ty != Ty::Int
-        {
+        if body.tail.ty != sig.return_ty && sig.return_ty.is_number() && sig.return_ty != Ty::Int {
             let tail = std::mem::replace(&mut body.tail, Box::new(unit_expr(body.span)));
             body.tail = Box::new(coerce_through_tails(*tail, &sig.return_ty)?);
         }
@@ -471,12 +457,14 @@ impl Lower {
                 if let Some(callee_id) = callee_local
                     && self.templates.contains_key(&callee_id)
                 {
-                    let arg_tys: Vec<Ty> =
-                        args.iter().map(|a| a.ty.clone()).collect();
+                    let arg_tys: Vec<Ty> = args.iter().map(|a| a.ty.clone()).collect();
                     if !arg_tys.iter().any(ty_has_typevars) {
                         let new_id = self.specialize_call(callee_id, &arg_tys, e.span)?;
                         let new_fn_ty = self.bindings[&new_id].clone();
-                        let Ty::Function { return_ty: spec_ret, .. } = &new_fn_ty
+                        let Ty::Function {
+                            return_ty: spec_ret,
+                            ..
+                        } = &new_fn_ty
                         else {
                             unreachable!("specialized function must have function type");
                         };
@@ -1271,9 +1259,7 @@ impl Lower {
                     self.substitute_expr(value, subst, local_map)?;
                 }
             }
-            ExprKind::Field { target, .. } => {
-                self.substitute_expr(target, subst, local_map)?
-            }
+            ExprKind::Field { target, .. } => self.substitute_expr(target, subst, local_map)?,
         }
         if let Some(ty) = updated_call_ty {
             e.ty = ty;
@@ -1314,7 +1300,6 @@ impl Lower {
         }
         None
     }
-
 }
 
 fn unit_expr(span: crate::lexer::types::Span) -> Expr {
