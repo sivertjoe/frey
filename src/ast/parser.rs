@@ -90,8 +90,9 @@ use crate::{
         error::Error,
         token_iter::TokenIter,
         types::{
-            BinaryOperator, Block, BlockItem, Const, Declaration, Expr, ExprKind, NodeIdGen, Param, StructLiteralField, StructTypeField,
-            Program, Statement, StatementKind, TypeExpr, TypeExprKind,
+            BinaryOperator, Block, BlockItem, Const, Declaration, Expr, ExprKind, NodeIdGen, Param,
+            Program, Statement, StatementKind, StructLiteralField, StructTypeField, TypeExpr,
+            TypeExprKind,
         },
     },
     lexer::types::{Literal, Token, TokenKind},
@@ -173,6 +174,7 @@ impl Parser {
             TokenKind::Star => return self.parse_ptr_type(),
             TokenKind::LeftParen => return self.parse_function_type(),
             TokenKind::LeftBracket => return self.parse_array_type(),
+            TokenKind::Dollar => return self.parse_generic_type(),
             _ => return Err(Error::unexpected(tok, "type")),
         };
         let span = self.iter.consume().unwrap().span;
@@ -181,6 +183,25 @@ impl Parser {
             span,
             kind,
         })
+    }
+
+    pub(super) fn parse_generic_type(&mut self) -> Result<TypeExpr, Error> {
+        let tok = self.iter.consume().unwrap();
+        let next = self.iter.peek().expect("lexer always emits Eof");
+        let TokenKind::Identifier(_) = &next.kind else {
+            return Err(Error::unexpected(next, "named type"));
+        };
+        let next = self.iter.consume().unwrap();
+        let TokenKind::Identifier(name) = &next.kind else {
+            unreachable!();
+        };
+
+        let span = tok.span.join(next.span);
+        return Ok(TypeExpr {
+            id: self.id_gen.fresh(),
+            span,
+            kind: TypeExprKind::Named(format!("${name}")),
+        });
     }
 
     pub(super) fn parse_ptr_type(&mut self) -> Result<TypeExpr, Error> {

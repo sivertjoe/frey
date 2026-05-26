@@ -17,10 +17,10 @@ impl<'ctx> Codegen<'ctx> {
             Ty::Function { .. } | Ty::Ptr(_) => {
                 self.context.ptr_type(AddressSpace::default()).into()
             }
-            Ty::Array { element, count } => {
-                self.lower_ty(element).array_type(*count as u32).into()
-            }
+            Ty::Array { element, count } => self.lower_ty(element).array_type(*count as u32).into(),
             Ty::Struct(name) => self.struct_llvm[name].into(),
+
+            Ty::TypeVar(_) => todo!(),
         }
     }
 
@@ -62,6 +62,7 @@ impl<'ctx> Codegen<'ctx> {
                 .array_type(*count as u32)
                 .fn_type(param_types, false),
             Ty::Struct(name) => self.struct_llvm[name].fn_type(param_types, false),
+            Ty::TypeVar(_) => todo!(),
         }
     }
 }

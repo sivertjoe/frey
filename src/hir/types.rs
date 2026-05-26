@@ -27,6 +27,15 @@ impl LocalIdGen {
 }
 
 #[derive(Clone, PartialEq, Eq)]
+pub struct TypeVar {
+    pub name: String,
+    pub definition: bool,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct TypeVarId(pub u32);
+
+#[derive(Clone, PartialEq, Eq)]
 pub enum Ty {
     Unit,
     Int,
@@ -40,16 +49,11 @@ pub enum Ty {
     U64,
     F32,
     F64,
-    Function {
-        params: Vec<Ty>,
-        return_ty: Box<Ty>,
-    },
-    Array {
-        element: Box<Ty>,
-        count: usize,
-    },
+    Function { params: Vec<Ty>, return_ty: Box<Ty> },
+    Array { element: Box<Ty>, count: usize },
     Ptr(Box<Ty>),
     Struct(String),
+    TypeVar(TypeVarId),
 }
 
 impl Ty {
@@ -57,32 +61,30 @@ impl Ty {
         matches!(self, Ty::Ptr(_))
     }
 
-    /// Any signed integer type.
     pub fn is_int(&self) -> bool {
         matches!(self, Ty::Int | Ty::I8 | Ty::I32 | Ty::I64)
     }
 
-    /// Any unsigned integer type.
     pub fn is_uint(&self) -> bool {
         matches!(self, Ty::UInt | Ty::U8 | Ty::U32 | Ty::U64)
     }
 
-    /// Any float type.
     pub fn is_float(&self) -> bool {
         matches!(self, Ty::Float | Ty::F32 | Ty::F64)
     }
 
-    /// Any integer type (signed or unsigned).
     pub fn is_integer(&self) -> bool {
         self.is_int() || self.is_uint()
     }
 
-    /// Any numeric type (integer or float).
     pub fn is_number(&self) -> bool {
         self.is_integer() || self.is_float()
     }
 
-    /// Bit width for numeric types. `Int`/`UInt` are 32-bit, `Float` is f32.
+    pub fn is_generic(&self) -> bool {
+        matches!(self, Ty::TypeVar(_))
+    }
+
     pub fn bit_width(&self) -> Option<u32> {
         match self {
             Ty::I8 | Ty::U8 => Some(8),
@@ -253,6 +255,7 @@ impl fmt::Debug for Ty {
             Ty::Array { element, count } => write!(f, "[{element:?}; {count}]"),
             Ty::Ptr(target) => write!(f, "*{target:?}"),
             Ty::Struct(name) => write!(f, "{name}"),
+            Ty::TypeVar(id) => write!(f, "type var id {}", id.0),
         }
     }
 }

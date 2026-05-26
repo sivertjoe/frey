@@ -372,7 +372,11 @@ mod tests {
     #[test]
     fn parses_simple_cast() {
         let expr = parser("x as Int").parse_expr().unwrap();
-        let ExprKind::Cast { expr: inner, target } = expr.kind else {
+        let ExprKind::Cast {
+            expr: inner,
+            target,
+        } = expr.kind
+        else {
             panic!("expected cast");
         };
         let ExprKind::Identifier(name) = &inner.kind else {
@@ -385,7 +389,11 @@ mod tests {
     #[test]
     fn parses_cast_to_float() {
         let expr = parser("5 as Float").parse_expr().unwrap();
-        let ExprKind::Cast { expr: inner, target } = expr.kind else {
+        let ExprKind::Cast {
+            expr: inner,
+            target,
+        } = expr.kind
+        else {
             panic!("expected cast");
         };
         assert!(matches!(inner.kind, ExprKind::Const(Const::Int(5))));
@@ -435,11 +443,19 @@ mod tests {
     fn chained_casts() {
         // `x as Float as Int` parses left-associatively: (x as Float) as Int
         let expr = parser("x as Float as Int").parse_expr().unwrap();
-        let ExprKind::Cast { expr: inner, target } = expr.kind else {
+        let ExprKind::Cast {
+            expr: inner,
+            target,
+        } = expr.kind
+        else {
             panic!("expected outer cast");
         };
         assert!(matches!(target.kind, TypeExprKind::Int));
-        let ExprKind::Cast { target: inner_target, .. } = &inner.kind else {
+        let ExprKind::Cast {
+            target: inner_target,
+            ..
+        } = &inner.kind
+        else {
             panic!("expected inner cast");
         };
         assert!(matches!(inner_target.kind, TypeExprKind::Float));
@@ -459,7 +475,11 @@ mod tests {
     fn cast_in_declaration() {
         let decl = parser("let x = 1.5 as Int;").parse_declaration().unwrap();
         assert_eq!(decl.name, "x");
-        let ExprKind::Cast { expr: inner, target } = &decl.value.kind else {
+        let ExprKind::Cast {
+            expr: inner,
+            target,
+        } = &decl.value.kind
+        else {
             panic!("expected cast as declaration value");
         };
         assert!(matches!(inner.kind, ExprKind::Const(Const::Float(_))));
@@ -492,7 +512,10 @@ mod tests {
 
     fn assert_assign_target_named(target: &Expr, expected: &str) {
         let ExprKind::Identifier(name) = &target.kind else {
-            panic!("expected identifier assignment target, got {:?}", target.kind);
+            panic!(
+                "expected identifier assignment target, got {:?}",
+                target.kind
+            );
         };
         assert_eq!(name, expected);
     }
@@ -586,7 +609,11 @@ mod tests {
             panic!("expected outer array type");
         };
         assert_eq!(count, 3);
-        let TypeExprKind::Array { element_ty: inner, count: inner_n } = element_ty.kind else {
+        let TypeExprKind::Array {
+            element_ty: inner,
+            count: inner_n,
+        } = element_ty.kind
+        else {
             panic!("expected inner array type");
         };
         assert!(matches!(inner.kind, TypeExprKind::Int));
@@ -675,14 +702,22 @@ mod tests {
     fn parses_nested_subscript() {
         // `m[i][j]` → Subscript(Subscript(m, i), j)
         let expr = parser("m[i][j]").parse_expr().unwrap();
-        let ExprKind::Subscript { expr: outer_target, index: outer_idx } = expr.kind else {
+        let ExprKind::Subscript {
+            expr: outer_target,
+            index: outer_idx,
+        } = expr.kind
+        else {
             panic!("expected outer subscript");
         };
         let ExprKind::Identifier(j) = &outer_idx.kind else {
             panic!("expected identifier `j`");
         };
         assert_eq!(j, "j");
-        let ExprKind::Subscript { expr: inner_target, index: inner_idx } = &outer_target.kind else {
+        let ExprKind::Subscript {
+            expr: inner_target,
+            index: inner_idx,
+        } = &outer_target.kind
+        else {
             panic!("expected inner subscript");
         };
         let ExprKind::Identifier(m) = &inner_target.kind else {
@@ -966,7 +1001,9 @@ mod tests {
 
     #[test]
     fn parses_empty_struct_def() {
-        let decl = parser("let Empty = struct {};").parse_declaration().unwrap();
+        let decl = parser("let Empty = struct {};")
+            .parse_declaration()
+            .unwrap();
         let ExprKind::StructDef { fields } = decl.value.kind else {
             panic!("expected struct def");
         };
@@ -1009,9 +1046,15 @@ mod tests {
         assert_eq!(name, "Point");
         assert_eq!(fields.len(), 2);
         assert_eq!(fields[0].name, "x");
-        assert!(matches!(fields[0].value.kind, ExprKind::Const(Const::Int(1))));
+        assert!(matches!(
+            fields[0].value.kind,
+            ExprKind::Const(Const::Int(1))
+        ));
         assert_eq!(fields[1].name, "y");
-        assert!(matches!(fields[1].value.kind, ExprKind::Const(Const::Int(2))));
+        assert!(matches!(
+            fields[1].value.kind,
+            ExprKind::Const(Const::Int(2))
+        ));
     }
 
     #[test]
@@ -1099,7 +1142,10 @@ mod tests {
         };
         assert_eq!(name, "Outer");
         assert_eq!(fields.len(), 1);
-        assert!(matches!(fields[0].value.kind, ExprKind::StructLiteral { .. }));
+        assert!(matches!(
+            fields[0].value.kind,
+            ExprKind::StructLiteral { .. }
+        ));
     }
 
     #[test]
@@ -1188,7 +1234,11 @@ mod tests {
         };
         assert_callee_named(&callee, "g");
         assert_eq!(args.len(), 1);
-        let ExprKind::Call { callee: inner_callee, args: inner_args } = &args[0].kind else {
+        let ExprKind::Call {
+            callee: inner_callee,
+            args: inner_args,
+        } = &args[0].kind
+        else {
             panic!("expected inner call");
         };
         assert_callee_named(inner_callee, "f");
@@ -1288,5 +1338,72 @@ mod tests {
         // callee is foo.bar, a Field expression
         assert!(matches!(callee.kind, ExprKind::Field { .. }));
         assert_eq!(args.len(), 2);
+    }
+
+    #[test]
+    fn parses_cast_to_generic_type() {
+        let expr = parser("x as $T").parse_expr().unwrap();
+
+        let ExprKind::Cast {
+            expr: inner,
+            target,
+        } = expr.kind
+        else {
+            panic!("expected cast");
+        };
+
+        assert!(matches!(inner.kind, ExprKind::Identifier(ref n) if n == "x"));
+        assert!(matches!(target.kind, TypeExprKind::Named(ref n) if n == "$T"));
+    }
+
+    #[test]
+    fn parses_array_of_generic_type() {
+        let ty = parser("[$T; 3]").parse_type().unwrap();
+
+        let TypeExprKind::Array { element_ty, count } = ty.kind else {
+            panic!("expected array type");
+        };
+
+        assert_eq!(count, 3);
+        assert!(matches!(element_ty.kind, TypeExprKind::Named(ref n) if n == "$T"));
+    }
+
+    #[test]
+    fn parses_pointer_to_generic_type() {
+        let ty = parser("*$T").parse_type().unwrap();
+
+        let TypeExprKind::Ptr(inner) = ty.kind else {
+            panic!("expected pointer type");
+        };
+
+        assert!(matches!(inner.kind, TypeExprKind::Named(ref n) if n == "$T"));
+    }
+    #[test]
+    fn parses_declaration_with_multiple_generic_function_params() {
+        let decl = parser("let bar = (foo: $T, baz: $U, foz: T) { };")
+            .parse_declaration()
+            .unwrap();
+
+        assert_eq!(decl.name, "bar");
+
+        let ExprKind::Function {
+            params, return_ty, ..
+        } = decl.value.kind
+        else {
+            panic!("expected function literal");
+        };
+
+        assert_eq!(params.len(), 3);
+
+        assert_eq!(params[0].name, "foo");
+        assert!(matches!(params[0].ty.kind, TypeExprKind::Named(ref n) if n == "$T"));
+
+        assert_eq!(params[1].name, "baz");
+        assert!(matches!(params[1].ty.kind, TypeExprKind::Named(ref n) if n == "$U"));
+
+        assert_eq!(params[2].name, "foz");
+        assert!(matches!(params[2].ty.kind, TypeExprKind::Named(ref n) if n == "T"));
+
+        assert!(return_ty.is_none());
     }
 }

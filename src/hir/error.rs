@@ -10,19 +10,50 @@ pub struct Error {
 
 #[derive(Debug, PartialEq)]
 pub enum ErrorKind {
-    NameNotFound { name: String },
-    AlreadyDefined { name: String },
-    NotCallable { found: Ty },
-    NotIndexable { found: Ty },
+    NameNotFound {
+        name: String,
+    },
+    AlreadyDefined {
+        name: String,
+    },
+    NotCallable {
+        found: Ty,
+    },
+    NotIndexable {
+        found: Ty,
+    },
     EmptyArrayLiteral,
-    LiteralOutOfRange { value: i32, target: Ty },
-    NotDereferencable { found: Ty },
-    UnknownType { name: String },
-    UnknownField { struct_name: String, field: String },
-    MissingFields { struct_name: String, missing: Vec<String> },
-    DuplicateField { struct_name: String, field: String },
-    NotAStruct { found: Ty },
-    DirectStructRecursion { name: String },
+    LiteralOutOfRange {
+        value: i32,
+        target: Ty,
+    },
+    NotDereferencable {
+        found: Ty,
+    },
+    UnknownType {
+        name: String,
+    },
+    UnknownField {
+        struct_name: String,
+        field: String,
+    },
+    MissingFields {
+        struct_name: String,
+        missing: Vec<String>,
+    },
+    DuplicateField {
+        struct_name: String,
+        field: String,
+    },
+    GenericIsAlsoAStruct {
+        name: String,
+    },
+    NotAStruct {
+        found: Ty,
+    },
+    DirectStructRecursion {
+        name: String,
+    },
     StructDefNotAllowedHere,
 }
 
@@ -69,7 +100,10 @@ impl fmt::Display for ErrorKind {
             ErrorKind::UnknownField { struct_name, field } => {
                 write!(f, "struct `{struct_name}` has no field `{field}`")
             }
-            ErrorKind::MissingFields { struct_name, missing } => {
+            ErrorKind::MissingFields {
+                struct_name,
+                missing,
+            } => {
                 write!(
                     f,
                     "struct literal for `{struct_name}` is missing fields: {}",
@@ -92,7 +126,13 @@ impl fmt::Display for ErrorKind {
                 )
             }
             ErrorKind::StructDefNotAllowedHere => {
-                write!(f, "struct definitions are only allowed as `let X = struct {{...}};`")
+                write!(
+                    f,
+                    "struct definitions are only allowed as `let X = struct {{...}};`"
+                )
+            }
+            ErrorKind::GenericIsAlsoAStruct { name } => {
+                write!(f, "the generic type {name} is already defined as a struct")
             }
         }
     }

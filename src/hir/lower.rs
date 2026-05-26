@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::{
     ast,
     hir::{
-        UnaryOperator,
+        TypeVar, TypeVarId, UnaryOperator,
         coerce::{coerce_int_literal, coerce_through_tails},
         error::{Error, ErrorKind},
         types::{
@@ -18,6 +18,8 @@ pub struct Lower {
     bindings: HashMap<LocalId, Ty>,
     structs: HashMap<String, StructDef>,
     id_gen: LocalIdGen,
+    type_vars: Vec<TypeVar>,
+    generic_functions: Vec<LocalId>,
 }
 
 impl Lower {
@@ -27,6 +29,8 @@ impl Lower {
             bindings: HashMap::default(),
             structs: HashMap::default(),
             id_gen: LocalIdGen::new(),
+            type_vars: Vec::default(),
+            generic_functions: Vec::default(),
         }
     }
     pub fn lower_program(&mut self, p: ast::Program) -> Result<Program, Error> {
@@ -91,6 +95,12 @@ impl Lower {
             self.pre_register_top_level(decl)?;
         }
 
+        // // Pass 3.5: lower generic functions
+        // let ids = self.generic_functions.iter().copied().collect::<Vec<_>>();
+        // for id in ids {
+        //     self.register_generic_func(id)?;
+        // }
+
         // Pass 4: lower the remaining declarations. Struct defs are skipped
         // since they're already recorded in self.structs.
         let mut decls = Vec::new();
@@ -129,6 +139,9 @@ impl Lower {
             .iter()
             .map(|p| self.lower_type(&p.ty))
             .collect::<Result<Vec<_>, _>>()?;
+
+        let is_generic = param_tys.iter().any(|param| param.is_generic());
+
         let return_ty = Box::new(match return_ty {
             Some(t) => self.lower_type(t)?,
             None => Ty::Unit,
@@ -139,8 +152,15 @@ impl Lower {
         };
 
         let id = self.id_gen.fresh();
-        self.current_scope_mut().insert(d.name.clone(), id);
+
+        if is_generic {
+            self.generic_functions.push(id);
+        } else {
+            self.current_scope_mut().insert(d.name.clone(), id);
+        }
+
         self.bindings.insert(id, ty);
+
         Ok(())
     }
 
@@ -242,10 +262,7 @@ impl Lower {
                 }
 
                 let mut body = self.lower_block(body)?;
-                if body.tail.ty != return_ty
-                    && return_ty.is_number()
-                    && return_ty != Ty::Int
-                {
+                if body.tail.ty != return_ty && return_ty.is_number() && return_ty != Ty::Int {
                     let tail = std::mem::replace(&mut body.tail, Box::new(unit_expr(body.span)));
                     body.tail = Box::new(coerce_through_tails(*tail, &return_ty)?);
                 }
@@ -487,7 +504,9 @@ impl Lower {
                     other => {
                         return Err(Error {
                             span: target.span,
-                            kind: ErrorKind::NotDereferencable { found: other.clone() },
+                            kind: ErrorKind::NotDereferencable {
+                                found: other.clone(),
+                            },
                         });
                     }
                 };
@@ -716,10 +735,8 @@ impl Lower {
                 if self.structs.contains_key(name) {
                     Ok(Ty::Struct(name.clone()))
                 } else {
-                    Err(Error {
-                        span: t.span,
-                        kind: ErrorKind::UnknownType { name: name.clone() },
-                    })
+                    let id = self.fresh_type_var(t)?;
+                    Ok(Ty::TypeVar(id))
                 }
             }
         }
@@ -755,6 +772,31 @@ impl Lower {
             }
         }
         None
+    }
+
+    fn fresh_type_var(&mut self, ty: &ast::TypeExpr) -> Result<TypeVarId, Error> {
+        let ast::TypeExprKind::Named(name) = &ty.kind else {
+            unreachable!()
+        };
+
+        let (name, definition) = if name.starts_with('$') {
+            (name.chars().skip(1).collect(), true)
+        } else {
+            (name.clone(), false)
+        };
+
+        if self.structs.contains_key(&name) {
+            return Err(Error {
+                span: ty.span,
+                kind: ErrorKind::GenericIsAlsoAStruct { name: name.clone() },
+            });
+        }
+
+        let type_var = TypeVar { name, definition };
+        let idx = self.type_vars.len();
+        self.type_vars.push(type_var);
+
+        Ok(TypeVarId(idx as u32))
     }
 }
 

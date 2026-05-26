@@ -58,6 +58,8 @@ pub enum TokenKind {
     F64,
     Identifier(String),
 
+    Dollar,
+
     Equal,
     Minus,
     Plus,
@@ -153,6 +155,7 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Struct => write!(f, "`struct`"),
             TokenKind::While => write!(f, "`while`"),
             TokenKind::Break => write!(f, "`break`"),
+            TokenKind::Dollar => write!(f, "`$`"),
 
             TokenKind::Eof => write!(f, "end of input"),
         }

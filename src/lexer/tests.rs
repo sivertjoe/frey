@@ -619,9 +619,15 @@ mod tests {
     fn tokenizes_float_with_exponent() {
         let tokens = tokenize("1e10 2.5E-3 1.5e+2").unwrap();
         let kinds: Vec<_> = tokens.iter().map(|t| &t.kind).collect();
-        assert!(matches!(kinds[0], TokenKind::Literal(Literal::Float(v)) if (*v - 1e10).abs() < 1.0));
-        assert!(matches!(kinds[1], TokenKind::Literal(Literal::Float(v)) if (*v - 2.5e-3).abs() < 1e-9));
-        assert!(matches!(kinds[2], TokenKind::Literal(Literal::Float(v)) if (*v - 150.0).abs() < 1e-3));
+        assert!(
+            matches!(kinds[0], TokenKind::Literal(Literal::Float(v)) if (*v - 1e10).abs() < 1.0)
+        );
+        assert!(
+            matches!(kinds[1], TokenKind::Literal(Literal::Float(v)) if (*v - 2.5e-3).abs() < 1e-9)
+        );
+        assert!(
+            matches!(kinds[2], TokenKind::Literal(Literal::Float(v)) if (*v - 150.0).abs() < 1e-3)
+        );
     }
 
     #[test]
@@ -762,5 +768,197 @@ mod tests {
     fn newline_in_string_is_error() {
         let result = tokenize("\"line1\nline2\"");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn tokenizes_dollar_token() {
+        let src = "$";
+
+        let tokens = tokenize(src).unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: TokenKind::Dollar,
+                    span: span(0, 1, 1, 1, 1, 2),
+                },
+                eof(1, 1, 2),
+            ]
+        );
+    }
+
+    #[test]
+    fn tokenizes_generic_parameter_type() {
+        let src = "$T";
+
+        let tokens = tokenize(src).unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: TokenKind::Dollar,
+                    span: span(0, 1, 1, 1, 1, 2),
+                },
+                Token {
+                    kind: TokenKind::Identifier("T".to_string()),
+                    span: span(1, 1, 2, 2, 1, 3),
+                },
+                eof(2, 1, 3),
+            ]
+        );
+    }
+
+    #[test]
+    fn tokenizes_generic_parameter_in_function_argument() {
+        let src = "let foo = (arg: $T) { }";
+
+        let tokens = tokenize(src).unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: TokenKind::Let,
+                    span: span(0, 1, 1, 3, 1, 4),
+                },
+                Token {
+                    kind: TokenKind::Identifier("foo".to_string()),
+                    span: span(4, 1, 5, 7, 1, 8),
+                },
+                Token {
+                    kind: TokenKind::Equal,
+                    span: span(8, 1, 9, 9, 1, 10),
+                },
+                Token {
+                    kind: TokenKind::LeftParen,
+                    span: span(10, 1, 11, 11, 1, 12),
+                },
+                Token {
+                    kind: TokenKind::Identifier("arg".to_string()),
+                    span: span(11, 1, 12, 14, 1, 15),
+                },
+                Token {
+                    kind: TokenKind::Colon,
+                    span: span(14, 1, 15, 15, 1, 16),
+                },
+                Token {
+                    kind: TokenKind::Dollar,
+                    span: span(16, 1, 17, 17, 1, 18),
+                },
+                Token {
+                    kind: TokenKind::Identifier("T".to_string()),
+                    span: span(17, 1, 18, 18, 1, 19),
+                },
+                Token {
+                    kind: TokenKind::RightParen,
+                    span: span(18, 1, 19, 19, 1, 20),
+                },
+                Token {
+                    kind: TokenKind::LeftBrace,
+                    span: span(20, 1, 21, 21, 1, 22),
+                },
+                Token {
+                    kind: TokenKind::RightBrace,
+                    span: span(22, 1, 23, 23, 1, 24),
+                },
+                eof(23, 1, 24),
+            ]
+        );
+    }
+
+    #[test]
+    fn tokenizes_multiple_generic_parameters_in_function_arguments() {
+        let src = "let bar = (foo: $T, baz: $U, foz: T) { }";
+
+        let tokens = tokenize(src).unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: TokenKind::Let,
+                    span: span(0, 1, 1, 3, 1, 4),
+                },
+                Token {
+                    kind: TokenKind::Identifier("bar".to_string()),
+                    span: span(4, 1, 5, 7, 1, 8),
+                },
+                Token {
+                    kind: TokenKind::Equal,
+                    span: span(8, 1, 9, 9, 1, 10),
+                },
+                Token {
+                    kind: TokenKind::LeftParen,
+                    span: span(10, 1, 11, 11, 1, 12),
+                },
+                Token {
+                    kind: TokenKind::Identifier("foo".to_string()),
+                    span: span(11, 1, 12, 14, 1, 15),
+                },
+                Token {
+                    kind: TokenKind::Colon,
+                    span: span(14, 1, 15, 15, 1, 16),
+                },
+                Token {
+                    kind: TokenKind::Dollar,
+                    span: span(16, 1, 17, 17, 1, 18),
+                },
+                Token {
+                    kind: TokenKind::Identifier("T".to_string()),
+                    span: span(17, 1, 18, 18, 1, 19),
+                },
+                Token {
+                    kind: TokenKind::Comma,
+                    span: span(18, 1, 19, 19, 1, 20),
+                },
+                Token {
+                    kind: TokenKind::Identifier("baz".to_string()),
+                    span: span(20, 1, 21, 23, 1, 24),
+                },
+                Token {
+                    kind: TokenKind::Colon,
+                    span: span(23, 1, 24, 24, 1, 25),
+                },
+                Token {
+                    kind: TokenKind::Dollar,
+                    span: span(25, 1, 26, 26, 1, 27),
+                },
+                Token {
+                    kind: TokenKind::Identifier("U".to_string()),
+                    span: span(26, 1, 27, 27, 1, 28),
+                },
+                Token {
+                    kind: TokenKind::Comma,
+                    span: span(27, 1, 28, 28, 1, 29),
+                },
+                Token {
+                    kind: TokenKind::Identifier("foz".to_string()),
+                    span: span(29, 1, 30, 32, 1, 33),
+                },
+                Token {
+                    kind: TokenKind::Colon,
+                    span: span(32, 1, 33, 33, 1, 34),
+                },
+                Token {
+                    kind: TokenKind::Identifier("T".to_string()),
+                    span: span(34, 1, 35, 35, 1, 36),
+                },
+                Token {
+                    kind: TokenKind::RightParen,
+                    span: span(35, 1, 36, 36, 1, 37),
+                },
+                Token {
+                    kind: TokenKind::LeftBrace,
+                    span: span(37, 1, 38, 38, 1, 39),
+                },
+                Token {
+                    kind: TokenKind::RightBrace,
+                    span: span(39, 1, 40, 40, 1, 41),
+                },
+                eof(40, 1, 41),
+            ]
+        );
     }
 }
