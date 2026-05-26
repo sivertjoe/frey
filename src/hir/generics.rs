@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use crate::hir::error::{Error, ErrorKind};
 use crate::hir::types::{Ty, TypeVarId};
 
-/// Recurses through a `Ty` looking for `Ty::TypeVar` anywhere inside it.
 pub fn ty_has_typevars(ty: &Ty) -> bool {
     match ty {
         Ty::TypeVar(_) => true,
@@ -12,13 +11,11 @@ pub fn ty_has_typevars(ty: &Ty) -> bool {
         Ty::Function { params, return_ty } => {
             params.iter().any(ty_has_typevars) || ty_has_typevars(return_ty)
         }
+        Ty::GenericStruct { args, .. } => args.iter().any(ty_has_typevars),
         _ => false,
     }
 }
 
-/// Appends every distinct `TypeVarId` found in `ty` (in encounter order) to
-/// `out`. Used to collect the type parameters of a generic function's
-/// signature in a stable order.
 pub fn collect_typevars(ty: &Ty, out: &mut Vec<TypeVarId>) {
     match ty {
         Ty::TypeVar(id) => {
@@ -34,36 +31,21 @@ pub fn collect_typevars(ty: &Ty, out: &mut Vec<TypeVarId>) {
             }
             collect_typevars(return_ty, out);
         }
+        Ty::GenericStruct { args, .. } => {
+            for a in args {
+                collect_typevars(a, out);
+            }
+        }
         _ => {}
     }
 }
 
-/// Walks `ty` and substitutes any `Ty::TypeVar(id)` for `subst[id]` (when
-/// present), recursively. Leaves unmapped TypeVars in place.
-pub fn substitute_ty(ty: &Ty, subst: &HashMap<TypeVarId, Ty>) -> Ty {
-    match ty {
-        Ty::TypeVar(id) => subst.get(id).cloned().unwrap_or(Ty::TypeVar(*id)),
-        Ty::Ptr(inner) => Ty::Ptr(Box::new(substitute_ty(inner, subst))),
-        Ty::Array { element, count } => Ty::Array {
-            element: Box::new(substitute_ty(element, subst)),
-            count: *count,
-        },
-        Ty::Function { params, return_ty } => Ty::Function {
-            params: params.iter().map(|p| substitute_ty(p, subst)).collect(),
-            return_ty: Box::new(substitute_ty(return_ty, subst)),
-        },
-        _ => ty.clone(),
-    }
-}
-
-/// Tries to bind type variables in `param_ty` to concrete bits of `arg_ty`,
-/// updating `subst`. Errors if the structures disagree or if the same
-/// TypeVar would have to bind to two different concrete types.
 pub fn unify(
     param_ty: &Ty,
     arg_ty: &Ty,
     span: crate::lexer::types::Span,
     subst: &mut HashMap<TypeVarId, Ty>,
+    struct_origins: &HashMap<String, (String, Vec<Ty>)>,
 ) -> Result<(), Error> {
     match (param_ty, arg_ty) {
         (Ty::TypeVar(id), concrete) => {
@@ -83,7 +65,7 @@ pub fn unify(
                 Ok(())
             }
         }
-        (Ty::Ptr(p), Ty::Ptr(a)) => unify(p, a, span, subst),
+        (Ty::Ptr(p), Ty::Ptr(a)) => unify(p, a, span, subst, struct_origins),
         (
             Ty::Array {
                 element: ep,
@@ -93,7 +75,7 @@ pub fn unify(
                 element: ea,
                 count: ca,
             },
-        ) if cp == ca => unify(ep, ea, span, subst),
+        ) if cp == ca => unify(ep, ea, span, subst, struct_origins),
         (
             Ty::Function {
                 params: ps,
@@ -105,9 +87,44 @@ pub fn unify(
             },
         ) if ps.len() == as_.len() => {
             for (p, a) in ps.iter().zip(as_.iter()) {
-                unify(p, a, span, subst)?;
+                unify(p, a, span, subst, struct_origins)?;
             }
-            unify(rp, ra, span, subst)
+            unify(rp, ra, span, subst, struct_origins)
+        }
+        (
+            Ty::GenericStruct {
+                name: n1,
+                args: a1,
+            },
+            Ty::GenericStruct {
+                name: n2,
+                args: a2,
+            },
+        ) if n1 == n2 && a1.len() == a2.len() => {
+            for (x, y) in a1.iter().zip(a2.iter()) {
+                unify(x, y, span, subst, struct_origins)?;
+            }
+            Ok(())
+        }
+        (Ty::GenericStruct { name, args }, Ty::Struct(spec))
+        | (Ty::Struct(spec), Ty::GenericStruct { name, args }) => {
+            match struct_origins.get(spec) {
+                Some((tname, targs))
+                    if tname == name && targs.len() == args.len() =>
+                {
+                    for (x, y) in args.iter().zip(targs.iter()) {
+                        unify(x, y, span, subst, struct_origins)?;
+                    }
+                    Ok(())
+                }
+                _ => Err(Error {
+                    span,
+                    kind: ErrorKind::TypeMismatch {
+                        expected: param_ty.clone(),
+                        found: arg_ty.clone(),
+                    },
+                }),
+            }
         }
         (a, b) if a == b => Ok(()),
         (a, b) => Err(Error {

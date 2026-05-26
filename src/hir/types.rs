@@ -53,6 +53,10 @@ pub enum Ty {
     Ptr(Box<Ty>),
     Struct(String),
     TypeVar(TypeVarId),
+    GenericStruct {
+        name: String,
+        args: Vec<Ty>,
+    },
 }
 
 impl Ty {
@@ -267,6 +271,16 @@ impl fmt::Debug for Ty {
             Ty::Ptr(target) => write!(f, "*{target:?}"),
             Ty::Struct(name) => write!(f, "{name}"),
             Ty::TypeVar(id) => write!(f, "type var id {}", id.0),
+            Ty::GenericStruct { name, args } => {
+                write!(f, "{name}<")?;
+                for (i, a) in args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{a:?}")?;
+                }
+                write!(f, ">")
+            }
         }
     }
 }

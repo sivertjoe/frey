@@ -20,7 +20,9 @@ impl<'ctx> Codegen<'ctx> {
             Ty::Array { element, count } => self.lower_ty(element).array_type(*count as u32).into(),
             Ty::Struct(name) => self.struct_llvm[name].into(),
 
-            Ty::TypeVar(_) => todo!(),
+            Ty::TypeVar(_) | Ty::GenericStruct { .. } => {
+                unreachable!("specialization should have eliminated TypeVars and GenericStructs")
+            }
         }
     }
 
@@ -62,7 +64,9 @@ impl<'ctx> Codegen<'ctx> {
                 .array_type(*count as u32)
                 .fn_type(param_types, false),
             Ty::Struct(name) => self.struct_llvm[name].fn_type(param_types, false),
-            Ty::TypeVar(_) => todo!(),
+            Ty::TypeVar(_) | Ty::GenericStruct { .. } => {
+                unreachable!("specialization should have eliminated TypeVars and GenericStructs")
+            }
         }
     }
 }

@@ -6,7 +6,7 @@ use crate::{
         TypeVar, TypeVarId, UnaryOperator,
         coerce::{coerce_int_literal, coerce_through_tails},
         error::{Error, ErrorKind},
-        generics::{collect_typevars, substitute_ty, ty_has_typevars, unify},
+        generics::{collect_typevars, ty_has_typevars, unify},
         types::{
             Block, BlockItem, Const, Declaration, Expr, ExprKind, Function, FunctionCall, LocalId,
             LocalIdGen, Param, Program, Statement, StatementKind, StructDef, Ty,
@@ -49,12 +49,9 @@ pub struct Lower {
     specialization_cache: HashMap<(LocalId, Vec<Ty>), LocalId>,
     pending_specializations: Vec<Declaration>,
 
-    // Generic struct templates, keyed by name. Concrete (specialized)
-    // struct definitions live in `structs` and get codegen'd directly.
     struct_templates: HashMap<String, StructDef>,
-    // Cache: (template name, concrete arg types in declaration order) →
-    // specialized struct name.
     struct_specialization_cache: HashMap<(String, Vec<Ty>), String>,
+    struct_template_origin: HashMap<String, (String, Vec<Ty>)>,
 }
 
 impl Lower {
@@ -72,6 +69,7 @@ impl Lower {
             pending_specializations: Vec::default(),
             struct_templates: HashMap::default(),
             struct_specialization_cache: HashMap::default(),
+            struct_template_origin: HashMap::default(),
         }
     }
 
@@ -820,8 +818,36 @@ impl Lower {
                         kind: ExprKind::Deref(Box::new(target)),
                     };
                 }
-                let struct_name = match &target.ty {
-                    Ty::Struct(n) => n.clone(),
+                let (display_name, fields) = match &target.ty {
+                    Ty::Struct(n) => {
+                        let def = self
+                            .structs
+                            .get(n)
+                            .expect("typed Struct must be registered");
+                        (n.clone(), def.fields.clone())
+                    }
+                    Ty::GenericStruct { name, args } => {
+                        let template = self
+                            .struct_templates
+                            .get(name)
+                            .cloned()
+                            .expect("GenericStruct must reference a known template");
+                        let subst: HashMap<TypeVarId, Ty> = template
+                            .type_var_ids
+                            .iter()
+                            .zip(args.iter())
+                            .map(|(tv, ty)| (*tv, ty.clone()))
+                            .collect();
+                        let substituted_fields: Vec<(String, Ty)> = template
+                            .fields
+                            .iter()
+                            .map(|(fname, fty)| {
+                                let ty = self.substitute_ty(fty, &subst);
+                                (fname.clone(), ty)
+                            })
+                            .collect();
+                        (name.clone(), substituted_fields)
+                    }
                     other => {
                         return Err(Error {
                             span: target.span,
@@ -831,19 +857,15 @@ impl Lower {
                         });
                     }
                 };
-                let def = self
-                    .structs
-                    .get(&struct_name)
-                    .expect("typed Struct must be registered");
-                let (index, field_ty) = def
-                    .fields
+
+                let (index, field_ty) = fields
                     .iter()
                     .enumerate()
                     .find_map(|(i, (n, t))| (n == &name).then_some((i, t.clone())))
                     .ok_or_else(|| Error {
                         span: e.span,
                         kind: ErrorKind::UnknownField {
-                            struct_name: struct_name.clone(),
+                            struct_name: display_name,
                             field: name.clone(),
                         },
                     })?;
@@ -1076,8 +1098,18 @@ impl Lower {
                     .iter()
                     .map(|a| self.lower_type(a))
                     .collect::<Result<_, _>>()?;
-                let specialized = self.specialize_struct(&template, lowered_args, t.span)?;
-                Ok(Ty::Struct(specialized))
+                let still_generic = lowered_args.iter().any(|a| {
+                    ty_has_typevars(a) || matches!(a, Ty::GenericStruct { .. })
+                });
+                if still_generic {
+                    Ok(Ty::GenericStruct {
+                        name: name.clone(),
+                        args: lowered_args,
+                    })
+                } else {
+                    let specialized = self.specialize_struct(&template, lowered_args, t.span)?;
+                    Ok(Ty::Struct(specialized))
+                }
             }
         }
     }
@@ -1217,7 +1249,13 @@ impl Lower {
         for (fname, template_ty) in &template.fields {
             let value = lowered_by_name.get(fname).expect("checked above");
             let field_span = spans_by_name.get(fname).copied().unwrap_or(span);
-            unify(template_ty, &value.ty, field_span, &mut subst)?;
+            unify(
+                template_ty,
+                &value.ty,
+                field_span,
+                &mut subst,
+                &self.struct_template_origin,
+            )?;
         }
         for tv in &template.type_var_ids {
             if !subst.contains_key(tv) {
@@ -1281,17 +1319,19 @@ impl Lower {
         // pointer field (`*Self<T>`) finds the in-progress entry.
         self.struct_specialization_cache
             .insert(cache_key, mangled.clone());
+        self.struct_template_origin
+            .insert(mangled.clone(), (template.name.clone(), args.clone()));
 
         let mut subst = HashMap::new();
         for (tv, ty) in template.type_var_ids.iter().zip(args.iter()) {
             subst.insert(*tv, ty.clone());
         }
 
-        let new_fields = template
-            .fields
-            .iter()
-            .map(|(n, ty)| (n.clone(), substitute_ty(ty, &subst)))
-            .collect();
+        let fields = template.fields.clone();
+        let mut new_fields = Vec::with_capacity(fields.len());
+        for (n, ty) in fields {
+            new_fields.push((n, self.substitute_ty(&ty, &subst)));
+        }
 
         self.structs.insert(
             mangled.clone(),
@@ -1303,6 +1343,51 @@ impl Lower {
         );
 
         Ok(mangled)
+    }
+
+    fn substitute_ty(&mut self, ty: &Ty, subst: &HashMap<TypeVarId, Ty>) -> Ty {
+        match ty {
+            Ty::TypeVar(id) => subst.get(id).cloned().unwrap_or(Ty::TypeVar(*id)),
+            Ty::Ptr(inner) => Ty::Ptr(Box::new(self.substitute_ty(inner, subst))),
+            Ty::Array { element, count } => Ty::Array {
+                element: Box::new(self.substitute_ty(element, subst)),
+                count: *count,
+            },
+            Ty::Function { params, return_ty } => {
+                let params: Vec<Ty> = params
+                    .iter()
+                    .map(|p| self.substitute_ty(p, subst))
+                    .collect();
+                let return_ty = Box::new(self.substitute_ty(return_ty, subst));
+                Ty::Function { params, return_ty }
+            }
+            Ty::GenericStruct { name, args } => {
+                let new_args: Vec<Ty> = args
+                    .iter()
+                    .map(|a| self.substitute_ty(a, subst))
+                    .collect();
+                let still_generic = new_args.iter().any(|a| {
+                    ty_has_typevars(a) || matches!(a, Ty::GenericStruct { .. })
+                });
+                if still_generic {
+                    Ty::GenericStruct {
+                        name: name.clone(),
+                        args: new_args,
+                    }
+                } else {
+                    let template = self
+                        .struct_templates
+                        .get(name)
+                        .cloned()
+                        .expect("GenericStruct must reference a known template");
+                    let specialized = self
+                        .specialize_struct(&template, new_args, Span::default())
+                        .expect("specialize_struct cannot fail on concrete args");
+                    Ty::Struct(specialized)
+                }
+            }
+            _ => ty.clone(),
+        }
     }
 
     fn lower_unary(&self, op: ast::UnaryOperator) -> UnaryOperator {
@@ -1346,7 +1431,13 @@ impl Lower {
             });
         }
         for (param, arg_ty) in template.params.iter().zip(arg_tys.iter()) {
-            unify(&param.ty, arg_ty, call_span, &mut subst)?;
+            unify(
+                &param.ty,
+                arg_ty,
+                call_span,
+                &mut subst,
+                &self.struct_template_origin,
+            )?;
         }
 
         // Make sure every type var declared by the template is bound.
@@ -1381,16 +1472,18 @@ impl Lower {
 
         // Build the specialization signature.
         let mut new_params = Vec::with_capacity(template.params.len());
-        for p in &template.params {
+        let template_params = template.params.clone();
+        for p in &template_params {
             let new_param_id = self.id_gen.fresh();
+            let ty = self.substitute_ty(&p.ty, &subst);
             new_params.push(Param {
                 id: new_param_id,
                 span: p.span,
                 name: p.name.clone(),
-                ty: substitute_ty(&p.ty, &subst),
+                ty,
             });
         }
-        let new_return_ty = substitute_ty(&template.return_ty, &subst);
+        let new_return_ty = self.substitute_ty(&template.return_ty, &subst);
         let new_fn_ty = Ty::Function {
             params: new_params.iter().map(|p| p.ty.clone()).collect(),
             return_ty: Box::new(new_return_ty.clone()),
@@ -1401,7 +1494,7 @@ impl Lower {
         // old LocalId) get remapped to the new param LocalIds.
         let mut new_body = template.body.clone();
         let mut local_map: HashMap<LocalId, LocalId> = HashMap::new();
-        for (p_old, p_new) in template.params.iter().zip(new_params.iter()) {
+        for (p_old, p_new) in template_params.iter().zip(new_params.iter()) {
             local_map.insert(p_old.id, p_new.id);
         }
         self.substitute_block(&mut new_body, &subst, &mut local_map)?;
@@ -1445,7 +1538,7 @@ impl Lower {
         for item in &mut block.items {
             match item {
                 BlockItem::Declaration(d) => {
-                    d.ty = substitute_ty(&d.ty, subst);
+                    d.ty = self.substitute_ty(&d.ty, subst);
                     self.substitute_expr(&mut d.value, subst, local_map)?;
                     // Local declarations introduce a fresh LocalId in the
                     // specialization to keep ids distinct from the template's.
@@ -1471,7 +1564,7 @@ impl Lower {
         subst: &HashMap<TypeVarId, Ty>,
         local_map: &mut HashMap<LocalId, LocalId>,
     ) -> Result<(), Error> {
-        e.ty = substitute_ty(&e.ty, subst);
+        e.ty = self.substitute_ty(&e.ty, subst);
         // When a nested call is re-specialized, we need to update the Call
         // expression's result type to match the new specialization's return
         // type (its old ty was the template's return_ty, which may still
@@ -1512,7 +1605,7 @@ impl Lower {
                 }
             }
             ExprKind::Cast { target, expr } => {
-                *target = substitute_ty(target, subst);
+                *target = self.substitute_ty(target, subst);
                 self.substitute_expr(expr, subst, local_map)?;
             }
             ExprKind::Unary { operand, .. } => self.substitute_expr(operand, subst, local_map)?,
