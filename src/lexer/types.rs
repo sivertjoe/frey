@@ -59,6 +59,7 @@ pub enum TokenKind {
     Identifier(String),
 
     Dollar,
+    Hash,
 
     Equal,
     Minus,
@@ -156,6 +157,7 @@ impl std::fmt::Display for TokenKind {
             TokenKind::While => write!(f, "`while`"),
             TokenKind::Break => write!(f, "`break`"),
             TokenKind::Dollar => write!(f, "`$`"),
+            TokenKind::Hash => write!(f, "`#`"),
 
             TokenKind::Eof => write!(f, "end of input"),
         }

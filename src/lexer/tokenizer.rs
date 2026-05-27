@@ -68,6 +68,9 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, Error> {
             '$' => {
                 tokens.push(cursor.single(TokenKind::Dollar));
             }
+            '#' => {
+                tokens.push(cursor.single(TokenKind::Hash));
+            }
             '!' => match cursor.peek_second() {
                 Some('=') => tokens.push(cursor.double(TokenKind::NotEqual)),
                 _ => tokens.push(cursor.single(TokenKind::Not)),

@@ -269,6 +269,9 @@ impl Typechecker {
                 self.loop_depth -= 1;
                 result
             }
+            // Comptime-only nodes are folded away during specialization and
+            // never reach a function that is actually emitted.
+            ExprKind::TypeValue(_) | ExprKind::CompError(_) => Ok(()),
         }
     }
 
@@ -319,14 +322,12 @@ impl Typechecker {
         }
         self.check_expr(&body.tail)?;
 
-        // If the body terminates via a `return` statement at the end, the
-        // synthesized Unit tail is unreachable — skip the type check on it.
-        let ends_with_return = matches!(
-            body.items.last(),
-            Some(BlockItem::Statement(stmt))
-                if matches!(stmt.kind, StatementKind::Return(_))
-        );
-        if !ends_with_return && &body.tail.ty != return_ty {
+        // If control flow always diverts before reaching the synthesized Unit
+        // tail — a trailing `return`, or (after comptime folding) a block / if
+        // that returns — the tail is unreachable, so skip its type check.
+        let diverges = body.items.iter().any(crate::hir::comptime::item_diverges)
+            || crate::hir::comptime::expr_diverges(&body.tail);
+        if !diverges && &body.tail.ty != return_ty {
             return Err(Error {
                 span: body.tail.span,
                 kind: ErrorKind::TypeMismatch {

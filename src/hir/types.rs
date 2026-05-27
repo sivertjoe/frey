@@ -185,6 +185,12 @@ pub enum ExprKind {
         name: String,
         index: usize,
     },
+    /// A reified type value, used only inside `#comptime` function bodies.
+    /// Folded away during specialization; never reaches codegen.
+    TypeValue(Ty),
+    /// A `comperror(msg)` call. If reached during comptime evaluation it
+    /// aborts compilation; otherwise it is discarded by static-if folding.
+    CompError(String),
 }
 
 #[derive(Clone)]
@@ -346,6 +352,8 @@ impl fmt::Debug for ExprKind {
                 write!(f, "}}")
             }
             ExprKind::Field { target, name, .. } => write!(f, "{target:?}.{name}"),
+            ExprKind::TypeValue(ty) => write!(f, "TypeValue({ty:?})"),
+            ExprKind::CompError(msg) => write!(f, "CompError({msg:?})"),
         }
     }
 }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     ast,
@@ -52,6 +52,16 @@ pub struct Lower {
     struct_templates: HashMap<String, StructDef>,
     struct_specialization_cache: HashMap<(String, Vec<Ty>), String>,
     struct_template_origin: HashMap<String, (String, Vec<Ty>)>,
+
+    /// Ids of generic templates that came from `#comptime` declarations. When
+    /// one is specialized, the substitution pass folds comptime constructs
+    /// (type comparisons, `static if`) and drops unreachable code.
+    comptime_template_ids: HashSet<LocalId>,
+    /// True while lowering a `#comptime` function body — enables lowering of
+    /// `TypeValue` / `comperror` constructs that are illegal elsewhere.
+    in_comptime: bool,
+    /// True while substituting a comptime template's body — enables folding.
+    in_comptime_subst: bool,
 }
 
 impl Lower {
@@ -70,6 +80,9 @@ impl Lower {
             struct_templates: HashMap::default(),
             struct_specialization_cache: HashMap::default(),
             struct_template_origin: HashMap::default(),
+            comptime_template_ids: HashSet::default(),
+            in_comptime: false,
+            in_comptime_subst: false,
         }
     }
 
@@ -93,6 +106,34 @@ impl Lower {
         let id = TypeVarId(self.type_vars.len() as u32);
         self.type_vars.push(TypeVar { name });
         id
+    }
+
+    /// Declares each name from a `<$K, $V>` clause as a fresh type variable in
+    /// the current type-var scope, so later bare references (`K`, `V`) resolve.
+    /// A type-var scope must already be pushed.
+    fn declare_type_params(&mut self, names: &[String], span: Span) -> Result<(), Error> {
+        for name in names {
+            if self.structs.contains_key(name) || self.struct_templates.contains_key(name) {
+                return Err(Error {
+                    span,
+                    kind: ErrorKind::GenericIsAlsoAStruct { name: name.clone() },
+                });
+            }
+            if self
+                .type_var_scopes
+                .last()
+                .expect("declare_type_params requires a pushed scope")
+                .contains_key(name)
+            {
+                return Err(Error {
+                    span,
+                    kind: ErrorKind::GenericAlreadyDefined { name: name.clone() },
+                });
+            }
+            let id = self.fresh_type_var_id(name.clone());
+            self.type_var_scopes.last_mut().unwrap().insert(name.clone(), id);
+        }
+        Ok(())
     }
     pub fn lower_program(&mut self, p: ast::Program) -> Result<Program, Error> {
         let span = p
@@ -234,8 +275,15 @@ impl Lower {
             if matches!(decl.value.kind, ast::ExprKind::StructDef { .. }) {
                 continue;
             }
+            let is_comptime = decl.comptime;
+            self.in_comptime = is_comptime;
             let lowered = self.lower_declaration(decl)?;
-            if !self.register_if_generic_template(&lowered) {
+            self.in_comptime = false;
+            if self.register_if_generic_template(&lowered) {
+                if is_comptime {
+                    self.comptime_template_ids.insert(lowered.id);
+                }
+            } else {
                 decls.push(lowered);
             }
         }
@@ -291,7 +339,10 @@ impl Lower {
 
     fn pre_register_top_level(&mut self, d: &ast::Declaration) -> Result<(), Error> {
         let ast::ExprKind::Function {
-            params, return_ty, ..
+            type_params,
+            params,
+            return_ty,
+            ..
         } = &d.value.kind
         else {
             return Ok(());
@@ -311,6 +362,7 @@ impl Lower {
         // body's $T / T references resolve to the same TypeVarIds.
         self.push_type_var_scope();
         let lowered_sig = (|| -> Result<(Vec<Ty>, Ty), Error> {
+            self.declare_type_params(type_params, d.span)?;
             let param_tys = params
                 .iter()
                 .map(|p| self.lower_type(&p.ty))
@@ -463,6 +515,20 @@ impl Lower {
                 kind: ExprKind::Const(Const::Str(s)),
             }),
             ast::ExprKind::Identifier(name) => {
+                // Inside a `#comptime` body, a bare type-variable name used in
+                // expression position (e.g. `T` in `T == Int`) denotes a
+                // reified type value rather than a runtime binding.
+                if self.in_comptime
+                    && self.resolve(&name).is_none()
+                    && let Some(tv) = self.lookup_type_var(&name)
+                {
+                    return Ok(Expr {
+                        span: e.span,
+                        ty: Ty::Unit,
+                        kind: ExprKind::TypeValue(Ty::TypeVar(tv)),
+                    });
+                }
+
                 let Some(local_id) = self.resolve(&name) else {
                     return Err(Error {
                         span: e.span,
@@ -482,7 +548,25 @@ impl Lower {
                     kind: ExprKind::Local(local_id),
                 })
             }
+            ast::ExprKind::TypeValue(type_expr) => {
+                if !self.in_comptime {
+                    return Err(Error {
+                        span: e.span,
+                        kind: ErrorKind::ComptimeError {
+                            message: "a type can only be used as a value inside a #comptime function"
+                                .to_string(),
+                        },
+                    });
+                }
+                let ty = self.lower_type(&type_expr)?;
+                Ok(Expr {
+                    span: e.span,
+                    ty: Ty::Unit,
+                    kind: ExprKind::TypeValue(ty),
+                })
+            }
             ast::ExprKind::Function {
+                type_params,
                 params,
                 return_ty,
                 body,
@@ -491,11 +575,39 @@ impl Lower {
                 // Top-level functions go through lower_declaration directly
                 // (and don't hit this arm).
                 self.push_type_var_scope();
-                let result = self.lower_function_value(params, return_ty, body, e.span);
+                let result = self
+                    .declare_type_params(&type_params, e.span)
+                    .and_then(|()| self.lower_function_value(params, return_ty, body, e.span));
                 self.pop_type_var_scope();
                 result
             }
             ast::ExprKind::Call { callee, args } => {
+                // `comperror("msg")` inside a comptime body lowers to a
+                // CompError node that aborts compilation if reached during
+                // comptime evaluation.
+                if self.in_comptime
+                    && let ast::ExprKind::Identifier(n) = &callee.kind
+                    && n == "comperror"
+                {
+                    let message = match args.first().map(|a| &a.kind) {
+                        Some(ast::ExprKind::Const(ast::Const::Str(s))) => s.clone(),
+                        _ => {
+                            return Err(Error {
+                                span: e.span,
+                                kind: ErrorKind::ComptimeError {
+                                    message: "comperror expects a single string-literal argument"
+                                        .to_string(),
+                                },
+                            });
+                        }
+                    };
+                    return Ok(Expr {
+                        span: e.span,
+                        ty: Ty::Unit,
+                        kind: ExprKind::CompError(message),
+                    });
+                }
+
                 let callee = self.lower_expr(*callee)?;
 
                 let Ty::Function { params, return_ty } = callee.ty.clone() else {
@@ -1497,7 +1609,13 @@ impl Lower {
         for (p_old, p_new) in template_params.iter().zip(new_params.iter()) {
             local_map.insert(p_old.id, p_new.id);
         }
-        self.substitute_block(&mut new_body, &subst, &mut local_map)?;
+        // Comptime templates fold their type-introspection during this walk.
+        let is_comptime = self.comptime_template_ids.contains(&template_id);
+        let prev_comptime_subst = self.in_comptime_subst;
+        self.in_comptime_subst = is_comptime;
+        let subst_result = self.substitute_block(&mut new_body, &subst, &mut local_map);
+        self.in_comptime_subst = prev_comptime_subst;
+        subst_result?;
 
         // Build the specialization's Declaration. Compute the mangled name
         // up front so we don't keep borrowing `template.name` while
@@ -1535,26 +1653,61 @@ impl Lower {
         subst: &HashMap<TypeVarId, Ty>,
         local_map: &mut HashMap<LocalId, LocalId>,
     ) -> Result<(), Error> {
-        for item in &mut block.items {
-            match item {
-                BlockItem::Declaration(d) => {
-                    d.ty = self.substitute_ty(&d.ty, subst);
-                    self.substitute_expr(&mut d.value, subst, local_map)?;
-                    // Local declarations introduce a fresh LocalId in the
-                    // specialization to keep ids distinct from the template's.
-                    let new_id = self.id_gen.fresh();
-                    local_map.insert(d.id, new_id);
-                    d.id = new_id;
-                    self.bindings.insert(new_id, d.ty.clone());
+        if self.in_comptime_subst {
+            // Process items until one diverges, then drop everything after it
+            // (including the tail) as unreachable. This is what stops a
+            // fall-through `comperror` from firing once an earlier static-if
+            // branch has been selected and returns.
+            let mut new_items = Vec::new();
+            let mut diverged = false;
+            for mut item in std::mem::take(&mut block.items) {
+                self.substitute_block_item(&mut item, subst, local_map)?;
+                let d = crate::hir::comptime::item_diverges(&item);
+                new_items.push(item);
+                if d {
+                    diverged = true;
+                    break;
                 }
-                BlockItem::Statement(s) => match &mut s.kind {
-                    StatementKind::Return(e) => self.substitute_expr(e, subst, local_map)?,
-                    StatementKind::Expr(e) => self.substitute_expr(e, subst, local_map)?,
-                    StatementKind::Break => {}
-                },
             }
+            block.items = new_items;
+            if diverged {
+                block.tail = Box::new(unit_expr(block.span));
+            } else {
+                self.substitute_expr(&mut block.tail, subst, local_map)?;
+            }
+            return Ok(());
+        }
+
+        for item in &mut block.items {
+            self.substitute_block_item(item, subst, local_map)?;
         }
         self.substitute_expr(&mut block.tail, subst, local_map)?;
+        Ok(())
+    }
+
+    fn substitute_block_item(
+        &mut self,
+        item: &mut BlockItem,
+        subst: &HashMap<TypeVarId, Ty>,
+        local_map: &mut HashMap<LocalId, LocalId>,
+    ) -> Result<(), Error> {
+        match item {
+            BlockItem::Declaration(d) => {
+                d.ty = self.substitute_ty(&d.ty, subst);
+                self.substitute_expr(&mut d.value, subst, local_map)?;
+                // Local declarations introduce a fresh LocalId in the
+                // specialization to keep ids distinct from the template's.
+                let new_id = self.id_gen.fresh();
+                local_map.insert(d.id, new_id);
+                d.id = new_id;
+                self.bindings.insert(new_id, d.ty.clone());
+            }
+            BlockItem::Statement(s) => match &mut s.kind {
+                StatementKind::Return(e) => self.substitute_expr(e, subst, local_map)?,
+                StatementKind::Expr(e) => self.substitute_expr(e, subst, local_map)?,
+                StatementKind::Break => {}
+            },
+        }
         Ok(())
     }
 
@@ -1564,12 +1717,42 @@ impl Lower {
         subst: &HashMap<TypeVarId, Ty>,
         local_map: &mut HashMap<LocalId, LocalId>,
     ) -> Result<(), Error> {
+        let span = e.span;
+
+        // Comptime `static if`: when the condition is comptime-known, fold to
+        // the taken branch and discard the other, so its dead code (including
+        // any `comperror`) is never evaluated.
+        if self.in_comptime_subst {
+            let mut replacement: Option<Expr> = None;
+            if let ExprKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } = &mut e.kind
+            {
+                self.substitute_expr(condition, subst, local_map)?;
+                if let ExprKind::Const(Const::Int(n)) = &condition.kind {
+                    let n = *n;
+                    let taken = if n != 0 { then_branch } else { else_branch };
+                    replacement = Some(std::mem::replace(taken.as_mut(), unit_expr(span)));
+                }
+            }
+            if let Some(mut taken) = replacement {
+                self.substitute_expr(&mut taken, subst, local_map)?;
+                *e = taken;
+                return Ok(());
+            }
+        }
+
         e.ty = self.substitute_ty(&e.ty, subst);
         // When a nested call is re-specialized, we need to update the Call
         // expression's result type to match the new specialization's return
         // type (its old ty was the template's return_ty, which may still
         // contain TypeVars that this substitution didn't bind).
         let mut updated_call_ty: Option<Ty> = None;
+        // When a comptime comparison folds to a constant, stash it and rewrite
+        // `e` once the `&mut e.kind` borrow below has ended.
+        let mut comptime_const_fold: Option<i32> = None;
         match &mut e.kind {
             ExprKind::Const(_) => {}
             ExprKind::Local(id) => {
@@ -1610,9 +1793,15 @@ impl Lower {
             }
             ExprKind::Unary { operand, .. } => self.substitute_expr(operand, subst, local_map)?,
             ExprKind::Block(b) => self.substitute_block(b, subst, local_map)?,
-            ExprKind::Binary { lhs, rhs, .. } => {
+            ExprKind::Binary { op, lhs, rhs } => {
                 self.substitute_expr(lhs, subst, local_map)?;
                 self.substitute_expr(rhs, subst, local_map)?;
+                if self.in_comptime_subst
+                    && let Some(crate::hir::comptime::CtValue::Bool(b)) =
+                        crate::hir::comptime::eval_binary(*op, lhs, rhs)
+                {
+                    comptime_const_fold = Some(if b { 1 } else { 0 });
+                }
             }
             ExprKind::If {
                 condition,
@@ -1648,9 +1837,24 @@ impl Lower {
                 }
             }
             ExprKind::Field { target, .. } => self.substitute_expr(target, subst, local_map)?,
+            ExprKind::TypeValue(ty) => {
+                *ty = self.substitute_ty(ty, subst);
+            }
+            ExprKind::CompError(message) => {
+                return Err(Error {
+                    span,
+                    kind: ErrorKind::ComptimeError {
+                        message: message.clone(),
+                    },
+                });
+            }
         }
         if let Some(ty) = updated_call_ty {
             e.ty = ty;
+        }
+        if let Some(n) = comptime_const_fold {
+            e.kind = ExprKind::Const(Const::Int(n));
+            e.ty = Ty::Int;
         }
         Ok(())
     }

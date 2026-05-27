@@ -381,6 +381,9 @@ impl<'ctx> Codegen<'ctx> {
                     }
                 }
             }
+            ExprKind::TypeValue(_) | ExprKind::CompError(_) => {
+                unreachable!("comptime-only nodes are eliminated during specialization")
+            }
         }
     }
 

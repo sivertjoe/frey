@@ -79,6 +79,10 @@ pub enum ErrorKind {
         expected: usize,
         found: usize,
     },
+    /// Raised by a `comperror(...)` call reached during comptime evaluation.
+    ComptimeError {
+        message: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -191,6 +195,9 @@ impl fmt::Display for ErrorKind {
                     f,
                     "struct `{name}` expects {expected} type argument(s), got {found}"
                 )
+            }
+            ErrorKind::ComptimeError { message } => {
+                write!(f, "{message}")
             }
         }
     }

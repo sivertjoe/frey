@@ -116,7 +116,21 @@ impl Parser {
     }
 
     pub(super) fn parse_declaration(&mut self) -> Result<Declaration, Error> {
-        let start = self.expect(TokenKind::Let)?.span;
+        // Optional `#comptime` attribute: `#comptime let ... = ...;`.
+        let (comptime, attr_span) = if self.check(TokenKind::Hash) {
+            let hash = self.expect(TokenKind::Hash)?;
+            let name_tok = self.iter.consume().expect("lexer emits eof");
+            match &name_tok.kind {
+                TokenKind::Identifier(n) if n == "comptime" => {}
+                _ => return Err(Error::unexpected(&name_tok, "`comptime`")),
+            }
+            (true, Some(hash.span))
+        } else {
+            (false, None)
+        };
+
+        let let_span = self.expect(TokenKind::Let)?.span;
+        let start = attr_span.unwrap_or(let_span);
         let mutable = if self.check(TokenKind::Mut) {
             self.expect(TokenKind::Mut)?;
             true
@@ -132,6 +146,7 @@ impl Parser {
             id: self.id_gen.fresh(),
             span: start.join(expr.span),
             mutable,
+            comptime,
             name,
             value: expr,
         })
@@ -319,7 +334,7 @@ impl Parser {
 
         while !matches!(self.iter.peek(), Some(t) if t.kind == TokenKind::RightBrace) {
             match &self.iter.peek().expect("lexer emits eof").kind {
-                TokenKind::Let => {
+                TokenKind::Let | TokenKind::Hash => {
                     let decl = self.parse_declaration()?;
                     items.push(BlockItem::Declaration(decl));
                 }
@@ -620,34 +635,11 @@ impl Parser {
         let start = self.expect(TokenKind::Struct)?.span;
 
         // Optional type parameter list: struct<$K, $V> { ... }
-        let mut type_params: Vec<String> = Vec::new();
-        if self.check(TokenKind::LessThan) {
-            self.expect(TokenKind::LessThan)?;
-            while !self.check(TokenKind::GreaterThan) {
-                if !type_params.is_empty() {
-                    self.expect(TokenKind::Comma)?;
-                    if self.check(TokenKind::GreaterThan) {
-                        break;
-                    }
-                }
-                self.expect(TokenKind::Dollar)?;
-                let name_tok = self.iter.consume().expect("lexer emits eof");
-                let TokenKind::Identifier(name) = name_tok.kind else {
-                    return Err(Error::unexpected(&name_tok, "generic type name"));
-                };
-                if type_params.iter().any(|n| n == &name) {
-                    return Err(Error::unexpected(
-                        &Token {
-                            kind: TokenKind::Identifier(name.clone()),
-                            span: name_tok.span,
-                        },
-                        "unique generic type name",
-                    ));
-                }
-                type_params.push(name);
-            }
-            self.expect(TokenKind::GreaterThan)?;
-        }
+        let type_params = if self.check(TokenKind::LessThan) {
+            self.parse_type_param_list()?
+        } else {
+            Vec::new()
+        };
 
         self.expect(TokenKind::LeftBrace)?;
         let mut fields = Vec::new();
@@ -677,6 +669,78 @@ impl Parser {
             kind: ExprKind::StructDef {
                 type_params,
                 fields,
+            },
+        })
+    }
+
+    /// Parses a `<$K, $V>` generic parameter list, returning the names without
+    /// the `$`. The opening `<` must be the current token.
+    fn parse_type_param_list(&mut self) -> Result<Vec<String>, Error> {
+        self.expect(TokenKind::LessThan)?;
+        let mut type_params: Vec<String> = Vec::new();
+        while !self.check(TokenKind::GreaterThan) {
+            if !type_params.is_empty() {
+                self.expect(TokenKind::Comma)?;
+                if self.check(TokenKind::GreaterThan) {
+                    break;
+                }
+            }
+            self.expect(TokenKind::Dollar)?;
+            let name_tok = self.iter.consume().expect("lexer emits eof");
+            let TokenKind::Identifier(name) = name_tok.kind else {
+                return Err(Error::unexpected(&name_tok, "generic type name"));
+            };
+            if type_params.iter().any(|n| n == &name) {
+                return Err(Error::unexpected(
+                    &Token {
+                        kind: TokenKind::Identifier(name.clone()),
+                        span: name_tok.span,
+                    },
+                    "unique generic type name",
+                ));
+            }
+            type_params.push(name);
+        }
+        self.expect(TokenKind::GreaterThan)?;
+        Ok(type_params)
+    }
+
+    /// Parses the `(params) [-> ret] { body }` tail of a function literal,
+    /// given an already-parsed (possibly empty) generic parameter list. The
+    /// opening `(` must be the current token.
+    fn finish_function_literal(
+        &mut self,
+        start: crate::lexer::types::Span,
+        type_params: Vec<String>,
+    ) -> Result<Expr, Error> {
+        self.expect(TokenKind::LeftParen)?;
+        let mut params = Vec::new();
+        while !matches!(self.iter.peek(), Some(t) if t.kind == TokenKind::RightParen) {
+            if !params.is_empty() {
+                self.expect(TokenKind::Comma)?;
+            }
+            params.push(self.parse_param()?);
+        }
+        self.expect(TokenKind::RightParen)?;
+
+        let return_ty = if self.check(TokenKind::Minus) {
+            self.expect(TokenKind::Minus)?;
+            self.expect(TokenKind::GreaterThan)?;
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+
+        let body = self.parse_block()?;
+        let span = start.join(body.span);
+        Ok(Expr {
+            id: self.id_gen.fresh(),
+            span,
+            kind: ExprKind::Function {
+                type_params,
+                params,
+                return_ty,
+                body,
             },
         })
     }
@@ -728,6 +792,13 @@ impl Parser {
                 })
             }
             TokenKind::Struct => return self.parse_struct_def(),
+            // A leading generic parameter list introduces a generic function
+            // literal: `<$K, $V>(params) -> ret { body }`.
+            TokenKind::LessThan => {
+                let start = tok.span;
+                let type_params = self.parse_type_param_list()?;
+                return self.finish_function_literal(start, type_params);
+            }
             TokenKind::LeftBracket => {
                 let start = self.expect(TokenKind::LeftBracket)?.span;
 
@@ -766,38 +837,8 @@ impl Parser {
                 );
 
                 if is_function_literal {
-                    let left = self.expect(TokenKind::LeftParen)?;
-
-                    let mut params = Vec::new();
-                    while !matches!(self.iter.peek(), Some(t) if t.kind == TokenKind::RightParen) {
-                        if !params.is_empty() {
-                            self.expect(TokenKind::Comma)?;
-                        }
-                        params.push(self.parse_param()?);
-                    }
-
-                    self.expect(TokenKind::RightParen)?;
-
-                    let return_ty = if self.check(TokenKind::Minus) {
-                        self.expect(TokenKind::Minus)?;
-                        self.expect(TokenKind::GreaterThan)?;
-                        Some(self.parse_type()?)
-                    } else {
-                        None
-                    };
-
-                    let body = self.parse_block()?;
-
-                    let span = left.span.join(body.span);
-                    Ok(Expr {
-                        id: self.id_gen.fresh(),
-                        span,
-                        kind: ExprKind::Function {
-                            params,
-                            return_ty,
-                            body,
-                        },
-                    })
+                    let start = self.iter.peek().expect("lexer emits eof").span;
+                    self.finish_function_literal(start, Vec::new())
                 } else {
                     let left = self.expect(TokenKind::LeftParen)?.span;
                     let mut expr = self.parse_expr()?;
@@ -855,6 +896,29 @@ impl Parser {
                         condition: Box::new(condition),
                         body,
                     },
+                })
+            }
+            // Type keywords in expression position are only meaningful inside
+            // a `#comptime` function (e.g. the `Int` in `T == Int`). The parser
+            // accepts them as a `TypeValue`; lowering rejects them outside
+            // comptime.
+            TokenKind::Int
+            | TokenKind::UInt
+            | TokenKind::Float
+            | TokenKind::I8
+            | TokenKind::I32
+            | TokenKind::I64
+            | TokenKind::U8
+            | TokenKind::U32
+            | TokenKind::U64
+            | TokenKind::F32
+            | TokenKind::F64 => {
+                let ty = self.parse_type()?;
+                let span = ty.span;
+                Ok(Expr {
+                    id: self.id_gen.fresh(),
+                    span,
+                    kind: ExprKind::TypeValue(ty),
                 })
             }
             _ => Err(Error::unexpected(tok, "expression")),

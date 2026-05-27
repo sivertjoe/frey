@@ -34,6 +34,7 @@ pub struct Declaration {
     pub id: NodeId,
     pub span: Span,
     pub mutable: bool,
+    pub comptime: bool,
     pub name: String,
     pub value: Expr,
 }
@@ -109,7 +110,11 @@ pub struct Expr {
 pub enum ExprKind {
     Const(Const),
     Identifier(String),
+    /// A type used in expression position (only meaningful inside a
+    /// `#comptime` function), e.g. the `Int` in `T == Int`.
+    TypeValue(TypeExpr),
     Function {
+        type_params: Vec<String>,
         params: Vec<Param>,
         return_ty: Option<TypeExpr>,
         body: Block,
@@ -255,6 +260,7 @@ impl fmt::Debug for Declaration {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Declaration")
             .field("mutable", &self.mutable)
+            .field("comptime", &self.comptime)
             .field("name", &self.name)
             .field("value", &self.value)
             .finish()

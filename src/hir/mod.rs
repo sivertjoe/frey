@@ -1,4 +1,5 @@
 mod coerce;
+pub mod comptime;
 pub mod error;
 mod generics;
 mod lower;
