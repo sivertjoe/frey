@@ -4,3 +4,6 @@
 *.exe
 test.frey
 test
+
+# Zed dev-extension build artifacts (cloned grammar repo + compiled .wasm)
+editors/zed/grammars/
