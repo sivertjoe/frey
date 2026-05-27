@@ -55,6 +55,7 @@ fn stmt_diverges(s: &Statement) -> bool {
     match &s.kind {
         StatementKind::Return(_) => true,
         StatementKind::Break => false,
+        StatementKind::Defer(_) => false,
         StatementKind::Expr(e) => expr_diverges(e),
     }
 }

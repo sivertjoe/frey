@@ -156,6 +156,19 @@ mod tests {
     }
 
     #[test]
+    fn parses_defer_statement() {
+        let block = parser("{ defer free(p); 0 }").parse_block().unwrap();
+        assert_eq!(block.items.len(), 1);
+        let BlockItem::Statement(s) = &block.items[0] else {
+            panic!("expected a statement");
+        };
+        let StatementKind::Defer(expr) = &s.kind else {
+            panic!("expected a defer statement");
+        };
+        assert!(matches!(expr.kind, ExprKind::Call { .. }));
+    }
+
+    #[test]
     fn parses_unary_minus() {
         let expr = parser("-5").parse_expr().unwrap();
         let ExprKind::Unary { op, expr: inner } = expr.kind else {

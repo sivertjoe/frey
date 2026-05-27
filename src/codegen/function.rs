@@ -89,18 +89,22 @@ impl<'ctx> Codegen<'ctx> {
     }
 
     fn lower_function_body(&mut self, block: Block) -> Result<(), Error> {
+        self.defer_scopes.push(Vec::new());
         for item in block.items {
             match item {
                 BlockItem::Declaration(d) => self.lower_local_decl(d)?,
                 BlockItem::Statement(s) => self.lower_statement(s)?,
             }
         }
-        // The body may already be terminated by a `return` statement; only
-        // emit the implicit tail-return if the block still needs a terminator.
+        // The body may already be terminated by a `return` statement (which
+        // ran the defers itself); otherwise emit the implicit tail-return,
+        // running the function-level defers just before it.
         if !self.current_block_terminated() {
             let value = self.lower_expr(*block.tail)?;
+            self.run_top_defer_scope()?;
             self.builder.build_return(Some(&value))?;
         }
+        self.defer_scopes.pop();
         Ok(())
     }
 

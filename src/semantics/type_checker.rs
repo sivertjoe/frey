@@ -375,6 +375,7 @@ impl Typechecker {
                 }
                 Ok(())
             }
+            StatementKind::Defer(e) => self.check_expr(e),
         }
     }
 
@@ -516,7 +517,15 @@ fn is_addressable(e: &Expr) -> bool {
 fn assignment_local_root(target: &Expr) -> Option<LocalId> {
     match &target.kind {
         ExprKind::Local(id) => Some(*id),
-        ExprKind::Subscript { expr, .. } => assignment_local_root(expr),
+        ExprKind::Subscript { expr, .. } => {
+            // Indexing through a pointer writes to the pointee, so — like a
+            // deref — it doesn't require the pointer binding itself to be mut.
+            if matches!(expr.ty, Ty::Ptr(_)) {
+                None
+            } else {
+                assignment_local_root(expr)
+            }
+        }
         ExprKind::Field { target, .. } => assignment_local_root(target),
         ExprKind::Deref(_) => None,
         _ => unreachable!("assignment target must be a place expression"),

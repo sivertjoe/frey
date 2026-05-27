@@ -261,6 +261,9 @@ pub enum StatementKind {
     Return(Expr),
     Expr(Expr),
     Break,
+    /// `defer <expr>;` — runs `expr` (LIFO) when the enclosing block exits,
+    /// including via early `return`/`break`.
+    Defer(Expr),
 }
 
 impl fmt::Debug for Ty {
@@ -439,6 +442,7 @@ impl fmt::Debug for StatementKind {
             StatementKind::Return(e) => write!(f, "Return({e:?})"),
             StatementKind::Expr(e) => write!(f, "Expr({e:?})"),
             StatementKind::Break => write!(f, "Break"),
+            StatementKind::Defer(e) => write!(f, "Defer({e:?})"),
         }
     }
 }

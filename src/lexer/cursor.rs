@@ -118,6 +118,7 @@ impl<'a> Cursor<'a> {
             "struct" => TokenKind::Struct,
             "while" => TokenKind::While,
             "break" => TokenKind::Break,
+            "defer" => TokenKind::Defer,
             _ => TokenKind::Identifier(raw.to_string()),
         };
 

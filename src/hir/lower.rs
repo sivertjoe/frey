@@ -1145,6 +1145,10 @@ impl Lower {
                 StatementKind::Expr(expr)
             }
             ast::StatementKind::Break => StatementKind::Break,
+            ast::StatementKind::Defer(expr) => {
+                let expr = self.lower_expr(expr)?;
+                StatementKind::Defer(expr)
+            }
         };
 
         Ok(Statement { span: s.span, kind })
@@ -1923,6 +1927,7 @@ impl Lower {
                 StatementKind::Return(e) => self.substitute_expr(e, subst, local_map)?,
                 StatementKind::Expr(e) => self.substitute_expr(e, subst, local_map)?,
                 StatementKind::Break => {}
+                StatementKind::Defer(e) => self.substitute_expr(e, subst, local_map)?,
             },
         }
         Ok(())

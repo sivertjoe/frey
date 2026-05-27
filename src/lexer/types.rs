@@ -44,6 +44,7 @@ pub enum TokenKind {
     Struct,
     While,
     Break,
+    Defer,
 
     Int,
     UInt,
@@ -156,6 +157,7 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Struct => write!(f, "`struct`"),
             TokenKind::While => write!(f, "`while`"),
             TokenKind::Break => write!(f, "`break`"),
+            TokenKind::Defer => write!(f, "`defer`"),
             TokenKind::Dollar => write!(f, "`$`"),
             TokenKind::Hash => write!(f, "`#`"),
 

@@ -651,19 +651,25 @@ impl<'ctx> Codegen<'ctx> {
         &mut self,
         block: crate::hir::types::Block,
     ) -> Result<BasicValueEnum<'ctx>, Error> {
+        self.defer_scopes.push(Vec::new());
         for item in block.items {
             match item {
                 crate::hir::types::BlockItem::Declaration(d) => self.lower_local_decl(d)?,
                 crate::hir::types::BlockItem::Statement(s) => self.lower_statement(s)?,
             }
         }
-        // If a `return` inside the block already terminated this basic block,
-        // there's no way to actually evaluate the tail — emit a placeholder
-        // value that the caller won't use (since it's unreachable code).
-        if self.current_block_terminated() {
-            return Ok(self.context.bool_type().const_zero().into());
-        }
-        self.lower_expr(*block.tail)
+        let result = if self.current_block_terminated() {
+            // A `return`/`break` inside already ran the relevant defers and
+            // terminated the block; the tail (and a placeholder value) is dead.
+            Ok(self.context.bool_type().const_zero().into())
+        } else {
+            let value = self.lower_expr(*block.tail)?;
+            // Normal exit: run this block's own defers after computing its value.
+            self.run_top_defer_scope()?;
+            Ok(value)
+        };
+        self.defer_scopes.pop();
+        result
     }
 
     fn lower_if(
@@ -789,20 +795,61 @@ impl<'ctx> Codegen<'ctx> {
         match stmt.kind {
             StatementKind::Return(expr) => {
                 let value = self.lower_expr(expr)?;
+                // Run every enclosing scope's defers before leaving the function.
+                self.run_all_defers()?;
                 self.builder.build_return(Some(&value))?;
             }
             StatementKind::Expr(expr) => {
                 let _ = self.lower_expr(expr)?;
             }
             StatementKind::Break => {
+                // Run defers registered inside the loop before exiting it.
+                self.run_break_defers()?;
                 let exit = *self
                     .loop_exit_stack
                     .last()
                     .expect("typechecker guarantees break is inside a loop");
                 self.builder.build_unconditional_branch(exit)?;
             }
+            StatementKind::Defer(expr) => {
+                // Register for the current block scope; emitted at scope exit.
+                self.defer_scopes
+                    .last_mut()
+                    .expect("defer is always inside a block scope")
+                    .push(expr);
+            }
         }
         Ok(())
+    }
+
+    /// Emits the given defer scopes in order (callers pass them innermost-first);
+    /// each scope's expressions run LIFO.
+    fn run_defer_scopes(&mut self, scopes: Vec<Vec<Expr>>) -> Result<(), Error> {
+        for scope in scopes {
+            for e in scope.into_iter().rev() {
+                self.lower_expr(e)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// All pending defers, innermost scope first — run before a `return`.
+    fn run_all_defers(&mut self) -> Result<(), Error> {
+        let scopes: Vec<Vec<Expr>> = self.defer_scopes.iter().rev().cloned().collect();
+        self.run_defer_scopes(scopes)
+    }
+
+    /// Just the current block's defers — run on a normal (fall-through) exit.
+    pub(super) fn run_top_defer_scope(&mut self) -> Result<(), Error> {
+        let scope = self.defer_scopes.last().cloned().unwrap_or_default();
+        self.run_defer_scopes(vec![scope])
+    }
+
+    /// Defers registered inside the current loop — run before a `break`.
+    fn run_break_defers(&mut self) -> Result<(), Error> {
+        let boundary = self.loop_defer_boundary.last().copied().unwrap_or(0);
+        let scopes: Vec<Vec<Expr>> = self.defer_scopes[boundary..].iter().rev().cloned().collect();
+        self.run_defer_scopes(scopes)
     }
 
     fn lower_while(
@@ -838,7 +885,9 @@ impl<'ctx> Codegen<'ctx> {
         // Body: lower with the exit block pushed so `break` can find it.
         self.builder.position_at_end(body_bb);
         self.loop_exit_stack.push(exit_bb);
+        self.loop_defer_boundary.push(self.defer_scopes.len());
         let _ = self.lower_block_value(body)?;
+        self.loop_defer_boundary.pop();
         self.loop_exit_stack.pop();
         if !self.current_block_terminated() {
             self.builder.build_unconditional_branch(header_bb)?;

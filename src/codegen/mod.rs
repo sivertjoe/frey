@@ -12,7 +12,7 @@ use inkwell::basic_block::BasicBlock;
 use inkwell::types::StructType;
 use inkwell::values::{FunctionValue, PointerValue};
 
-use crate::hir::types::{LocalId, Program, StructDef};
+use crate::hir::types::{Expr, LocalId, Program, StructDef};
 
 pub use error::Error;
 
@@ -26,6 +26,11 @@ pub struct Codegen<'ctx> {
     pub(crate) struct_llvm: HashMap<String, StructType<'ctx>>,
     pub(crate) string_constants: HashMap<String, PointerValue<'ctx>>,
     pub(crate) loop_exit_stack: Vec<BasicBlock<'ctx>>,
+    /// One list of pending `defer` expressions per active block scope (LIFO).
+    pub(crate) defer_scopes: Vec<Vec<Expr>>,
+    /// `defer_scopes` length at each enclosing loop's body, so `break` runs
+    /// only the defers registered inside the loop.
+    pub(crate) loop_defer_boundary: Vec<usize>,
 }
 
 impl<'ctx> Codegen<'ctx> {
@@ -41,6 +46,8 @@ impl<'ctx> Codegen<'ctx> {
             struct_llvm: HashMap::new(),
             string_constants: HashMap::new(),
             loop_exit_stack: Vec::new(),
+            defer_scopes: Vec::new(),
+            loop_defer_boundary: Vec::new(),
         }
     }
 

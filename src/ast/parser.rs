@@ -361,6 +361,16 @@ impl Parser {
                         kind: StatementKind::Break,
                     }));
                 }
+                TokenKind::Defer => {
+                    let start = self.expect(TokenKind::Defer)?.span;
+                    let expr = self.parse_expr()?;
+                    let end = self.expect(TokenKind::Semicolon)?.span;
+                    items.push(BlockItem::Statement(Statement {
+                        id: self.id_gen.fresh(),
+                        span: start.join(end),
+                        kind: StatementKind::Defer(expr),
+                    }));
+                }
                 _ => {
                     // Bare expression at statement position. Outcomes:
                     //   - followed by `;`  → expression statement

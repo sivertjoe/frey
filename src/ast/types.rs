@@ -98,6 +98,8 @@ pub enum StatementKind {
     Return(Option<Expr>),
     Expr(Expr),
     Break,
+    /// `defer <expr>;` — runs `expr` when the enclosing block exits.
+    Defer(Expr),
 }
 
 pub struct Expr {
