@@ -483,12 +483,20 @@ impl Parser {
     fn splice_pipe(&mut self, lhs: Expr, rhs: Expr) -> Result<Expr, Error> {
         let span = lhs.span.join(rhs.span);
         match rhs.kind {
-            ExprKind::Call { callee, mut args } => {
+            ExprKind::Call {
+                callee,
+                type_args,
+                mut args,
+            } => {
                 args.insert(0, lhs);
                 Ok(Expr {
                     id: self.id_gen.fresh(),
                     span,
-                    kind: ExprKind::Call { callee, args },
+                    kind: ExprKind::Call {
+                        callee,
+                        type_args,
+                        args,
+                    },
                 })
             }
             _ => Err(Error {
@@ -548,7 +556,11 @@ impl Parser {
         let mut e = self.parse_primary()?;
         loop {
             if self.check(TokenKind::LeftParen) {
-                e = self.parse_call_suffix(e)?;
+                e = self.parse_call_suffix(e, Vec::new())?;
+            } else if self.check(TokenKind::LessThan) && self.generic_call_ahead() {
+                // `callee<T, U>(args)` — explicit type arguments on a call.
+                let type_args = self.parse_type_args()?;
+                e = self.parse_call_suffix(e, type_args)?;
             } else if self.check(TokenKind::LeftBracket) {
                 e = self.parse_subscript_suffix(e)?;
             } else if self.check(TokenKind::Dot) {
@@ -578,17 +590,31 @@ impl Parser {
     }
 
     /// `Identifier { Identifier :` or `Identifier { }` — disambiguates a
-    /// struct literal from an identifier followed by a block.
+    /// struct literal from an identifier followed by a block. Also handles an
+    /// explicit type-argument list: `Identifier<...> { ... }`.
     fn looks_like_struct_literal(&self) -> bool {
-        if !matches!(
+        // Find where the `{` would be: right after the name, or after a
+        // `<...>` type-argument list if one is present.
+        let brace_at = if matches!(
             self.iter.peek_nth(1).map(|t| &t.kind),
+            Some(TokenKind::LessThan)
+        ) {
+            match self.type_arg_list_end(1) {
+                Some(after) => after,
+                None => return false,
+            }
+        } else {
+            1
+        };
+        if !matches!(
+            self.iter.peek_nth(brace_at).map(|t| &t.kind),
             Some(TokenKind::LeftBrace)
         ) {
             return false;
         }
         match (
-            self.iter.peek_nth(2).map(|t| &t.kind),
-            self.iter.peek_nth(3).map(|t| &t.kind),
+            self.iter.peek_nth(brace_at + 1).map(|t| &t.kind),
+            self.iter.peek_nth(brace_at + 2).map(|t| &t.kind),
         ) {
             (Some(TokenKind::RightBrace), _) => true,
             (Some(TokenKind::Identifier(_)), Some(TokenKind::Colon)) => true,
@@ -601,6 +627,11 @@ impl Parser {
         let start = name_tok.span;
         let TokenKind::Identifier(name) = name_tok.kind else {
             unreachable!("caller verified identifier");
+        };
+        let type_args = if self.check(TokenKind::LessThan) {
+            self.parse_type_args()?
+        } else {
+            Vec::new()
         };
         self.expect(TokenKind::LeftBrace)?;
         let mut fields = Vec::new();
@@ -627,7 +658,11 @@ impl Parser {
         Ok(Expr {
             id: self.id_gen.fresh(),
             span: start.join(end),
-            kind: ExprKind::StructLiteral { name, fields },
+            kind: ExprKind::StructLiteral {
+                name,
+                type_args,
+                fields,
+            },
         })
     }
 
@@ -925,7 +960,7 @@ impl Parser {
         }
     }
 
-    fn parse_call_suffix(&mut self, callee: Expr) -> Result<Expr, Error> {
+    fn parse_call_suffix(&mut self, callee: Expr, type_args: Vec<TypeExpr>) -> Result<Expr, Error> {
         self.expect(TokenKind::LeftParen)?;
 
         let mut args = Vec::new();
@@ -943,9 +978,102 @@ impl Parser {
             span,
             kind: ExprKind::Call {
                 callee: Box::new(callee),
+                type_args,
                 args,
             },
         })
+    }
+
+    /// Consumes a `<T, U>` type-argument list. The opening `<` must be current.
+    fn parse_type_args(&mut self) -> Result<Vec<TypeExpr>, Error> {
+        self.expect(TokenKind::LessThan)?;
+        let mut args = Vec::new();
+        while !self.check(TokenKind::GreaterThan) {
+            if !args.is_empty() {
+                self.expect(TokenKind::Comma)?;
+                if self.check(TokenKind::GreaterThan) {
+                    break;
+                }
+            }
+            args.push(self.parse_type()?);
+        }
+        self.expect(TokenKind::GreaterThan)?;
+        Ok(args)
+    }
+
+    /// Non-consuming lookahead to resolve the `<` ambiguity: starting at the
+    /// `<` token at offset `at`, scan a balanced angle-bracket group made only
+    /// of tokens that can appear in a type-argument list. Returns the offset of
+    /// the token just past the closing `>` (or `>>`), or None if it doesn't
+    /// look like a type-argument list.
+    fn type_arg_list_end(&self, mut at: usize) -> Option<usize> {
+        if !matches!(
+            self.iter.peek_nth(at).map(|t| &t.kind),
+            Some(TokenKind::LessThan)
+        ) {
+            return None;
+        }
+        let mut depth: i32 = 0;
+        loop {
+            let kind = &self.iter.peek_nth(at)?.kind;
+            match kind {
+                TokenKind::LessThan => depth += 1,
+                TokenKind::GreaterThan => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(at + 1);
+                    }
+                    if depth < 0 {
+                        return None;
+                    }
+                }
+                // A `>>` token closes two levels at once (`Map<Vec<Int>>`).
+                TokenKind::ShiftRight => {
+                    depth -= 2;
+                    if depth == 0 {
+                        return Some(at + 1);
+                    }
+                    if depth < 0 {
+                        return None;
+                    }
+                }
+                // Tokens that may legitimately appear inside a type argument.
+                TokenKind::Identifier(_)
+                | TokenKind::Int
+                | TokenKind::UInt
+                | TokenKind::Float
+                | TokenKind::I8
+                | TokenKind::I32
+                | TokenKind::I64
+                | TokenKind::U8
+                | TokenKind::U32
+                | TokenKind::U64
+                | TokenKind::F32
+                | TokenKind::F64
+                | TokenKind::Comma
+                | TokenKind::Star
+                | TokenKind::LeftBracket
+                | TokenKind::RightBracket
+                | TokenKind::Semicolon
+                | TokenKind::Literal(_)
+                | TokenKind::Dollar => {}
+                // Anything else means this `<` was a comparison, not type args.
+                _ => return None,
+            }
+            at += 1;
+        }
+    }
+
+    /// True when the upcoming `<...>` is a call's type-argument list (i.e. the
+    /// matching `>` is immediately followed by `(`).
+    fn generic_call_ahead(&self) -> bool {
+        match self.type_arg_list_end(0) {
+            Some(after) => matches!(
+                self.iter.peek_nth(after).map(|t| &t.kind),
+                Some(TokenKind::LeftParen)
+            ),
+            None => false,
+        }
     }
 
     fn parse_subscript_suffix(&mut self, target: Expr) -> Result<Expr, Error> {

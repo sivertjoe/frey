@@ -581,7 +581,11 @@ impl Lower {
                 self.pop_type_var_scope();
                 result
             }
-            ast::ExprKind::Call { callee, args } => {
+            ast::ExprKind::Call {
+                callee,
+                type_args,
+                args,
+            } => {
                 // `comperror("msg")` inside a comptime body lowers to a
                 // CompError node that aborts compilation if reached during
                 // comptime evaluation.
@@ -633,10 +637,18 @@ impl Lower {
                 }
                 let args = lowered_args;
 
-                // Specialize generic calls when every arg is concrete.
-                // Generic calls inside other generic bodies (args still have
+                // Explicit type arguments (`f<Int>(...)`), lowered in the
+                // current scope; may be concrete or, inside a generic body,
+                // themselves type vars.
+                let explicit_type_args: Vec<Ty> = type_args
+                    .iter()
+                    .map(|t| self.lower_type(t))
+                    .collect::<Result<_, _>>()?;
+
+                // Specialize generic calls when every arg (value and type) is
+                // concrete. Calls inside other generic bodies (still carrying
                 // TypeVars) are left as-is; the outer specialization pass
-                // will re-visit and specialize them with concrete arg types.
+                // re-visits and specializes them with concrete arg types.
                 let callee_local = if let ExprKind::Local(id) = callee.kind {
                     Some(id)
                 } else {
@@ -646,8 +658,11 @@ impl Lower {
                     && self.templates.contains_key(&callee_id)
                 {
                     let arg_tys: Vec<Ty> = args.iter().map(|a| a.ty.clone()).collect();
-                    if !arg_tys.iter().any(ty_has_typevars) {
-                        let new_id = self.specialize_call(callee_id, &arg_tys, e.span)?;
+                    let concrete = !arg_tys.iter().any(ty_has_typevars)
+                        && !explicit_type_args.iter().any(ty_has_typevars);
+                    if concrete {
+                        let new_id =
+                            self.specialize_call(callee_id, &arg_tys, &explicit_type_args, e.span)?;
                         let new_fn_ty = self.bindings[&new_id].clone();
                         let Ty::Function {
                             return_ty: spec_ret,
@@ -890,7 +905,29 @@ impl Lower {
                     kind: ErrorKind::StructDefNotAllowedHere,
                 })
             }
-            ast::ExprKind::StructLiteral { name, fields } => {
+            ast::ExprKind::StructLiteral {
+                name,
+                type_args,
+                fields,
+            } => {
+                // Explicit type arguments: `Map<K, V> { ... }`.
+                if !type_args.is_empty() {
+                    if let Some(template) = self.struct_templates.get(&name).cloned() {
+                        return self.lower_explicit_generic_struct_literal(
+                            template, name, type_args, fields, e.span,
+                        );
+                    }
+                    if self.structs.contains_key(&name) {
+                        return Err(Error {
+                            span: e.span,
+                            kind: ErrorKind::UnexpectedTypeArguments { name },
+                        });
+                    }
+                    return Err(Error {
+                        span: e.span,
+                        kind: ErrorKind::UnknownType { name },
+                    });
+                }
                 // Concrete-struct path: existing behavior.
                 if let Some(def) = self.structs.get(&name).cloned() {
                     return self.lower_struct_literal(def, name, fields, e.span);
@@ -1289,6 +1326,104 @@ impl Lower {
         })
     }
 
+    /// Lowers `Name<T, U> { ... }` — a generic struct literal with explicit
+    /// type arguments. Unlike the inferred path, the type args come from the
+    /// `<...>` list, so this works even when no field's value pins them (e.g.
+    /// a phantom parameter). When an arg is still a type var (inside a generic
+    /// body) the literal stays a `GenericStruct` and specializes later.
+    fn lower_explicit_generic_struct_literal(
+        &mut self,
+        template: StructDef,
+        name: String,
+        type_args: Vec<ast::TypeExpr>,
+        fields: Vec<ast::StructLiteralField>,
+        span: Span,
+    ) -> Result<Expr, Error> {
+        let args: Vec<Ty> = type_args
+            .iter()
+            .map(|t| self.lower_type(t))
+            .collect::<Result<_, _>>()?;
+        if args.len() != template.type_var_ids.len() {
+            return Err(Error {
+                span,
+                kind: ErrorKind::TypeArgArityMismatch {
+                    name,
+                    expected: template.type_var_ids.len(),
+                    found: args.len(),
+                },
+            });
+        }
+        let mut subst: HashMap<TypeVarId, Ty> = HashMap::new();
+        for (tv, ty) in template.type_var_ids.iter().zip(args.iter()) {
+            subst.insert(*tv, ty.clone());
+        }
+
+        // Lower and coerce each field against its (substituted) declared type.
+        let mut seen: HashMap<String, ()> = HashMap::new();
+        let mut lowered_by_name: HashMap<String, Expr> = HashMap::new();
+        for f in fields {
+            if seen.insert(f.name.clone(), ()).is_some() {
+                return Err(Error {
+                    span: f.span,
+                    kind: ErrorKind::DuplicateField {
+                        struct_name: name.clone(),
+                        field: f.name.clone(),
+                    },
+                });
+            }
+            let Some((_, template_field_ty)) = template.fields.iter().find(|(n, _)| n == &f.name)
+            else {
+                return Err(Error {
+                    span: f.span,
+                    kind: ErrorKind::UnknownField {
+                        struct_name: name.clone(),
+                        field: f.name.clone(),
+                    },
+                });
+            };
+            let field_ty = template_field_ty.clone();
+            let target_ty = self.substitute_ty(&field_ty, &subst);
+            let value = self.lower_expr(f.value)?;
+            let value = coerce_int_literal(value, &target_ty)?;
+            lowered_by_name.insert(f.name, value);
+        }
+
+        let mut missing = Vec::new();
+        let mut ordered = Vec::with_capacity(template.fields.len());
+        for (fname, _) in &template.fields {
+            match lowered_by_name.remove(fname) {
+                Some(v) => ordered.push((fname.clone(), v)),
+                None => missing.push(fname.clone()),
+            }
+        }
+        if !missing.is_empty() {
+            return Err(Error {
+                span,
+                kind: ErrorKind::MissingFields {
+                    struct_name: name,
+                    missing,
+                },
+            });
+        }
+
+        // Defer while any type argument is still a type var (we're inside a
+        // generic body); otherwise specialize the struct now.
+        let still_generic = args
+            .iter()
+            .any(|a| ty_has_typevars(a) || matches!(a, Ty::GenericStruct { .. }));
+        let ty = if still_generic {
+            Ty::GenericStruct { name, args }
+        } else {
+            Ty::Struct(self.specialize_struct(&template, args, span)?)
+        };
+
+        Ok(Expr {
+            span,
+            ty,
+            kind: ExprKind::StructLiteral { fields: ordered },
+        })
+    }
+
     fn lower_generic_struct_literal(
         &mut self,
         template: StructDef,
@@ -1517,6 +1652,7 @@ impl Lower {
         &mut self,
         template_id: LocalId,
         arg_tys: &[Ty],
+        explicit_type_args: &[Ty],
         call_span: crate::lexer::types::Span,
     ) -> Result<LocalId, Error> {
         let template = self
@@ -1527,6 +1663,24 @@ impl Lower {
 
         // Build subst by unifying each (param, arg) pair.
         let mut subst: HashMap<TypeVarId, Ty> = HashMap::new();
+
+        // Seed bindings from explicit type arguments, if provided.
+        if !explicit_type_args.is_empty() {
+            if explicit_type_args.len() != template.type_var_ids.len() {
+                return Err(Error {
+                    span: call_span,
+                    kind: ErrorKind::TypeArgArityMismatch {
+                        name: template.name.clone(),
+                        expected: template.type_var_ids.len(),
+                        found: explicit_type_args.len(),
+                    },
+                });
+            }
+            for (tv, ty) in template.type_var_ids.iter().zip(explicit_type_args.iter()) {
+                subst.insert(*tv, ty.clone());
+            }
+        }
+
         if template.params.len() != arg_tys.len() {
             return Err(Error {
                 span: call_span,
@@ -1777,7 +1931,7 @@ impl Lower {
                 {
                     let arg_tys: Vec<Ty> = call.args.iter().map(|a| a.ty.clone()).collect();
                     if !arg_tys.iter().any(ty_has_typevars) {
-                        let new_id = self.specialize_call(callee_id, &arg_tys, e.span)?;
+                        let new_id = self.specialize_call(callee_id, &arg_tys, &[], e.span)?;
                         let new_fn_ty = self.bindings[&new_id].clone();
                         if let Ty::Function { return_ty, .. } = &new_fn_ty {
                             updated_call_ty = Some((**return_ty).clone());

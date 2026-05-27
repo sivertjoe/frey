@@ -68,7 +68,7 @@ mod tests {
     #[test]
     fn parses_call_no_args() {
         let expr = parser("f()").parse_expr().unwrap();
-        let ExprKind::Call { callee, args } = expr.kind else {
+        let ExprKind::Call { callee, args, .. } = expr.kind else {
             panic!("expected call");
         };
         assert_callee_named(&callee, "f");
@@ -78,7 +78,7 @@ mod tests {
     #[test]
     fn parses_call_one_arg() {
         let expr = parser("f(5)").parse_expr().unwrap();
-        let ExprKind::Call { callee, args } = expr.kind else {
+        let ExprKind::Call { callee, args, .. } = expr.kind else {
             panic!("expected call");
         };
         assert_callee_named(&callee, "f");
@@ -89,7 +89,7 @@ mod tests {
     #[test]
     fn parses_nested_call() {
         let expr = parser("f(g())").parse_expr().unwrap();
-        let ExprKind::Call { callee, args } = expr.kind else {
+        let ExprKind::Call { callee, args, .. } = expr.kind else {
             panic!("expected outer call");
         };
         assert_callee_named(&callee, "f");
@@ -98,6 +98,61 @@ mod tests {
             panic!("expected inner call");
         };
         assert_callee_named(inner, "g");
+    }
+
+    #[test]
+    fn parses_call_with_type_args() {
+        let expr = parser("f<Int>(5)").parse_expr().unwrap();
+        let ExprKind::Call {
+            callee,
+            type_args,
+            args,
+        } = expr.kind
+        else {
+            panic!("expected call");
+        };
+        assert_callee_named(&callee, "f");
+        assert_eq!(type_args.len(), 1);
+        assert!(matches!(type_args[0].kind, TypeExprKind::Int));
+        assert_eq!(args.len(), 1);
+        assert!(matches!(args[0].kind, ExprKind::Const(Const::Int(5))));
+    }
+
+    #[test]
+    fn parses_struct_literal_with_type_args() {
+        let expr = parser("Foo<Int, Float> { a: 1 }").parse_expr().unwrap();
+        let ExprKind::StructLiteral {
+            name,
+            type_args,
+            fields,
+        } = expr.kind
+        else {
+            panic!("expected struct literal");
+        };
+        assert_eq!(name, "Foo");
+        assert_eq!(type_args.len(), 2);
+        assert!(matches!(type_args[0].kind, TypeExprKind::Int));
+        assert!(matches!(type_args[1].kind, TypeExprKind::Float));
+        assert_eq!(fields.len(), 1);
+    }
+
+    #[test]
+    fn less_than_stays_a_comparison() {
+        let expr = parser("a < b").parse_expr().unwrap();
+        assert!(matches!(
+            expr.kind,
+            ExprKind::Binary {
+                op: BinaryOperator::Lt,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn chained_comparison_is_not_a_generic_call() {
+        // `a < b > c` must parse as comparisons, not a generic call `a<b>(...)`.
+        let expr = parser("a < b > c").parse_expr().unwrap();
+        assert!(!matches!(expr.kind, ExprKind::Call { .. }));
     }
 
     #[test]
@@ -1040,7 +1095,7 @@ mod tests {
     #[test]
     fn parses_struct_literal() {
         let expr = parser("Point { x: 1, y: 2 }").parse_expr().unwrap();
-        let ExprKind::StructLiteral { name, fields } = expr.kind else {
+        let ExprKind::StructLiteral { name, fields, .. } = expr.kind else {
             panic!("expected struct literal, got {:?}", expr.kind);
         };
         assert_eq!(name, "Point");
@@ -1060,7 +1115,7 @@ mod tests {
     #[test]
     fn parses_empty_struct_literal() {
         let expr = parser("Empty {}").parse_expr().unwrap();
-        let ExprKind::StructLiteral { name, fields } = expr.kind else {
+        let ExprKind::StructLiteral { name, fields, .. } = expr.kind else {
             panic!("expected struct literal");
         };
         assert_eq!(name, "Empty");
@@ -1137,7 +1192,7 @@ mod tests {
         let expr = parser("Outer { inner: Inner { a: 1 } }")
             .parse_expr()
             .unwrap();
-        let ExprKind::StructLiteral { name, fields } = expr.kind else {
+        let ExprKind::StructLiteral { name, fields, .. } = expr.kind else {
             panic!("expected outer struct literal");
         };
         assert_eq!(name, "Outer");
@@ -1267,7 +1322,7 @@ mod tests {
     fn pipe_no_arg_call() {
         // `5 |> foo()` desugars to `foo(5)`.
         let expr = parser("5 |> foo()").parse_expr().unwrap();
-        let ExprKind::Call { callee, args } = expr.kind else {
+        let ExprKind::Call { callee, args, .. } = expr.kind else {
             panic!("expected call, got {:?}", expr.kind);
         };
         assert_callee_named(&callee, "foo");
@@ -1279,7 +1334,7 @@ mod tests {
     fn pipe_with_existing_args() {
         // `5 |> add(3)` desugars to `add(5, 3)`.
         let expr = parser("5 |> add(3)").parse_expr().unwrap();
-        let ExprKind::Call { callee, args } = expr.kind else {
+        let ExprKind::Call { callee, args, .. } = expr.kind else {
             panic!("expected call");
         };
         assert_callee_named(&callee, "add");
@@ -1292,7 +1347,7 @@ mod tests {
     fn pipe_chains_left_associative() {
         // `5 |> f() |> g()` desugars to `g(f(5))`.
         let expr = parser("5 |> f() |> g()").parse_expr().unwrap();
-        let ExprKind::Call { callee, args } = expr.kind else {
+        let ExprKind::Call { callee, args, .. } = expr.kind else {
             panic!("expected outer call");
         };
         assert_callee_named(&callee, "g");
@@ -1300,6 +1355,7 @@ mod tests {
         let ExprKind::Call {
             callee: inner_callee,
             args: inner_args,
+            ..
         } = &args[0].kind
         else {
             panic!("expected inner call");
@@ -1313,7 +1369,7 @@ mod tests {
     fn pipe_lhs_takes_full_arithmetic() {
         // `2 + 3 |> f()` desugars to `f(2 + 3)`, not `2 + f(3)`.
         let expr = parser("2 + 3 |> f()").parse_expr().unwrap();
-        let ExprKind::Call { callee, args } = expr.kind else {
+        let ExprKind::Call { callee, args, .. } = expr.kind else {
             panic!("expected call");
         };
         assert_callee_named(&callee, "f");
@@ -1395,7 +1451,7 @@ mod tests {
         // into is the outermost one, even if the callee itself is a field
         // access expression.
         let expr = parser("5 |> foo.bar(3)").parse_expr().unwrap();
-        let ExprKind::Call { callee, args } = expr.kind else {
+        let ExprKind::Call { callee, args, .. } = expr.kind else {
             panic!("expected call");
         };
         // callee is foo.bar, a Field expression

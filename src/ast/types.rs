@@ -126,6 +126,7 @@ pub enum ExprKind {
     },
     Call {
         callee: Box<Expr>,
+        type_args: Vec<TypeExpr>,
         args: Vec<Expr>,
     },
 
@@ -164,6 +165,7 @@ pub enum ExprKind {
     },
     StructLiteral {
         name: String,
+        type_args: Vec<TypeExpr>,
         fields: Vec<StructLiteralField>,
     },
     Field {
