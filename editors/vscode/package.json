@@ -1,0 +1,26 @@
+{
+  "name": "frey",
+  "displayName": "Frey",
+  "description": "Syntax highlighting for the Frey language",
+  "version": "0.0.1",
+  "publisher": "frey",
+  "engines": { "vscode": "^1.0.0" },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "frey",
+        "aliases": ["Frey", "frey"],
+        "extensions": [".frey"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "frey",
+        "scopeName": "source.frey",
+        "path": "./syntaxes/frey.tmLanguage.json"
+      }
+    ]
+  }
+}

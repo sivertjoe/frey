@@ -1,0 +1,15 @@
+{
+  "name": "tree-sitter-frey",
+  "version": "0.0.1",
+  "description": "Tree-sitter grammar for the Frey language",
+  "main": "bindings/node",
+  "devDependencies": {
+    "tree-sitter-cli": "^0.25.0"
+  },
+  "tree-sitter": [
+    {
+      "scope": "source.frey",
+      "file-types": ["frey"]
+    }
+  ]
+}

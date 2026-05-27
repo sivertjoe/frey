@@ -1,0 +1,14 @@
+id = "frey"
+name = "Frey"
+version = "0.0.1"
+schema_version = 1
+authors = ["Sivert Johansen"]
+description = "Syntax highlighting for the Frey language"
+
+# The grammar is the tree-sitter parser under `editors/tree-sitter-frey`.
+# Zed fetches it from git, so push this repo and set `rev` to a commit that
+# contains the generated `src/parser.c`. Update `repository` to your remote.
+[grammars.frey]
+repository = "https://github.com/YOUR_USER/frey"
+rev = "REPLACE_WITH_COMMIT_SHA"
+path = "editors/tree-sitter-frey"

@@ -1,0 +1,15 @@
+{
+  "grammars": [
+    {
+      "name": "frey",
+      "camelcase": "Frey",
+      "scope": "source.frey",
+      "file-types": ["frey"]
+    }
+  ],
+  "metadata": {
+    "version": "0.0.1",
+    "license": "MIT",
+    "description": "Frey grammar for tree-sitter"
+  }
+}
