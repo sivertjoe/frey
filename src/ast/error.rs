@@ -9,7 +9,10 @@ pub struct Error {
 
 #[derive(Debug, PartialEq)]
 pub enum ErrorKind {
-    Unexpected { expected: String, found: TokenKind },
+    Unexpected {
+        expected: String,
+        found: TokenKind,
+    },
     #[allow(dead_code)] // reserved for when type expressions can fail to resolve
     UnknownType(String),
     PipeRhsNotCall,

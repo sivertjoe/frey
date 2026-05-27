@@ -5,10 +5,10 @@ mod ty;
 
 use std::collections::HashMap;
 
+use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
-use inkwell::basic_block::BasicBlock;
 use inkwell::types::StructType;
 use inkwell::values::{FunctionValue, PointerValue};
 
@@ -76,11 +76,7 @@ impl<'ctx> Codegen<'ctx> {
             self.struct_defs.insert(name.clone(), def.clone());
         }
         for (name, def) in &program.structs {
-            let body: Vec<_> = def
-                .fields
-                .iter()
-                .map(|(_, ty)| self.lower_ty(ty))
-                .collect();
+            let body: Vec<_> = def.fields.iter().map(|(_, ty)| self.lower_ty(ty)).collect();
             let llvm_ty = self.struct_llvm[name];
             llvm_ty.set_body(&body, false);
         }

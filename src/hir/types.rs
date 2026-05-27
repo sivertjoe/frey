@@ -53,10 +53,7 @@ pub enum Ty {
     Ptr(Box<Ty>),
     Struct(String),
     TypeVar(TypeVarId),
-    GenericStruct {
-        name: String,
-        args: Vec<Ty>,
-    },
+    GenericStruct { name: String, args: Vec<Ty> },
 }
 
 impl Ty {

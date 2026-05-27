@@ -348,9 +348,11 @@ impl<'ctx> Codegen<'ctx> {
                     // Field on an rvalue struct (e.g. function-call result):
                     // just extract from the value.
                     let agg = self.lower_expr(*target)?;
-                    Ok(self
-                        .builder
-                        .build_extract_value(agg.into_struct_value(), index as u32, "")?)
+                    Ok(self.builder.build_extract_value(
+                        agg.into_struct_value(),
+                        index as u32,
+                        "",
+                    )?)
                 }
             }
             ExprKind::Call(FunctionCall { callee, args }) => {
@@ -413,7 +415,9 @@ impl<'ctx> Codegen<'ctx> {
                     .into_int_value();
                 let bytes = self.alloc_byte_size(count, &elem_ty)?;
                 let malloc = self.libc_function("malloc", ptr_ty.fn_type(&[i64_ty.into()], false));
-                let call = self.builder.build_direct_call(malloc, &[bytes.into()], "")?;
+                let call = self
+                    .builder
+                    .build_direct_call(malloc, &[bytes.into()], "")?;
                 match call.try_as_basic_value() {
                     ValueKind::Basic(v) => Ok(v),
                     ValueKind::Instruction(_) => panic!("malloc returns a pointer"),
@@ -431,9 +435,9 @@ impl<'ctx> Codegen<'ctx> {
                     "realloc",
                     ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false),
                 );
-                let call = self
-                    .builder
-                    .build_direct_call(realloc, &[ptr.into(), bytes.into()], "")?;
+                let call =
+                    self.builder
+                        .build_direct_call(realloc, &[ptr.into(), bytes.into()], "")?;
                 match call.try_as_basic_value() {
                     ValueKind::Basic(v) => Ok(v),
                     ValueKind::Instruction(_) => panic!("realloc returns a pointer"),
@@ -443,8 +447,10 @@ impl<'ctx> Codegen<'ctx> {
                 let ptr = self
                     .lower_expr(args.next().expect("free takes a pointer"))?
                     .into_pointer_value();
-                let free =
-                    self.libc_function("free", self.context.void_type().fn_type(&[ptr_ty.into()], false));
+                let free = self.libc_function(
+                    "free",
+                    self.context.void_type().fn_type(&[ptr_ty.into()], false),
+                );
                 self.builder.build_direct_call(free, &[ptr.into()], "")?;
                 Ok(self.context.bool_type().const_zero().into())
             }
@@ -463,7 +469,10 @@ impl<'ctx> Codegen<'ctx> {
         } else {
             self.builder.build_int_s_extend(count, i64_ty, "")?
         };
-        let elem_size = self.lower_ty(elem_ty).size_of().expect("sized element type");
+        let elem_size = self
+            .lower_ty(elem_ty)
+            .size_of()
+            .expect("sized element type");
         Ok(self.builder.build_int_mul(count64, elem_size, "")?)
     }
 
@@ -472,12 +481,10 @@ impl<'ctx> Codegen<'ctx> {
         name: &str,
         ty: inkwell::types::FunctionType<'ctx>,
     ) -> FunctionValue<'ctx> {
-        self.module
-            .get_function(name)
-            .unwrap_or_else(|| {
-                self.module
-                    .add_function(name, ty, Some(inkwell::module::Linkage::External))
-            })
+        self.module.get_function(name).unwrap_or_else(|| {
+            self.module
+                .add_function(name, ty, Some(inkwell::module::Linkage::External))
+        })
     }
 
     /// Lowers a place expression to its storage pointer. Valid places are
@@ -498,12 +505,9 @@ impl<'ctx> Codegen<'ctx> {
                 };
                 let struct_llvm_ty = self.struct_llvm[&struct_name];
                 let struct_ptr = self.lower_place(*target)?;
-                Ok(self.builder.build_struct_gep(
-                    struct_llvm_ty,
-                    struct_ptr,
-                    index as u32,
-                    "",
-                )?)
+                Ok(self
+                    .builder
+                    .build_struct_gep(struct_llvm_ty, struct_ptr, index as u32, "")?)
             }
             _ => unreachable!("assignment target must be a place expression"),
         }
@@ -513,11 +517,7 @@ impl<'ctx> Codegen<'ctx> {
     /// expression is itself a place, GEP off its existing pointer; otherwise
     /// (e.g. a call result), spill the rvalue array to a fresh alloca first
     /// so we have a pointer to GEP into.
-    fn build_subscript_ptr(
-        &mut self,
-        arr: Expr,
-        index: Expr,
-    ) -> Result<PointerValue<'ctx>, Error> {
+    fn build_subscript_ptr(&mut self, arr: Expr, index: Expr) -> Result<PointerValue<'ctx>, Error> {
         // Raw-pointer indexing: `p[i]` is `gep elem, p_value, i`. The base
         // expression evaluates to the pointer value itself (not a place).
         if let Ty::Ptr(elem) = arr.ty.clone() {
@@ -848,7 +848,11 @@ impl<'ctx> Codegen<'ctx> {
     /// Defers registered inside the current loop — run before a `break`.
     fn run_break_defers(&mut self) -> Result<(), Error> {
         let boundary = self.loop_defer_boundary.last().copied().unwrap_or(0);
-        let scopes: Vec<Vec<Expr>> = self.defer_scopes[boundary..].iter().rev().cloned().collect();
+        let scopes: Vec<Vec<Expr>> = self.defer_scopes[boundary..]
+            .iter()
+            .rev()
+            .cloned()
+            .collect();
         self.run_defer_scopes(scopes)
     }
 
@@ -873,12 +877,9 @@ impl<'ctx> Codegen<'ctx> {
         self.builder.position_at_end(header_bb);
         let cond_val = self.lower_expr(condition)?.into_int_value();
         let zero = self.context.i32_type().const_zero();
-        let cond_i1 = self.builder.build_int_compare(
-            inkwell::IntPredicate::NE,
-            cond_val,
-            zero,
-            "",
-        )?;
+        let cond_i1 =
+            self.builder
+                .build_int_compare(inkwell::IntPredicate::NE, cond_val, zero, "")?;
         self.builder
             .build_conditional_branch(cond_i1, body_bb, exit_bb)?;
 

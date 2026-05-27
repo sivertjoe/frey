@@ -91,41 +91,30 @@ pub fn unify(
             }
             unify(rp, ra, span, subst, struct_origins)
         }
-        (
-            Ty::GenericStruct {
-                name: n1,
-                args: a1,
-            },
-            Ty::GenericStruct {
-                name: n2,
-                args: a2,
-            },
-        ) if n1 == n2 && a1.len() == a2.len() => {
+        (Ty::GenericStruct { name: n1, args: a1 }, Ty::GenericStruct { name: n2, args: a2 })
+            if n1 == n2 && a1.len() == a2.len() =>
+        {
             for (x, y) in a1.iter().zip(a2.iter()) {
                 unify(x, y, span, subst, struct_origins)?;
             }
             Ok(())
         }
         (Ty::GenericStruct { name, args }, Ty::Struct(spec))
-        | (Ty::Struct(spec), Ty::GenericStruct { name, args }) => {
-            match struct_origins.get(spec) {
-                Some((tname, targs))
-                    if tname == name && targs.len() == args.len() =>
-                {
-                    for (x, y) in args.iter().zip(targs.iter()) {
-                        unify(x, y, span, subst, struct_origins)?;
-                    }
-                    Ok(())
+        | (Ty::Struct(spec), Ty::GenericStruct { name, args }) => match struct_origins.get(spec) {
+            Some((tname, targs)) if tname == name && targs.len() == args.len() => {
+                for (x, y) in args.iter().zip(targs.iter()) {
+                    unify(x, y, span, subst, struct_origins)?;
                 }
-                _ => Err(Error {
-                    span,
-                    kind: ErrorKind::TypeMismatch {
-                        expected: param_ty.clone(),
-                        found: arg_ty.clone(),
-                    },
-                }),
+                Ok(())
             }
-        }
+            _ => Err(Error {
+                span,
+                kind: ErrorKind::TypeMismatch {
+                    expected: param_ty.clone(),
+                    found: arg_ty.clone(),
+                },
+            }),
+        },
         (a, b) if a == b => Ok(()),
         (a, b) => Err(Error {
             span,

@@ -51,10 +51,8 @@ impl<'ctx> Codegen<'ctx> {
             ExprKind::Array(items) => {
                 // An array literal whose every element is itself a constant
                 // can become a constant LLVM aggregate.
-                let elem_vals: Option<Vec<BasicValueEnum<'ctx>>> = items
-                    .iter()
-                    .map(|it| self.const_initializer(it))
-                    .collect();
+                let elem_vals: Option<Vec<BasicValueEnum<'ctx>>> =
+                    items.iter().map(|it| self.const_initializer(it)).collect();
                 let elem_vals = elem_vals?;
                 let arr_llvm_ty = self.lower_ty(&expr.ty).into_array_type();
                 Some(const_array_from(arr_llvm_ty, &elem_vals).into())

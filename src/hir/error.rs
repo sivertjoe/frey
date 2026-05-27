@@ -181,10 +181,16 @@ impl fmt::Display for ErrorKind {
                 write!(f, "type mismatch: expected {expected:?}, found {found:?}")
             }
             ErrorKind::MissingTypeArguments { name } => {
-                write!(f, "struct `{name}` is generic; provide type arguments like `{name}<...>`")
+                write!(
+                    f,
+                    "struct `{name}` is generic; provide type arguments like `{name}<...>`"
+                )
             }
             ErrorKind::UnexpectedTypeArguments { name } => {
-                write!(f, "struct `{name}` is not generic and takes no type arguments")
+                write!(
+                    f,
+                    "struct `{name}` is not generic and takes no type arguments"
+                )
             }
             ErrorKind::TypeArgArityMismatch {
                 name,

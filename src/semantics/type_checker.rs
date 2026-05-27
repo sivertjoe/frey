@@ -141,9 +141,7 @@ impl Typechecker {
                     if !binding.mutable {
                         return Err(Error {
                             span: e.span,
-                            kind: ErrorKind::AssignToImmutable {
-                                name: binding.name,
-                            },
+                            kind: ErrorKind::AssignToImmutable { name: binding.name },
                         });
                     }
                 }

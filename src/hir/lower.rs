@@ -9,8 +9,8 @@ use crate::{
         generics::{collect_typevars, ty_has_typevars, unify},
         types::{
             Block, BlockItem, Const, Declaration, Expr, ExprKind, Function, FunctionCall,
-            IntrinsicKind, LocalId, LocalIdGen, Param, Program, Statement, StatementKind, StructDef,
-            Ty,
+            IntrinsicKind, LocalId, LocalIdGen, Param, Program, Statement, StatementKind,
+            StructDef, Ty,
         },
     },
     lexer::types::Span,
@@ -132,7 +132,10 @@ impl Lower {
                 });
             }
             let id = self.fresh_type_var_id(name.clone());
-            self.type_var_scopes.last_mut().unwrap().insert(name.clone(), id);
+            self.type_var_scopes
+                .last_mut()
+                .unwrap()
+                .insert(name.clone(), id);
         }
         Ok(())
     }
@@ -188,7 +191,11 @@ impl Lower {
         // lower fields. Field types may contain TypeVars and stay as
         // templates until a concrete use site triggers specialization.
         for decl in &p.declarations {
-            if let ast::ExprKind::StructDef { type_params, fields } = &decl.value.kind {
+            if let ast::ExprKind::StructDef {
+                type_params,
+                fields,
+            } = &decl.value.kind
+            {
                 if type_params.is_empty() {
                     let mut lowered_fields = Vec::with_capacity(fields.len());
                     for f in fields {
@@ -221,9 +228,7 @@ impl Lower {
                             self.pop_type_var_scope();
                             return Err(Error {
                                 span: decl.span,
-                                kind: ErrorKind::GenericIsAlsoAStruct {
-                                    name: name.clone(),
-                                },
+                                kind: ErrorKind::GenericIsAlsoAStruct { name: name.clone() },
                             });
                         }
                         let id = self.fresh_type_var_id(name.clone());
@@ -554,8 +559,9 @@ impl Lower {
                     return Err(Error {
                         span: e.span,
                         kind: ErrorKind::ComptimeError {
-                            message: "a type can only be used as a value inside a #comptime function"
-                                .to_string(),
+                            message:
+                                "a type can only be used as a value inside a #comptime function"
+                                    .to_string(),
                         },
                     });
                 }
@@ -1287,9 +1293,7 @@ impl Lower {
                 if self.structs.contains_key(name) {
                     return Err(Error {
                         span: t.span,
-                        kind: ErrorKind::UnexpectedTypeArguments {
-                            name: name.clone(),
-                        },
+                        kind: ErrorKind::UnexpectedTypeArguments { name: name.clone() },
                     });
                 }
                 let template = self
@@ -1314,9 +1318,9 @@ impl Lower {
                     .iter()
                     .map(|a| self.lower_type(a))
                     .collect::<Result<_, _>>()?;
-                let still_generic = lowered_args.iter().any(|a| {
-                    ty_has_typevars(a) || matches!(a, Ty::GenericStruct { .. })
-                });
+                let still_generic = lowered_args
+                    .iter()
+                    .any(|a| ty_has_typevars(a) || matches!(a, Ty::GenericStruct { .. }));
                 if still_generic {
                     Ok(Ty::GenericStruct {
                         name: name.clone(),
@@ -1600,9 +1604,7 @@ impl Lower {
 
         let mut ordered = Vec::with_capacity(def.fields.len());
         for (fname, target_ty) in &def.fields {
-            let value = lowered_by_name
-                .remove(fname)
-                .expect("checked above");
+            let value = lowered_by_name.remove(fname).expect("checked above");
             let value = coerce_int_literal(value, target_ty)?;
             ordered.push((fname.clone(), value));
         }
@@ -1676,13 +1678,10 @@ impl Lower {
                 Ty::Function { params, return_ty }
             }
             Ty::GenericStruct { name, args } => {
-                let new_args: Vec<Ty> = args
+                let new_args: Vec<Ty> = args.iter().map(|a| self.substitute_ty(a, subst)).collect();
+                let still_generic = new_args
                     .iter()
-                    .map(|a| self.substitute_ty(a, subst))
-                    .collect();
-                let still_generic = new_args.iter().any(|a| {
-                    ty_has_typevars(a) || matches!(a, Ty::GenericStruct { .. })
-                });
+                    .any(|a| ty_has_typevars(a) || matches!(a, Ty::GenericStruct { .. }));
                 if still_generic {
                     Ty::GenericStruct {
                         name: name.clone(),
