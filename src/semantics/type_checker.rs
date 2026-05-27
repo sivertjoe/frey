@@ -209,9 +209,9 @@ impl Typechecker {
             ExprKind::Subscript { expr, index } => {
                 self.check_expr(expr)?;
                 self.check_expr(index)?;
-                // Lowering rejected non-array targets, but assert defensively.
-                if !matches!(expr.ty, Ty::Array { .. }) {
-                    unreachable!("subscript target has Array type from lowering");
+                // Lowering only accepts arrays and pointers as index targets.
+                if !matches!(expr.ty, Ty::Array { .. } | Ty::Ptr(_)) {
+                    unreachable!("subscript target must be an array or pointer from lowering");
                 }
                 if !index.ty.is_integer() {
                     return Err(Error {
@@ -272,6 +272,12 @@ impl Typechecker {
             // Comptime-only nodes are folded away during specialization and
             // never reach a function that is actually emitted.
             ExprKind::TypeValue(_) | ExprKind::CompError(_) => Ok(()),
+            ExprKind::Intrinsic { args, .. } => {
+                for arg in args {
+                    self.check_expr(arg)?;
+                }
+                Ok(())
+            }
         }
     }
 

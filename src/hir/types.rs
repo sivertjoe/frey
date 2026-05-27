@@ -191,6 +191,21 @@ pub enum ExprKind {
     /// A `comperror(msg)` call. If reached during comptime evaluation it
     /// aborts compilation; otherwise it is discarded by static-if folding.
     CompError(String),
+    /// A heap-allocation intrinsic (`alloc<T>`, `realloc<T>`, `free`). `elem_ty`
+    /// is the element type `T` (used for `sizeof`); it is resolved to a
+    /// concrete type during specialization before codegen.
+    Intrinsic {
+        kind: IntrinsicKind,
+        elem_ty: Ty,
+        args: Vec<Expr>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IntrinsicKind {
+    Alloc,
+    Realloc,
+    Free,
 }
 
 #[derive(Clone)]
@@ -354,6 +369,11 @@ impl fmt::Debug for ExprKind {
             ExprKind::Field { target, name, .. } => write!(f, "{target:?}.{name}"),
             ExprKind::TypeValue(ty) => write!(f, "TypeValue({ty:?})"),
             ExprKind::CompError(msg) => write!(f, "CompError({msg:?})"),
+            ExprKind::Intrinsic {
+                kind,
+                elem_ty,
+                args,
+            } => write!(f, "{kind:?}<{elem_ty:?}>{args:?}"),
         }
     }
 }

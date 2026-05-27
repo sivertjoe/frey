@@ -8,8 +8,9 @@ use crate::{
         error::{Error, ErrorKind},
         generics::{collect_typevars, ty_has_typevars, unify},
         types::{
-            Block, BlockItem, Const, Declaration, Expr, ExprKind, Function, FunctionCall, LocalId,
-            LocalIdGen, Param, Program, Statement, StatementKind, StructDef, Ty,
+            Block, BlockItem, Const, Declaration, Expr, ExprKind, Function, FunctionCall,
+            IntrinsicKind, LocalId, LocalIdGen, Param, Program, Statement, StatementKind, StructDef,
+            Ty,
         },
     },
     lexer::types::Span,
@@ -612,6 +613,19 @@ impl Lower {
                     });
                 }
 
+                // Heap intrinsics: `alloc<T>(n)`, `realloc<T>(p, n)`, `free(p)`.
+                if let ast::ExprKind::Identifier(n) = &callee.kind {
+                    let intrinsic = match n.as_str() {
+                        "alloc" => Some(IntrinsicKind::Alloc),
+                        "realloc" => Some(IntrinsicKind::Realloc),
+                        "free" => Some(IntrinsicKind::Free),
+                        _ => None,
+                    };
+                    if let Some(kind) = intrinsic {
+                        return self.lower_intrinsic(kind, type_args, args, e.span);
+                    }
+                }
+
                 let callee = self.lower_expr(*callee)?;
 
                 let Ty::Function { params, return_ty } = callee.ty.clone() else {
@@ -832,17 +846,20 @@ impl Lower {
             ast::ExprKind::Subscript { expr, index } => {
                 let target = self.lower_expr(*expr)?;
                 let index = self.lower_expr(*index)?;
-                let Ty::Array { element, .. } = target.ty.clone() else {
-                    return Err(Error {
-                        span: target.span,
-                        kind: ErrorKind::NotIndexable {
-                            found: target.ty.clone(),
-                        },
-                    });
+                // Indexing works on both fixed arrays and raw pointers.
+                let element = match target.ty.clone() {
+                    Ty::Array { element, .. } => *element,
+                    Ty::Ptr(element) => *element,
+                    other => {
+                        return Err(Error {
+                            span: target.span,
+                            kind: ErrorKind::NotIndexable { found: other },
+                        });
+                    }
                 };
                 Ok(Expr {
                     span: e.span,
-                    ty: *element,
+                    ty: element,
                     kind: ExprKind::Subscript {
                         expr: Box::new(target),
                         index: Box::new(index),
@@ -1131,6 +1148,52 @@ impl Lower {
         };
 
         Ok(Statement { span: s.span, kind })
+    }
+
+    fn lower_intrinsic(
+        &mut self,
+        kind: IntrinsicKind,
+        type_args: Vec<ast::TypeExpr>,
+        args: Vec<ast::Expr>,
+        span: Span,
+    ) -> Result<Expr, Error> {
+        // `alloc`/`realloc` need the element type for `sizeof`; `free` doesn't.
+        let elem_ty = match type_args.first() {
+            Some(t) => self.lower_type(t)?,
+            None => {
+                if matches!(kind, IntrinsicKind::Alloc | IntrinsicKind::Realloc) {
+                    let name = match kind {
+                        IntrinsicKind::Alloc => "alloc",
+                        IntrinsicKind::Realloc => "realloc",
+                        IntrinsicKind::Free => "free",
+                    };
+                    return Err(Error {
+                        span,
+                        kind: ErrorKind::MissingTypeArguments {
+                            name: name.to_string(),
+                        },
+                    });
+                }
+                Ty::Unit
+            }
+        };
+        let args: Vec<Expr> = args
+            .into_iter()
+            .map(|a| self.lower_expr(a))
+            .collect::<Result<_, _>>()?;
+        let ty = match kind {
+            IntrinsicKind::Alloc | IntrinsicKind::Realloc => Ty::Ptr(Box::new(elem_ty.clone())),
+            IntrinsicKind::Free => Ty::Unit,
+        };
+        Ok(Expr {
+            span,
+            ty,
+            kind: ExprKind::Intrinsic {
+                kind,
+                elem_ty,
+                args,
+            },
+        })
     }
 
     fn lower_type(&mut self, t: &ast::TypeExpr) -> Result<Ty, Error> {
@@ -2001,6 +2064,12 @@ impl Lower {
                         message: message.clone(),
                     },
                 });
+            }
+            ExprKind::Intrinsic { elem_ty, args, .. } => {
+                *elem_ty = self.substitute_ty(elem_ty, subst);
+                for arg in args {
+                    self.substitute_expr(arg, subst, local_map)?;
+                }
             }
         }
         if let Some(ty) = updated_call_ty {

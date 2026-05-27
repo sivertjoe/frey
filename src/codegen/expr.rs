@@ -1,7 +1,10 @@
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, IntValue, PointerValue, ValueKind};
+use inkwell::types::BasicType;
+use inkwell::values::{
+    BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PointerValue, ValueKind,
+};
 
 use crate::codegen::{Codegen, Error};
-use crate::hir::types::{Const, Expr, ExprKind, Statement, StatementKind};
+use crate::hir::types::{Const, Expr, ExprKind, IntrinsicKind, Statement, StatementKind};
 use crate::hir::{BinaryOperator, FunctionCall, Ty, UnaryOperator};
 
 impl<'ctx> Codegen<'ctx> {
@@ -381,10 +384,100 @@ impl<'ctx> Codegen<'ctx> {
                     }
                 }
             }
+            ExprKind::Intrinsic {
+                kind,
+                elem_ty,
+                args,
+            } => self.lower_intrinsic(kind, elem_ty, args),
             ExprKind::TypeValue(_) | ExprKind::CompError(_) => {
                 unreachable!("comptime-only nodes are eliminated during specialization")
             }
         }
+    }
+
+    /// Emits a heap intrinsic as a call to libc `malloc`/`realloc`/`free`.
+    /// `alloc`/`realloc` size their allocation as `count * sizeof(elem_ty)`.
+    fn lower_intrinsic(
+        &mut self,
+        kind: IntrinsicKind,
+        elem_ty: Ty,
+        args: Vec<Expr>,
+    ) -> Result<BasicValueEnum<'ctx>, Error> {
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let i64_ty = self.context.i64_type();
+        let mut args = args.into_iter();
+        match kind {
+            IntrinsicKind::Alloc => {
+                let count = self
+                    .lower_expr(args.next().expect("alloc takes a count"))?
+                    .into_int_value();
+                let bytes = self.alloc_byte_size(count, &elem_ty)?;
+                let malloc = self.libc_function("malloc", ptr_ty.fn_type(&[i64_ty.into()], false));
+                let call = self.builder.build_direct_call(malloc, &[bytes.into()], "")?;
+                match call.try_as_basic_value() {
+                    ValueKind::Basic(v) => Ok(v),
+                    ValueKind::Instruction(_) => panic!("malloc returns a pointer"),
+                }
+            }
+            IntrinsicKind::Realloc => {
+                let ptr = self
+                    .lower_expr(args.next().expect("realloc takes a pointer"))?
+                    .into_pointer_value();
+                let count = self
+                    .lower_expr(args.next().expect("realloc takes a count"))?
+                    .into_int_value();
+                let bytes = self.alloc_byte_size(count, &elem_ty)?;
+                let realloc = self.libc_function(
+                    "realloc",
+                    ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false),
+                );
+                let call = self
+                    .builder
+                    .build_direct_call(realloc, &[ptr.into(), bytes.into()], "")?;
+                match call.try_as_basic_value() {
+                    ValueKind::Basic(v) => Ok(v),
+                    ValueKind::Instruction(_) => panic!("realloc returns a pointer"),
+                }
+            }
+            IntrinsicKind::Free => {
+                let ptr = self
+                    .lower_expr(args.next().expect("free takes a pointer"))?
+                    .into_pointer_value();
+                let free =
+                    self.libc_function("free", self.context.void_type().fn_type(&[ptr_ty.into()], false));
+                self.builder.build_direct_call(free, &[ptr.into()], "")?;
+                Ok(self.context.bool_type().const_zero().into())
+            }
+        }
+    }
+
+    /// `count * sizeof(elem_ty)` as an i64, for sizing an allocation.
+    fn alloc_byte_size(
+        &self,
+        count: inkwell::values::IntValue<'ctx>,
+        elem_ty: &Ty,
+    ) -> Result<inkwell::values::IntValue<'ctx>, Error> {
+        let i64_ty = self.context.i64_type();
+        let count64 = if count.get_type().get_bit_width() == 64 {
+            count
+        } else {
+            self.builder.build_int_s_extend(count, i64_ty, "")?
+        };
+        let elem_size = self.lower_ty(elem_ty).size_of().expect("sized element type");
+        Ok(self.builder.build_int_mul(count64, elem_size, "")?)
+    }
+
+    fn libc_function(
+        &self,
+        name: &str,
+        ty: inkwell::types::FunctionType<'ctx>,
+    ) -> FunctionValue<'ctx> {
+        self.module
+            .get_function(name)
+            .unwrap_or_else(|| {
+                self.module
+                    .add_function(name, ty, Some(inkwell::module::Linkage::External))
+            })
     }
 
     /// Lowers a place expression to its storage pointer. Valid places are
@@ -425,6 +518,18 @@ impl<'ctx> Codegen<'ctx> {
         arr: Expr,
         index: Expr,
     ) -> Result<PointerValue<'ctx>, Error> {
+        // Raw-pointer indexing: `p[i]` is `gep elem, p_value, i`. The base
+        // expression evaluates to the pointer value itself (not a place).
+        if let Ty::Ptr(elem) = arr.ty.clone() {
+            let elem_llvm_ty = self.lower_ty(&elem);
+            let base_ptr = self.lower_expr(arr)?.into_pointer_value();
+            let index_val = self.lower_expr(index)?.into_int_value();
+            let elem_ptr = unsafe {
+                self.builder
+                    .build_in_bounds_gep(elem_llvm_ty, base_ptr, &[index_val], "")?
+            };
+            return Ok(elem_ptr);
+        }
         let array_llvm_ty = self.lower_ty(&arr.ty);
         let array_ptr = if is_place(&arr) {
             self.lower_place(arr)?
