@@ -9,6 +9,6 @@ description = "Syntax highlighting for the Frey language"
 # Zed fetches it from git, so push this repo and set `rev` to a commit that
 # contains the generated `src/parser.c`. Update `repository` to your remote.
 [grammars.frey]
-repository = "https://github.com/YOUR_USER/frey"
-rev = "REPLACE_WITH_COMMIT_SHA"
+repository = "file:///C:/Source/frey"
+rev = "993e31e8616936b7eeb53f0aa356e01eaea42f4e"
 path = "editors/tree-sitter-frey"
