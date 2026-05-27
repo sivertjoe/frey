@@ -14,6 +14,7 @@ pub enum ErrorKind {
     InvalidInt(String),
     UnterminatedString,
     InvalidEscape(char),
+    UnterminatedComment,
 }
 
 impl fmt::Display for Error {
@@ -42,6 +43,9 @@ impl fmt::Display for ErrorKind {
             }
             ErrorKind::InvalidEscape(ch) => {
                 write!(f, "invalid escape sequence: `\\{ch}`")
+            }
+            ErrorKind::UnterminatedComment => {
+                write!(f, "unterminated block comment")
             }
         }
     }

@@ -130,6 +130,54 @@ impl<'a> Cursor<'a> {
         }
     }
 
+    /// Skips a `// ...` line comment (up to, but not including, the newline).
+    pub fn line_comment(&mut self) {
+        self.bump(); // first `/`
+        self.bump(); // second `/`
+        while let Some(ch) = self.peek() {
+            if ch == '\n' {
+                break;
+            }
+            self.bump();
+        }
+    }
+
+    /// Skips a `/* ... */` block comment. Nesting is supported, so
+    /// `/* a /* b */ c */` is a single comment. Errors if unterminated.
+    pub fn block_comment(&mut self) -> Result<(), Error> {
+        let start = self.position();
+        self.bump(); // `/`
+        self.bump(); // `*`
+        let mut depth = 1usize;
+        while depth > 0 {
+            match (self.peek(), self.peek_second()) {
+                (Some('/'), Some('*')) => {
+                    self.bump();
+                    self.bump();
+                    depth += 1;
+                }
+                (Some('*'), Some('/')) => {
+                    self.bump();
+                    self.bump();
+                    depth -= 1;
+                }
+                (Some(_), _) => {
+                    self.bump();
+                }
+                (None, _) => {
+                    return Err(Error {
+                        kind: ErrorKind::UnterminatedComment,
+                        span: Span {
+                            start,
+                            end: self.position(),
+                        },
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn number(&mut self) -> Result<Token, Error> {
         let start = self.position();
         let start_offset = self.offset;

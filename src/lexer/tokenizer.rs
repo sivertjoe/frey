@@ -56,9 +56,11 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, Error> {
             '*' => {
                 tokens.push(cursor.single(TokenKind::Star));
             }
-            '/' => {
-                tokens.push(cursor.single(TokenKind::Slash));
-            }
+            '/' => match cursor.peek_second() {
+                Some('/') => cursor.line_comment(),
+                Some('*') => cursor.block_comment()?,
+                _ => tokens.push(cursor.single(TokenKind::Slash)),
+            },
             '%' => {
                 tokens.push(cursor.single(TokenKind::Percent));
             }

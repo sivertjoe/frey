@@ -83,6 +83,14 @@ pub enum ErrorKind {
     ComptimeError {
         message: String,
     },
+    /// No overload of `name` matches the argument types at a call site.
+    NoMatchingOverload {
+        name: String,
+    },
+    /// Multiple overloads of `name` match the argument types.
+    AmbiguousOverload {
+        name: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -204,6 +212,12 @@ impl fmt::Display for ErrorKind {
             }
             ErrorKind::ComptimeError { message } => {
                 write!(f, "{message}")
+            }
+            ErrorKind::NoMatchingOverload { name } => {
+                write!(f, "no overload of `{name}` matches these arguments")
+            }
+            ErrorKind::AmbiguousOverload { name } => {
+                write!(f, "ambiguous call to `{name}`: multiple overloads match")
             }
         }
     }

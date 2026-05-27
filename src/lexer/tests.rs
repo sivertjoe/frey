@@ -961,4 +961,58 @@ mod tests {
             ]
         );
     }
+
+    fn kinds(src: &str) -> Vec<TokenKind> {
+        tokenize(src).unwrap().into_iter().map(|t| t.kind).collect()
+    }
+
+    #[test]
+    fn skips_line_comments() {
+        assert_eq!(
+            kinds("let // a comment\nx"),
+            vec![
+                TokenKind::Let,
+                TokenKind::Identifier("x".to_string()),
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn skips_block_comments() {
+        assert_eq!(
+            kinds("let /* a\n comment */ x"),
+            vec![
+                TokenKind::Let,
+                TokenKind::Identifier("x".to_string()),
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn block_comments_nest() {
+        assert_eq!(
+            kinds("/* outer /* inner */ still */ x"),
+            vec![TokenKind::Identifier("x".to_string()), TokenKind::Eof]
+        );
+    }
+
+    #[test]
+    fn slash_is_still_division() {
+        assert_eq!(
+            kinds("a / b"),
+            vec![
+                TokenKind::Identifier("a".to_string()),
+                TokenKind::Slash,
+                TokenKind::Identifier("b".to_string()),
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn unterminated_block_comment_errors() {
+        assert!(tokenize("/* never closed").is_err());
+    }
 }

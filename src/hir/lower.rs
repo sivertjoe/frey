@@ -63,6 +63,13 @@ pub struct Lower {
     in_comptime: bool,
     /// True while substituting a comptime template's body — enables folding.
     in_comptime_subst: bool,
+
+    /// Top-level function names → every declaration sharing that name (an
+    /// overload set, resolved by argument types at the call site).
+    overloads: HashMap<String, Vec<LocalId>>,
+    /// AST declaration node id → its pre-registered LocalId, so a function body
+    /// finds its own id even when the name is overloaded.
+    fn_id_by_node: HashMap<crate::ast::NodeId, LocalId>,
 }
 
 impl Lower {
@@ -84,6 +91,8 @@ impl Lower {
             comptime_template_ids: HashSet::default(),
             in_comptime: false,
             in_comptime_subst: false,
+            overloads: HashMap::default(),
+            fn_id_by_node: HashMap::default(),
         }
     }
 
@@ -354,15 +363,6 @@ impl Lower {
             return Ok(());
         };
 
-        if self.current_scope().contains_key(&d.name) {
-            return Err(Error {
-                span: d.span,
-                kind: ErrorKind::AlreadyDefined {
-                    name: d.name.clone(),
-                },
-            });
-        }
-
         // Each top-level function gets its own type-variable scope. After
         // the signature is lowered the scope is saved on the side so the
         // body's $T / T references resolve to the same TypeVarIds.
@@ -388,7 +388,12 @@ impl Lower {
         };
 
         let id = self.id_gen.fresh();
+        // Functions may share a name (overloading); the scope keeps the most
+        // recent for bare references, while `overloads` keeps the full set and
+        // `fn_id_by_node` ties each declaration to its own id.
         self.current_scope_mut().insert(d.name.clone(), id);
+        self.overloads.entry(d.name.clone()).or_default().push(id);
+        self.fn_id_by_node.insert(d.id, id);
         self.bindings.insert(id, ty);
         self.pending_fn_sigs.insert(
             id,
@@ -403,10 +408,15 @@ impl Lower {
     }
 
     fn lower_declaration(&mut self, d: ast::Declaration) -> Result<Declaration, Error> {
-        let pre_registered = matches!(d.value.kind, ast::ExprKind::Function { .. })
-            && self.current_scope().contains_key(&d.name);
+        // Top-level functions were pre-registered (by node id, so overloaded
+        // names still find the right id). Everything else is a fresh binding.
+        let pre_registered_id = if matches!(d.value.kind, ast::ExprKind::Function { .. }) {
+            self.fn_id_by_node.get(&d.id).copied()
+        } else {
+            None
+        };
 
-        if !pre_registered && self.current_scope().contains_key(&d.name) {
+        if pre_registered_id.is_none() && self.current_scope().contains_key(&d.name) {
             return Err(Error {
                 span: d.span,
                 kind: ErrorKind::AlreadyDefined { name: d.name },
@@ -415,8 +425,7 @@ impl Lower {
 
         // Pre-registered top-level functions: lower the body using the
         // already-lowered signature (don't re-call lower_type on `$T`).
-        if pre_registered {
-            let id = *self.current_scope().get(&d.name).unwrap();
+        if let Some(id) = pre_registered_id {
             let sig = self
                 .pending_fn_sigs
                 .remove(&id)
@@ -632,90 +641,46 @@ impl Lower {
                     }
                 }
 
-                let callee = self.lower_expr(*callee)?;
-
-                let Ty::Function { params, return_ty } = callee.ty.clone() else {
-                    return Err(Error {
-                        span: callee.span,
-                        kind: ErrorKind::NotCallable {
-                            found: callee.ty.clone(),
-                        },
-                    });
-                };
-
-                // Lower args. We coerce int literals against the (possibly
-                // generic) param type; coerce_int_literal is a no-op when the
-                // target is a TypeVar.
-                let mut lowered_args = Vec::with_capacity(args.len());
-                for (i, a) in args.into_iter().enumerate() {
-                    let arg = self.lower_expr(a)?;
-                    let arg = match params.get(i) {
-                        Some(pty) => coerce_int_literal(arg, pty)?,
-                        None => arg,
+                // Overloaded direct call: pick the overload matching the args.
+                if let ast::ExprKind::Identifier(name) = &callee.kind
+                    && self.overloads.get(name).is_some_and(|c| c.len() > 1)
+                {
+                    let name = name.clone();
+                    let lowered_args: Vec<Expr> = args
+                        .into_iter()
+                        .map(|a| self.lower_expr(a))
+                        .collect::<Result<_, _>>()?;
+                    let arg_tys: Vec<Ty> = lowered_args.iter().map(|a| a.ty.clone()).collect();
+                    let explicit_type_args: Vec<Ty> = type_args
+                        .iter()
+                        .map(|t| self.lower_type(t))
+                        .collect::<Result<_, _>>()?;
+                    let fn_id = self.resolve_overload(&name, &arg_tys, e.span)?;
+                    let callee = Expr {
+                        span: e.span,
+                        ty: self.bindings[&fn_id].clone(),
+                        kind: ExprKind::Local(fn_id),
                     };
-                    lowered_args.push(arg);
+                    return self.finish_call(callee, lowered_args, explicit_type_args, e.span);
                 }
-                let args = lowered_args;
 
-                // Explicit type arguments (`f<Int>(...)`), lowered in the
-                // current scope; may be concrete or, inside a generic body,
-                // themselves type vars.
+                // Method call / UFCS: `recv.name(args)` becomes a field call
+                // (when `name` is a field holding a function) or the uniform
+                // form `name(recv, args)` otherwise.
+                if matches!(&callee.kind, ast::ExprKind::Field { .. }) {
+                    return self.lower_method_call(*callee, type_args, args, e.span);
+                }
+
+                let callee = self.lower_expr(*callee)?;
+                let args: Vec<Expr> = args
+                    .into_iter()
+                    .map(|a| self.lower_expr(a))
+                    .collect::<Result<_, _>>()?;
                 let explicit_type_args: Vec<Ty> = type_args
                     .iter()
                     .map(|t| self.lower_type(t))
                     .collect::<Result<_, _>>()?;
-
-                // Specialize generic calls when every arg (value and type) is
-                // concrete. Calls inside other generic bodies (still carrying
-                // TypeVars) are left as-is; the outer specialization pass
-                // re-visits and specializes them with concrete arg types.
-                let callee_local = if let ExprKind::Local(id) = callee.kind {
-                    Some(id)
-                } else {
-                    None
-                };
-                if let Some(callee_id) = callee_local
-                    && self.templates.contains_key(&callee_id)
-                {
-                    let arg_tys: Vec<Ty> = args.iter().map(|a| a.ty.clone()).collect();
-                    let concrete = !arg_tys.iter().any(ty_has_typevars)
-                        && !explicit_type_args.iter().any(ty_has_typevars);
-                    if concrete {
-                        let new_id =
-                            self.specialize_call(callee_id, &arg_tys, &explicit_type_args, e.span)?;
-                        let new_fn_ty = self.bindings[&new_id].clone();
-                        let Ty::Function {
-                            return_ty: spec_ret,
-                            ..
-                        } = &new_fn_ty
-                        else {
-                            unreachable!("specialized function must have function type");
-                        };
-                        let result_ty = (**spec_ret).clone();
-                        return Ok(Expr {
-                            span: e.span,
-                            ty: result_ty,
-                            kind: ExprKind::Call(FunctionCall {
-                                callee: Box::new(Expr {
-                                    span: callee.span,
-                                    ty: new_fn_ty,
-                                    kind: ExprKind::Local(new_id),
-                                }),
-                                args,
-                            }),
-                        });
-                    }
-                }
-
-                let result_ty = *return_ty;
-                Ok(Expr {
-                    span: e.span,
-                    ty: result_ty,
-                    kind: ExprKind::Call(FunctionCall {
-                        callee: Box::new(callee),
-                        args,
-                    }),
-                })
+                self.finish_call(callee, args, explicit_type_args, e.span)
             }
             ast::ExprKind::Unary { op, expr } => {
                 let operand = self.lower_expr(*expr)?;
@@ -1051,6 +1016,360 @@ impl Lower {
                         index,
                     },
                 })
+            }
+        }
+    }
+
+    /// Finishes a call once the callee and arguments are lowered: coerces
+    /// int-literal args against the parameter types, then either specializes a
+    /// generic template (when every argument is concrete) or builds the call.
+    fn finish_call(
+        &mut self,
+        callee: Expr,
+        args: Vec<Expr>,
+        explicit_type_args: Vec<Ty>,
+        span: Span,
+    ) -> Result<Expr, Error> {
+        let Ty::Function { params, return_ty } = callee.ty.clone() else {
+            return Err(Error {
+                span: callee.span,
+                kind: ErrorKind::NotCallable {
+                    found: callee.ty.clone(),
+                },
+            });
+        };
+
+        // Coerce int literals against the (possibly generic) param type;
+        // coerce_int_literal is a no-op when the target is a TypeVar.
+        let mut coerced = Vec::with_capacity(args.len());
+        for (i, arg) in args.into_iter().enumerate() {
+            let arg = match params.get(i) {
+                Some(pty) => coerce_int_literal(arg, pty)?,
+                None => arg,
+            };
+            coerced.push(arg);
+        }
+        let args = coerced;
+
+        let callee_local = if let ExprKind::Local(id) = callee.kind {
+            Some(id)
+        } else {
+            None
+        };
+        if let Some(callee_id) = callee_local
+            && self.templates.contains_key(&callee_id)
+        {
+            let arg_tys: Vec<Ty> = args.iter().map(|a| a.ty.clone()).collect();
+            let concrete = !arg_tys.iter().any(ty_has_typevars)
+                && !explicit_type_args.iter().any(ty_has_typevars);
+            if concrete {
+                let new_id = self.specialize_call(callee_id, &arg_tys, &explicit_type_args, span)?;
+                let new_fn_ty = self.bindings[&new_id].clone();
+                let Ty::Function {
+                    return_ty: spec_ret,
+                    ..
+                } = &new_fn_ty
+                else {
+                    unreachable!("specialized function must have function type");
+                };
+                let result_ty = (**spec_ret).clone();
+                return Ok(Expr {
+                    span,
+                    ty: result_ty,
+                    kind: ExprKind::Call(FunctionCall {
+                        callee: Box::new(Expr {
+                            span: callee.span,
+                            ty: new_fn_ty,
+                            kind: ExprKind::Local(new_id),
+                        }),
+                        args,
+                    }),
+                });
+            }
+        }
+
+        let result_ty = *return_ty;
+        Ok(Expr {
+            span,
+            ty: result_ty,
+            kind: ExprKind::Call(FunctionCall {
+                callee: Box::new(callee),
+                args,
+            }),
+        })
+    }
+
+    /// Lowers `recv.name(args)`. If `name` is a (function-typed) field of the
+    /// receiver's struct it's a field call; otherwise it desugars to the
+    /// uniform-call form `name(recv, args)` (Nim-style UFCS), auto-referencing
+    /// the receiver when the function expects a pointer.
+    fn lower_method_call(
+        &mut self,
+        callee: ast::Expr,
+        type_args: Vec<ast::TypeExpr>,
+        args: Vec<ast::Expr>,
+        span: Span,
+    ) -> Result<Expr, Error> {
+        let ast::ExprKind::Field { target, name } = callee.kind else {
+            unreachable!("lower_method_call requires a field callee");
+        };
+        let recv = self.lower_expr(*target)?;
+        let explicit_type_args: Vec<Ty> = type_args
+            .iter()
+            .map(|t| self.lower_type(t))
+            .collect::<Result<_, _>>()?;
+
+        if let Some((index, field_ty)) = self.resolve_field(&recv.ty, &name) {
+            // `recv.field(args)` — the field holds the callable value.
+            let target = self.autoderef_to_struct(recv);
+            let callee = Expr {
+                span: target.span,
+                ty: field_ty,
+                kind: ExprKind::Field {
+                    target: Box::new(target),
+                    name,
+                    index,
+                },
+            };
+            let args: Vec<Expr> = args
+                .into_iter()
+                .map(|a| self.lower_expr(a))
+                .collect::<Result<_, _>>()?;
+            return self.finish_call(callee, args, explicit_type_args, span);
+        }
+
+        // UFCS: resolve `name` (possibly overloaded) against the receiver and
+        // arguments, then call it as `name(recv, args)`.
+        let lowered_args: Vec<Expr> = args
+            .into_iter()
+            .map(|a| self.lower_expr(a))
+            .collect::<Result<_, _>>()?;
+        let other_arg_tys: Vec<Ty> = lowered_args.iter().map(|a| a.ty.clone()).collect();
+        let (fn_id, recv) = self.resolve_method(&name, recv, &other_arg_tys, span)?;
+        let callee = Expr {
+            span,
+            ty: self.bindings[&fn_id].clone(),
+            kind: ExprKind::Local(fn_id),
+        };
+        let mut all_args = Vec::with_capacity(lowered_args.len() + 1);
+        all_args.push(recv);
+        all_args.extend(lowered_args);
+        self.finish_call(callee, all_args, explicit_type_args, span)
+    }
+
+    /// Looks up `name` as a field of `ty` (after auto-dereferencing pointers to
+    /// a struct), returning its index and substituted type. None if `ty` is not
+    /// a struct or has no such field.
+    fn resolve_field(&mut self, ty: &Ty, name: &str) -> Option<(usize, Ty)> {
+        let mut t = ty.clone();
+        while let Ty::Ptr(inner) = t {
+            t = *inner;
+        }
+        let fields: Vec<(String, Ty)> = match t {
+            Ty::Struct(n) => self.structs.get(&n)?.fields.clone(),
+            Ty::GenericStruct { name: sname, args } => {
+                let template = self.struct_templates.get(&sname)?.clone();
+                let subst: HashMap<TypeVarId, Ty> = template
+                    .type_var_ids
+                    .iter()
+                    .zip(args.iter())
+                    .map(|(tv, ty)| (*tv, ty.clone()))
+                    .collect();
+                template
+                    .fields
+                    .iter()
+                    .map(|(fname, fty)| (fname.clone(), self.substitute_ty(fty, &subst)))
+                    .collect()
+            }
+            _ => return None,
+        };
+        fields
+            .iter()
+            .enumerate()
+            .find_map(|(i, (n, t))| (n.as_str() == name).then(|| (i, t.clone())))
+    }
+
+    /// Wraps `target` in a chain of `Deref`s until it names a struct value,
+    /// mirroring field-access auto-deref.
+    fn autoderef_to_struct(&self, mut target: Expr) -> Expr {
+        while let Ty::Ptr(inner) = target.ty.clone() {
+            let pointee_ty = *inner;
+            target = Expr {
+                span: target.span,
+                ty: pointee_ty,
+                kind: ExprKind::Deref(Box::new(target)),
+            };
+        }
+        target
+    }
+
+    /// For a UFCS receiver: if the function's first parameter is a pointer and
+    /// the receiver is an addressable non-pointer, take its address.
+    fn maybe_autoref(&self, recv: Expr, fn_ty: &Ty) -> Expr {
+        if let Ty::Function { params, .. } = fn_ty
+            && matches!(params.first(), Some(Ty::Ptr(_)))
+            && !matches!(recv.ty, Ty::Ptr(_))
+            && is_place_kind(&recv.kind)
+        {
+            let ty = Ty::Ptr(Box::new(recv.ty.clone()));
+            let span = recv.span;
+            return Expr {
+                span,
+                ty,
+                kind: ExprKind::Ref(Box::new(recv)),
+            };
+        }
+        recv
+    }
+
+    /// The parameter types of function `id`, or empty if it isn't a function.
+    fn fn_params(&self, id: LocalId) -> Vec<Ty> {
+        match self.bindings.get(&id) {
+            Some(Ty::Function { params, .. }) => params.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Whether `params` accept `arg_tys`: arity matches and each pair unifies,
+    /// treating the parameters' type vars as inference holes.
+    fn overload_matches(&self, params: &[Ty], arg_tys: &[Ty]) -> bool {
+        if params.len() != arg_tys.len() {
+            return false;
+        }
+        let mut subst = HashMap::new();
+        for (p, a) in params.iter().zip(arg_tys.iter()) {
+            if unify(p, a, Span::default(), &mut subst, &self.struct_template_origin).is_err() {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Picks the unique overload of `name` whose parameters accept `arg_tys`.
+    fn resolve_overload(&self, name: &str, arg_tys: &[Ty], span: Span) -> Result<LocalId, Error> {
+        let candidates = self.overloads.get(name).cloned().unwrap_or_default();
+        let mut matched: Vec<LocalId> = Vec::new();
+        for id in candidates {
+            if self.overload_matches(&self.fn_params(id), arg_tys) {
+                matched.push(id);
+            }
+        }
+        match matched.as_slice() {
+            [id] => Ok(*id),
+            [] => Err(Error {
+                span,
+                kind: ErrorKind::NoMatchingOverload {
+                    name: name.to_string(),
+                },
+            }),
+            _ => Err(Error {
+                span,
+                kind: ErrorKind::AmbiguousOverload {
+                    name: name.to_string(),
+                },
+            }),
+        }
+    }
+
+    /// Resolves a UFCS method `name`, choosing the overload that accepts the
+    /// receiver (as-is, auto-referenced, or auto-dereferenced) plus the other
+    /// arguments. Returns the chosen function and the adjusted receiver.
+    fn resolve_method(
+        &mut self,
+        name: &str,
+        recv: Expr,
+        other_arg_tys: &[Ty],
+        span: Span,
+    ) -> Result<(LocalId, Expr), Error> {
+        let candidates = self.overloads.get(name).cloned().unwrap_or_default();
+        if candidates.is_empty() {
+            // Not a top-level function — maybe a local holding a function value.
+            let Some(id) = self.resolve(name) else {
+                return Err(Error {
+                    span,
+                    kind: ErrorKind::NameNotFound {
+                        name: name.to_string(),
+                    },
+                });
+            };
+            let fn_ty = self
+                .bindings
+                .get(&id)
+                .cloned()
+                .expect("resolved name must have a recorded type");
+            let recv = self.maybe_autoref(recv, &fn_ty);
+            return Ok((id, recv));
+        }
+
+        let forms = self.receiver_forms(&recv);
+        let mut matched: Vec<(LocalId, RecvAdjust)> = Vec::new();
+        for id in &candidates {
+            let params = self.fn_params(*id);
+            if params.is_empty() {
+                continue;
+            }
+            for (form_ty, adjust) in &forms {
+                let mut full = Vec::with_capacity(other_arg_tys.len() + 1);
+                full.push(form_ty.clone());
+                full.extend_from_slice(other_arg_tys);
+                if self.overload_matches(&params, &full) {
+                    matched.push((*id, *adjust));
+                    break;
+                }
+            }
+        }
+        match matched.as_slice() {
+            [(id, adjust)] => Ok((*id, self.apply_recv_adjust(recv, *adjust))),
+            [] => Err(Error {
+                span,
+                kind: ErrorKind::NoMatchingOverload {
+                    name: name.to_string(),
+                },
+            }),
+            _ => Err(Error {
+                span,
+                kind: ErrorKind::AmbiguousOverload {
+                    name: name.to_string(),
+                },
+            }),
+        }
+    }
+
+    /// Receiver forms to try for UFCS dispatch, in preferred order: as-is, a
+    /// reference (if addressable), then a dereference (if it's a pointer).
+    fn receiver_forms(&self, recv: &Expr) -> Vec<(Ty, RecvAdjust)> {
+        let mut forms = vec![(recv.ty.clone(), RecvAdjust::AsIs)];
+        if is_place_kind(&recv.kind) {
+            forms.push((Ty::Ptr(Box::new(recv.ty.clone())), RecvAdjust::Ref));
+        }
+        if let Ty::Ptr(inner) = &recv.ty {
+            forms.push(((**inner).clone(), RecvAdjust::Deref));
+        }
+        forms
+    }
+
+    fn apply_recv_adjust(&self, recv: Expr, adjust: RecvAdjust) -> Expr {
+        match adjust {
+            RecvAdjust::AsIs => recv,
+            RecvAdjust::Ref => {
+                let ty = Ty::Ptr(Box::new(recv.ty.clone()));
+                let span = recv.span;
+                Expr {
+                    span,
+                    ty,
+                    kind: ExprKind::Ref(Box::new(recv)),
+                }
+            }
+            RecvAdjust::Deref => {
+                let Ty::Ptr(inner) = recv.ty.clone() else {
+                    unreachable!("Deref adjustment requires a pointer receiver");
+                };
+                let span = recv.span;
+                Expr {
+                    span,
+                    ty: *inner,
+                    kind: ExprKind::Deref(Box::new(recv)),
+                }
             }
         }
     }
@@ -2085,6 +2404,25 @@ impl Lower {
         }
         Ok(())
     }
+}
+
+/// How a UFCS receiver is adjusted to match the chosen overload's first param.
+#[derive(Clone, Copy)]
+enum RecvAdjust {
+    AsIs,
+    Ref,
+    Deref,
+}
+
+/// Whether an expression denotes an addressable place (so `&expr` is valid).
+fn is_place_kind(kind: &ExprKind) -> bool {
+    matches!(
+        kind,
+        ExprKind::Local(_)
+            | ExprKind::Field { .. }
+            | ExprKind::Subscript { .. }
+            | ExprKind::Deref(_)
+    )
 }
 
 fn mangle_specialization(name: &str, tys: &[Ty]) -> String {
