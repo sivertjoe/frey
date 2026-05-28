@@ -2,6 +2,7 @@
 .claude
 *.ll
 *.exe
+*.obj
 test.frey
 test
 
