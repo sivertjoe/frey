@@ -54,6 +54,8 @@ pub enum Ty {
     Struct(String),
     TypeVar(TypeVarId),
     GenericStruct { name: String, args: Vec<Ty> },
+    /// Anonymous tuple of two-or-more element types.
+    Tuple(Vec<Ty>),
 }
 
 impl Ty {
@@ -182,6 +184,13 @@ pub enum ExprKind {
         name: String,
         index: usize,
     },
+    /// An anonymous tuple value, `(a, b, ...)`.
+    Tuple(Vec<Expr>),
+    /// Tuple field access by index, `t.0`, `t.1`, ...
+    TupleField {
+        target: Box<Expr>,
+        index: usize,
+    },
     /// A reified type value, used only inside `#comptime` function bodies.
     /// Folded away during specialization; never reaches codegen.
     TypeValue(Ty),
@@ -302,6 +311,16 @@ impl fmt::Debug for Ty {
                 }
                 write!(f, ">")
             }
+            Ty::Tuple(elems) => {
+                write!(f, "(")?;
+                for (i, e) in elems.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{e:?}")?;
+                }
+                write!(f, ")")
+            }
         }
     }
 }
@@ -367,6 +386,17 @@ impl fmt::Debug for ExprKind {
                 write!(f, "}}")
             }
             ExprKind::Field { target, name, .. } => write!(f, "{target:?}.{name}"),
+            ExprKind::Tuple(elems) => {
+                write!(f, "(")?;
+                for (i, e) in elems.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{e:?}")?;
+                }
+                write!(f, ")")
+            }
+            ExprKind::TupleField { target, index } => write!(f, "{target:?}.{index}"),
             ExprKind::TypeValue(ty) => write!(f, "TypeValue({ty:?})"),
             ExprKind::CompError(msg) => write!(f, "CompError({msg:?})"),
             ExprKind::Intrinsic {

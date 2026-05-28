@@ -391,6 +391,42 @@ impl<'ctx> Codegen<'ctx> {
                 elem_ty,
                 args,
             } => self.lower_intrinsic(kind, elem_ty, args),
+            ExprKind::Tuple(elems) => {
+                let elem_tys: Vec<Ty> = elems.iter().map(|e| e.ty.clone()).collect();
+                let tuple_llvm_ty = self.tuple_llvm_type(&elem_tys);
+                let mut agg: inkwell::values::AggregateValueEnum<'ctx> =
+                    tuple_llvm_ty.get_undef().into();
+                for (i, el) in elems.into_iter().enumerate() {
+                    let v = self.lower_expr(el)?;
+                    agg = self.builder.build_insert_value(agg, v, i as u32, "")?;
+                }
+                Ok(agg.into_struct_value().into())
+            }
+            ExprKind::TupleField { target, index } => {
+                let field_llvm_ty = self.lower_ty(&expr.ty);
+                let elem_tys = match &target.ty {
+                    Ty::Tuple(elems) => elems.clone(),
+                    _ => unreachable!("TupleField target has Tuple type from lowering"),
+                };
+                if is_place(&target) {
+                    let tuple_llvm_ty = self.tuple_llvm_type(&elem_tys);
+                    let tuple_ptr = self.lower_place(*target)?;
+                    let field_ptr = self.builder.build_struct_gep(
+                        tuple_llvm_ty,
+                        tuple_ptr,
+                        index as u32,
+                        "",
+                    )?;
+                    Ok(self.builder.build_load(field_llvm_ty, field_ptr, "")?)
+                } else {
+                    let agg = self.lower_expr(*target)?;
+                    Ok(self.builder.build_extract_value(
+                        agg.into_struct_value(),
+                        index as u32,
+                        "",
+                    )?)
+                }
+            }
             ExprKind::TypeValue(_) | ExprKind::CompError(_) => {
                 unreachable!("comptime-only nodes are eliminated during specialization")
             }
@@ -508,6 +544,17 @@ impl<'ctx> Codegen<'ctx> {
                 Ok(self
                     .builder
                     .build_struct_gep(struct_llvm_ty, struct_ptr, index as u32, "")?)
+            }
+            ExprKind::TupleField { target, index } => {
+                let elem_tys = match &target.ty {
+                    Ty::Tuple(elems) => elems.clone(),
+                    _ => unreachable!("TupleField target has Tuple type from lowering"),
+                };
+                let tuple_llvm_ty = self.tuple_llvm_type(&elem_tys);
+                let tuple_ptr = self.lower_place(*target)?;
+                Ok(self
+                    .builder
+                    .build_struct_gep(tuple_llvm_ty, tuple_ptr, index as u32, "")?)
             }
             _ => unreachable!("assignment target must be a place expression"),
         }
@@ -907,5 +954,6 @@ fn is_place(e: &Expr) -> bool {
             | ExprKind::Subscript { .. }
             | ExprKind::Deref(_)
             | ExprKind::Field { .. }
+            | ExprKind::TupleField { .. }
     )
 }

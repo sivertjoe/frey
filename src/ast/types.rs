@@ -92,6 +92,8 @@ pub enum TypeExprKind {
         name: String,
         args: Vec<TypeExpr>,
     },
+    /// An anonymous tuple type `(T1, T2, ...)` with at least two elements.
+    Tuple(Vec<TypeExpr>),
 }
 
 pub struct Block {
@@ -193,6 +195,13 @@ pub enum ExprKind {
     Field {
         target: Box<Expr>,
         name: String,
+    },
+    /// A tuple value `(a, b, ...)` with at least two elements.
+    Tuple(Vec<Expr>),
+    /// Tuple field access by index: `t.0`, `t.1`, …
+    TupleField {
+        target: Box<Expr>,
+        index: usize,
     },
 }
 

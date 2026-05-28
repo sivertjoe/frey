@@ -12,6 +12,7 @@ pub fn ty_has_typevars(ty: &Ty) -> bool {
             params.iter().any(ty_has_typevars) || ty_has_typevars(return_ty)
         }
         Ty::GenericStruct { args, .. } => args.iter().any(ty_has_typevars),
+        Ty::Tuple(elems) => elems.iter().any(ty_has_typevars),
         _ => false,
     }
 }
@@ -34,6 +35,11 @@ pub fn collect_typevars(ty: &Ty, out: &mut Vec<TypeVarId>) {
         Ty::GenericStruct { args, .. } => {
             for a in args {
                 collect_typevars(a, out);
+            }
+        }
+        Ty::Tuple(elems) => {
+            for e in elems {
+                collect_typevars(e, out);
             }
         }
         _ => {}
@@ -115,6 +121,12 @@ pub fn unify(
                 },
             }),
         },
+        (Ty::Tuple(a), Ty::Tuple(b)) if a.len() == b.len() => {
+            for (x, y) in a.iter().zip(b.iter()) {
+                unify(x, y, span, subst, struct_origins)?;
+            }
+            Ok(())
+        }
         (a, b) if a == b => Ok(()),
         (a, b) => Err(Error {
             span,

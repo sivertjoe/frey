@@ -276,6 +276,16 @@ impl Typechecker {
                 }
                 Ok(())
             }
+            ExprKind::Tuple(elems) => {
+                for el in elems {
+                    self.check_expr(el)?;
+                }
+                Ok(())
+            }
+            ExprKind::TupleField { target, .. } => {
+                self.check_expr(target)?;
+                Ok(())
+            }
         }
     }
 
@@ -525,6 +535,7 @@ fn assignment_local_root(target: &Expr) -> Option<LocalId> {
             }
         }
         ExprKind::Field { target, .. } => assignment_local_root(target),
+        ExprKind::TupleField { target, .. } => assignment_local_root(target),
         ExprKind::Deref(_) => None,
         _ => unreachable!("assignment target must be a place expression"),
     }

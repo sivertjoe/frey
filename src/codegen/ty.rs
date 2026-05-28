@@ -19,11 +19,21 @@ impl<'ctx> Codegen<'ctx> {
             }
             Ty::Array { element, count } => self.lower_ty(element).array_type(*count as u32).into(),
             Ty::Struct(name) => self.struct_llvm[name].into(),
+            Ty::Tuple(elems) => self.tuple_llvm_type(elems).into(),
 
             Ty::TypeVar(_) | Ty::GenericStruct { .. } => {
                 unreachable!("specialization should have eliminated TypeVars and GenericStructs")
             }
         }
+    }
+
+    /// Builds the LLVM anonymous-struct type corresponding to a Frey tuple
+    /// `(T1, T2, ...)`. Lowering is structural — two tuples with the same
+    /// element types share the same LLVM type without needing a name.
+    pub fn tuple_llvm_type(&self, elems: &[Ty]) -> inkwell::types::StructType<'ctx> {
+        let field_types: Vec<BasicTypeEnum<'ctx>> =
+            elems.iter().map(|e| self.lower_ty(e)).collect();
+        self.context.struct_type(&field_types, false)
     }
 
     pub fn lower_fn_type(&self, params: &[Param], return_ty: &Ty) -> FunctionType<'ctx> {
@@ -64,6 +74,7 @@ impl<'ctx> Codegen<'ctx> {
                 .array_type(*count as u32)
                 .fn_type(param_types, false),
             Ty::Struct(name) => self.struct_llvm[name].fn_type(param_types, false),
+            Ty::Tuple(elems) => self.tuple_llvm_type(elems).fn_type(param_types, false),
             Ty::TypeVar(_) | Ty::GenericStruct { .. } => {
                 unreachable!("specialization should have eliminated TypeVars and GenericStructs")
             }

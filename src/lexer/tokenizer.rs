@@ -115,9 +115,22 @@ pub fn tokenize_at(src: &str, base: usize) -> Result<Vec<Token>, Error> {
             }
             ch if ch.is_ascii_digit()
                 || (ch == '.'
-                    && matches!(cursor.peek_second(), Some(ch) if ch.is_ascii_digit())) =>
+                    && matches!(cursor.peek_second(), Some(ch) if ch.is_ascii_digit())
+                    && !matches!(
+                        tokens.last().map(|t| &t.kind),
+                        Some(
+                            TokenKind::Identifier(_)
+                                | TokenKind::Literal(_)
+                                | TokenKind::RightParen
+                                | TokenKind::RightBracket
+                        )
+                    )) =>
             {
-                let tok = cursor.number()?;
+                // After a `.` we're parsing a tuple-field index (`t.0`), so
+                // stop at integer — don't roll the trailing `.<digit>` of
+                // `t.0.1` into a single float literal.
+                let integer_only = matches!(tokens.last().map(|t| &t.kind), Some(TokenKind::Dot));
+                let tok = cursor.number(integer_only)?;
                 tokens.push(tok);
             }
             '.' => {

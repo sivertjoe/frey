@@ -184,7 +184,7 @@ impl<'a> Cursor<'a> {
         Ok(())
     }
 
-    pub fn number(&mut self) -> Result<Token, Error> {
+    pub fn number(&mut self, integer_only: bool) -> Result<Token, Error> {
         let start = self.position();
         let start_offset = self.offset;
         let mut is_float = false;
@@ -192,7 +192,8 @@ impl<'a> Cursor<'a> {
         self.take_while(|c| c.is_ascii_digit());
 
         let started_with_dot = self.offset == start_offset;
-        if self.peek() == Some('.')
+        if !integer_only
+            && self.peek() == Some('.')
             && (started_with_dot || matches!(self.peek_second(), Some(c) if c.is_ascii_digit()))
         {
             is_float = true;
@@ -201,7 +202,7 @@ impl<'a> Cursor<'a> {
         }
 
         // Optional exponent: `e[+-]?digits`.
-        if matches!(self.peek(), Some('e' | 'E')) {
+        if !integer_only && matches!(self.peek(), Some('e' | 'E')) {
             is_float = true;
             self.bump();
             if matches!(self.peek(), Some('+' | '-')) {

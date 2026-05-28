@@ -91,6 +91,16 @@ pub enum ErrorKind {
     AmbiguousOverload {
         name: String,
     },
+    /// Tuple field access (`t.0`, `t.1`, ...) was attempted on a non-tuple
+    /// value.
+    NotATuple {
+        found: Ty,
+    },
+    /// A tuple index `t.N` is out of range for the tuple's length.
+    TupleIndexOutOfRange {
+        len: usize,
+        index: usize,
+    },
 }
 
 impl fmt::Display for Error {
@@ -218,6 +228,15 @@ impl fmt::Display for ErrorKind {
             }
             ErrorKind::AmbiguousOverload { name } => {
                 write!(f, "ambiguous call to `{name}`: multiple overloads match")
+            }
+            ErrorKind::NotATuple { found } => {
+                write!(f, "tuple index access requires a tuple, got {found:?}")
+            }
+            ErrorKind::TupleIndexOutOfRange { len, index } => {
+                write!(
+                    f,
+                    "tuple index {index} out of range for tuple of length {len}"
+                )
             }
         }
     }

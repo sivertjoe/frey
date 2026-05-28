@@ -1017,6 +1017,60 @@ impl Lower {
                     },
                 })
             }
+            ast::ExprKind::Tuple(elems) => {
+                let lowered: Vec<Expr> = elems
+                    .into_iter()
+                    .map(|el| self.lower_expr(el))
+                    .collect::<Result<_, _>>()?;
+                let ty = Ty::Tuple(lowered.iter().map(|el| el.ty.clone()).collect());
+                Ok(Expr {
+                    span: e.span,
+                    ty,
+                    kind: ExprKind::Tuple(lowered),
+                })
+            }
+            ast::ExprKind::TupleField { target, index } => {
+                let mut target = self.lower_expr(*target)?;
+                // Auto-deref through any pointer chain so `p.0` works when
+                // `p: *T`, `**T`, ...
+                while let Ty::Ptr(inner) = target.ty.clone() {
+                    let pointee_ty = *inner;
+                    target = Expr {
+                        span: target.span,
+                        ty: pointee_ty,
+                        kind: ExprKind::Deref(Box::new(target)),
+                    };
+                }
+                let elems = match &target.ty {
+                    Ty::Tuple(elems) => elems.clone(),
+                    other => {
+                        return Err(Error {
+                            span: target.span,
+                            kind: ErrorKind::NotATuple {
+                                found: other.clone(),
+                            },
+                        });
+                    }
+                };
+                if index >= elems.len() {
+                    return Err(Error {
+                        span: e.span,
+                        kind: ErrorKind::TupleIndexOutOfRange {
+                            len: elems.len(),
+                            index,
+                        },
+                    });
+                }
+                let field_ty = elems[index].clone();
+                Ok(Expr {
+                    span: e.span,
+                    ty: field_ty,
+                    kind: ExprKind::TupleField {
+                        target: Box::new(target),
+                        index,
+                    },
+                })
+            }
         }
     }
 
@@ -1650,6 +1704,13 @@ impl Lower {
                     Ok(Ty::Struct(specialized))
                 }
             }
+            ast::TypeExprKind::Tuple(elems) => {
+                let lowered: Vec<Ty> = elems
+                    .iter()
+                    .map(|e| self.lower_type(e))
+                    .collect::<Result<_, _>>()?;
+                Ok(Ty::Tuple(lowered))
+            }
         }
     }
 
@@ -2017,6 +2078,9 @@ impl Lower {
                         .expect("specialize_struct cannot fail on concrete args");
                     Ty::Struct(specialized)
                 }
+            }
+            Ty::Tuple(elems) => {
+                Ty::Tuple(elems.iter().map(|e| self.substitute_ty(e, subst)).collect())
             }
             _ => ty.clone(),
         }
@@ -2393,6 +2457,14 @@ impl Lower {
                 for arg in args {
                     self.substitute_expr(arg, subst, local_map)?;
                 }
+            }
+            ExprKind::Tuple(elems) => {
+                for el in elems {
+                    self.substitute_expr(el, subst, local_map)?;
+                }
+            }
+            ExprKind::TupleField { target, .. } => {
+                self.substitute_expr(target, subst, local_map)?;
             }
         }
         if let Some(ty) = updated_call_ty {

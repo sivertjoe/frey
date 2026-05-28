@@ -238,7 +238,7 @@ impl Parser {
                 TypeExprKind::Named(name)
             }
             TokenKind::Star => return self.parse_ptr_type(),
-            TokenKind::LeftParen => return self.parse_function_type(),
+            TokenKind::LeftParen => return self.parse_paren_type(),
             TokenKind::LeftBracket => return self.parse_array_type(),
             TokenKind::Dollar => return self.parse_generic_type(),
             _ => return Err(Error::unexpected(tok, "type")),
@@ -327,29 +327,65 @@ impl Parser {
         })
     }
 
-    pub(super) fn parse_function_type(&mut self) -> Result<TypeExpr, Error> {
+    /// Parses any `(...)` type form: a function type (`(T, ...) -> R`), a
+    /// tuple type (`(T, U, ...)` with no `->`), or simply a parenthesised
+    /// single type (`(T)` reads as `T`).
+    pub(super) fn parse_paren_type(&mut self) -> Result<TypeExpr, Error> {
         let left = self.expect(TokenKind::LeftParen)?.span;
 
-        let mut params = Vec::new();
+        let mut elems = Vec::new();
         while !matches!(self.iter.peek(), Some(t) if t.kind == TokenKind::RightParen) {
-            if !params.is_empty() {
+            if !elems.is_empty() {
                 self.expect(TokenKind::Comma)?;
+                if self.check(TokenKind::RightParen) {
+                    break; // trailing comma
+                }
             }
-            params.push(self.parse_type()?);
+            elems.push(self.parse_type()?);
+        }
+        let close = self.expect(TokenKind::RightParen)?.span;
+
+        // Followed by `->` → function type.
+        if self.check(TokenKind::Minus)
+            && matches!(
+                self.iter.peek_nth(1).map(|t| &t.kind),
+                Some(TokenKind::GreaterThan)
+            )
+        {
+            self.expect(TokenKind::Minus)?;
+            self.expect(TokenKind::GreaterThan)?;
+            let return_ty = Box::new(self.parse_type()?);
+            let span = left.join(return_ty.span);
+            return Ok(TypeExpr {
+                id: self.id_gen.fresh(),
+                span,
+                kind: TypeExprKind::Function {
+                    params: elems,
+                    return_ty,
+                },
+            });
         }
 
-        self.expect(TokenKind::RightParen)?;
-        self.expect(TokenKind::Minus)?;
-        self.expect(TokenKind::GreaterThan)?;
-        let return_ty = Box::new(self.parse_type()?);
-
-        let span = left.join(return_ty.span);
-        let kind = TypeExprKind::Function { params, return_ty };
-        Ok(TypeExpr {
-            id: self.id_gen.fresh(),
-            span,
-            kind,
-        })
+        // No `->`: either a parenthesised single type or a tuple.
+        match elems.len() {
+            0 => {
+                let next = self.iter.peek().expect("lexer emits eof");
+                Err(Error::unexpected(
+                    next,
+                    "`->` after `()` for a function type, or two or more types for a tuple",
+                ))
+            }
+            1 => {
+                let mut ty = elems.into_iter().next().unwrap();
+                ty.span = left.join(close);
+                Ok(ty)
+            }
+            _ => Ok(TypeExpr {
+                id: self.id_gen.fresh(),
+                span: left.join(close),
+                kind: TypeExprKind::Tuple(elems),
+            }),
+        }
     }
 
     pub(super) fn parse_param(&mut self) -> Result<Param, Error> {
@@ -624,18 +660,26 @@ impl Parser {
     fn parse_field_suffix(&mut self, target: Expr) -> Result<Expr, Error> {
         self.expect(TokenKind::Dot)?;
         let name_tok = self.iter.consume().expect("lexer emits eof");
-        let TokenKind::Identifier(name) = name_tok.kind else {
-            return Err(Error::unexpected(&name_tok, "field name"));
-        };
         let span = target.span.join(name_tok.span);
-        Ok(Expr {
-            id: self.id_gen.fresh(),
-            span,
-            kind: ExprKind::Field {
-                target: Box::new(target),
-                name,
-            },
-        })
+        match name_tok.kind {
+            TokenKind::Identifier(name) => Ok(Expr {
+                id: self.id_gen.fresh(),
+                span,
+                kind: ExprKind::Field {
+                    target: Box::new(target),
+                    name,
+                },
+            }),
+            TokenKind::Literal(Literal::Int(n)) if n >= 0 => Ok(Expr {
+                id: self.id_gen.fresh(),
+                span,
+                kind: ExprKind::TupleField {
+                    target: Box::new(target),
+                    index: n as usize,
+                },
+            }),
+            _ => Err(Error::unexpected(&name_tok, "field name or tuple index")),
+        }
     }
 
     /// `Identifier { Identifier :` or `Identifier { }` — disambiguates a
@@ -925,10 +969,30 @@ impl Parser {
                     self.finish_function_literal(start, Vec::new())
                 } else {
                     let left = self.expect(TokenKind::LeftParen)?.span;
-                    let mut expr = self.parse_expr()?;
-                    let right = self.expect(TokenKind::RightParen)?.span;
-                    expr.span = left.join(right);
-                    Ok(expr)
+                    let first = self.parse_expr()?;
+                    if self.check(TokenKind::Comma) {
+                        // Tuple value `(a, b, ...)`.
+                        let mut elems = vec![first];
+                        while self.check(TokenKind::Comma) {
+                            self.expect(TokenKind::Comma)?;
+                            if self.check(TokenKind::RightParen) {
+                                break; // trailing comma
+                            }
+                            elems.push(self.parse_expr()?);
+                        }
+                        let right = self.expect(TokenKind::RightParen)?.span;
+                        Ok(Expr {
+                            id: self.id_gen.fresh(),
+                            span: left.join(right),
+                            kind: ExprKind::Tuple(elems),
+                        })
+                    } else {
+                        // Parenthesised single expression.
+                        let right = self.expect(TokenKind::RightParen)?.span;
+                        let mut expr = first;
+                        expr.span = left.join(right);
+                        Ok(expr)
+                    }
                 }
             }
             TokenKind::LeftBrace => {
@@ -1103,6 +1167,9 @@ impl Parser {
                 | TokenKind::Star
                 | TokenKind::LeftBracket
                 | TokenKind::RightBracket
+                // Tuple types: `<(Int, Int)>`.
+                | TokenKind::LeftParen
+                | TokenKind::RightParen
                 | TokenKind::Semicolon
                 | TokenKind::Literal(_)
                 | TokenKind::Dollar => {}
@@ -1195,6 +1262,7 @@ fn is_place_expr(expr: &Expr) -> bool {
             | ExprKind::Subscript { .. }
             | ExprKind::Deref(_)
             | ExprKind::Field { .. }
+            | ExprKind::TupleField { .. }
     )
 }
 
