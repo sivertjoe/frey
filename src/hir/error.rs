@@ -101,9 +101,7 @@ pub enum ErrorKind {
         len: usize,
         index: usize,
     },
-    /// A `let X: T = ...;` annotation was written on a top-level function
-    /// declaration where the signature is already given by the function
-    /// literal itself.
+    /// `let f: T = (...) -> ... {};` — function literals carry their own sig.
     TypeAnnotationNotAllowed,
     /// Two enums declared a variant with the same name (variants are global).
     DuplicateVariant {
@@ -132,8 +130,7 @@ pub enum ErrorKind {
     MatchOnNonEnum {
         found: Ty,
     },
-    /// `None` (or any nullary variant) was used without type-arg context
-    /// when its enum is generic and T can't be inferred.
+    /// Nullary variant of a generic enum with no way to infer its type args.
     CannotInferEnumTypeArg {
         variant: String,
     },

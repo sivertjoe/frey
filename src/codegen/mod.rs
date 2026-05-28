@@ -25,9 +25,7 @@ pub struct Codegen<'ctx> {
     pub(crate) struct_defs: HashMap<String, StructDef>,
     pub(crate) struct_llvm: HashMap<String, StructType<'ctx>>,
     pub(crate) enum_defs: HashMap<String, EnumDef>,
-    /// Each enum lowers to `{ i32 tag, [N x i8] payload }` (anonymous, sized
-    /// for the largest variant). Variant payloads bitcast in/out of the byte
-    /// buffer at construction and pattern-match sites.
+    /// `{ i32 tag, [N x i8] payload }`, N sized for the largest variant.
     pub(crate) enum_llvm: HashMap<String, StructType<'ctx>>,
     pub(crate) string_constants: HashMap<String, PointerValue<'ctx>>,
     pub(crate) loop_exit_stack: Vec<BasicBlock<'ctx>>,
@@ -74,11 +72,8 @@ impl<'ctx> Codegen<'ctx> {
     }
 
     pub fn lower(&mut self, program: Program) -> Result<(), Error> {
-        // Two-step struct setup so self-referential pointers work: first
-        // declare every struct as an opaque LLVM type, then fill in bodies
-        // referencing those opaque types. We also pre-register all enum
-        // LLVM types here so a struct body that contains an enum (or vice
-        // versa) sees both name tables fully populated.
+        // Opaque-first so a struct can hold a pointer to itself. Enums get
+        // pre-registered too so a struct field can be Ty::Enum and vice versa.
         for (name, def) in &program.structs {
             let llvm_ty = self.context.opaque_struct_type(name);
             self.struct_llvm.insert(name.clone(), llvm_ty);
@@ -88,8 +83,6 @@ impl<'ctx> Codegen<'ctx> {
             self.enum_defs.insert(name.clone(), def.clone());
         }
         for (name, def) in &program.enums {
-            // `{i32 tag, [N x i8] payload}` — N is an upper bound (no
-            // alignment padding considered), big enough for any variant.
             let payload_bytes = def
                 .variants
                 .iter()

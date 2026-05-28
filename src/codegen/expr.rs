@@ -439,9 +439,8 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
 
-    /// Builds a tagged-union value for `Variant(args...)`. Layout is
-    /// `{i32 tag, [N x i8] payload}`; the variant's fields are inserted via
-    /// a bitcast over the payload buffer.
+    /// `Variant(args...)` → `{tag, payload}`. Payload is the variant's fields
+    /// packed into a tuple struct, stored over the enum's byte buffer.
     fn lower_enum_construct(
         &mut self,
         enum_name: &str,
@@ -451,7 +450,6 @@ impl<'ctx> Codegen<'ctx> {
         let enum_llvm_ty = self.enum_llvm[enum_name];
         let slot = self.builder.build_alloca(enum_llvm_ty, "")?;
 
-        // Tag.
         let tag_ptr = self
             .builder
             .build_struct_gep(enum_llvm_ty, slot, 0, "")?;
@@ -461,9 +459,6 @@ impl<'ctx> Codegen<'ctx> {
             .const_int(variant_index as u64, false);
         self.builder.build_store(tag_ptr, tag_val)?;
 
-        // Payload: GEP to the byte buffer, then store the variant's tuple
-        // struct value via a single store (LLVM ptrs are opaque, so the
-        // pointer type alone is enough — no bitcast needed).
         if !args.is_empty() {
             let payload_ptr = self
                 .builder
@@ -483,9 +478,8 @@ impl<'ctx> Codegen<'ctx> {
         Ok(self.builder.build_load(enum_llvm_ty, slot, "")?)
     }
 
-    /// Lowers `match scrutinee { ... }` as a switch on the tag with per-arm
-    /// blocks. Payload bindings load via GEP+bitcast from the scrutinee's
-    /// stored slot; arm values join through a phi at the exit block.
+    /// `match` lowers to a `switch` on the tag with one BB per arm and a
+    /// `phi` at the exit collecting arm values.
     fn lower_match(
         &mut self,
         scrutinee: Expr,
@@ -498,7 +492,7 @@ impl<'ctx> Codegen<'ctx> {
         };
         let enum_llvm_ty = self.enum_llvm[&enum_name];
 
-        // Spill the scrutinee so we can GEP into it.
+        // Spill so GEP-into works.
         let scrutinee_val = self.lower_expr(scrutinee)?;
         let slot = self.builder.build_alloca(enum_llvm_ty, "")?;
         self.builder.build_store(slot, scrutinee_val)?;
@@ -510,8 +504,7 @@ impl<'ctx> Codegen<'ctx> {
             .builder
             .build_load(self.context.i32_type(), tag_ptr, "")?
             .into_int_value();
-        // GEP to the payload buffer ONCE, before any branching — arm blocks
-        // share the same pointer (they only differ in how they bitcast it).
+        // GEP the payload once, before branching — arms reuse the pointer.
         let payload_ptr = self
             .builder
             .build_struct_gep(enum_llvm_ty, slot, 1, "")?;
@@ -525,7 +518,6 @@ impl<'ctx> Codegen<'ctx> {
 
         let exit_bb = self.context.append_basic_block(function, "match.exit");
 
-        // Build each arm's BB, plus a wildcard/default BB.
         let mut variant_targets: Vec<(u64, inkwell::basic_block::BasicBlock<'ctx>, usize)> =
             Vec::new();
         let mut wildcard_bb: Option<inkwell::basic_block::BasicBlock<'ctx>> = None;
@@ -546,14 +538,13 @@ impl<'ctx> Codegen<'ctx> {
             }
         }
 
-        // If no wildcard, use an unreachable block for unmatched tags. Frontend
-        // exhaustiveness check guarantees this is dead, but LLVM needs a target.
+        // Without a wildcard, exhaustiveness has already ruled this out — but
+        // LLVM still needs a switch default, so wire an unreachable block.
         let default_bb = wildcard_bb.unwrap_or_else(|| {
             self.context
                 .append_basic_block(function, "match.unreachable")
         });
 
-        // Build the switch.
         let cases: Vec<(IntValue<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> = variant_targets
             .iter()
             .map(|(tag, bb, _)| {
@@ -565,14 +556,11 @@ impl<'ctx> Codegen<'ctx> {
             .collect();
         self.builder.build_switch(tag_val, default_bb, &cases)?;
 
-        // If no wildcard, the default block is unreachable.
         if wildcard_bb.is_none() {
             self.builder.position_at_end(default_bb);
             self.builder.build_unreachable()?;
         }
 
-        // Lower each arm body, collecting (value, originating-block) pairs
-        // for the exit phi.
         let mut incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
             Vec::with_capacity(arms.len());
 
@@ -582,7 +570,6 @@ impl<'ctx> Codegen<'ctx> {
             let crate::hir::types::HirPattern::Variant { bindings, .. } = &arm.pattern else {
                 unreachable!();
             };
-            // Bind each payload field via a tuple-struct view of the payload.
             if !bindings.is_empty() {
                 let elem_tys: Vec<Ty> =
                     bindings.iter().map(|(_, _, t)| t.clone()).collect();
@@ -601,8 +588,6 @@ impl<'ctx> Codegen<'ctx> {
                     self.locals.insert(*local_id, value_slot);
                 }
             }
-            // Avoid an "unused" warning while keeping the tag value around
-            // for debugging when reading IR.
             let _ = tag;
 
             let value = self.lower_expr(arm.body.clone())?;

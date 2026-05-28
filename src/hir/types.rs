@@ -56,12 +56,10 @@ pub enum Ty {
     GenericStruct { name: String, args: Vec<Ty> },
     /// Anonymous tuple of two-or-more element types.
     Tuple(Vec<Ty>),
-    /// A specialized enum (tagged union). The string is the mangled name of
-    /// a concrete instantiation registered in `enums`, like `Option_Int`.
+    /// Specialized tagged union; the string is its mangled name in `enums`.
     Enum(String),
-    /// An enum template referenced with type arguments that still contain
-    /// type variables, e.g. `Option<T>` inside a generic function body.
-    /// Becomes `Ty::Enum(...)` once concrete arguments arrive.
+    /// Generic enum applied to args that still contain TypeVars. Collapses to
+    /// `Ty::Enum` once every arg is concrete.
     GenericEnum { name: String, args: Vec<Ty> },
 }
 
@@ -127,8 +125,7 @@ impl fmt::Debug for StructDef {
     }
 }
 
-/// A specialized enum (no type variables left). Variants are stored as
-/// `(name, field_types)` in declaration order, indexed by tag value.
+/// Specialized enum (no TypeVars left). Variants are indexed by tag value.
 #[derive(Clone)]
 pub struct EnumDef {
     pub name: String,
@@ -247,17 +244,13 @@ pub enum ExprKind {
         elem_ty: Ty,
         args: Vec<Expr>,
     },
-    /// Constructs an enum value: `Some(x)`, `None`, etc. `enum_name` is the
-    /// specialized name registered in the enum table; `variant_index` is the
-    /// tag value.
+    /// `Some(x)`, `None`, ... — `enum_name` is the specialized name.
     EnumConstruct {
         enum_name: String,
         variant_index: usize,
         args: Vec<Expr>,
     },
-    /// `match scrutinee { Pat -> arm, ... }`. All arms produce the same type
-    /// (`Expr::ty` on the surrounding Expr). Patterns are flat — variant
-    /// names with one identifier per payload, or `_`.
+    /// `match scrutinee { Pat -> arm, ... }`.
     Match {
         scrutinee: Box<Expr>,
         arms: Vec<MatchArm>,
@@ -277,8 +270,6 @@ pub enum HirPattern {
     Variant {
         enum_name: String,
         variant_index: usize,
-        /// Bindings introduced for each payload field, in order. Each entry
-        /// is a fresh `LocalId` in `bindings` with its known field type.
         bindings: Vec<(String, LocalId, Ty)>,
     },
 }

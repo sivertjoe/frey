@@ -54,15 +54,12 @@ pub struct Lower {
     struct_specialization_cache: HashMap<(String, Vec<Ty>), String>,
     struct_template_origin: HashMap<String, (String, Vec<Ty>)>,
 
-    /// Specialized enum table — same shape and lifecycle as `structs`.
+    // Mirror the struct registries above.
     enums: HashMap<String, crate::hir::types::EnumDef>,
-    /// Enum templates, by source name. Variants have type-variable field types.
     enum_templates: HashMap<String, crate::hir::types::EnumDef>,
     enum_specialization_cache: HashMap<(String, Vec<Ty>), String>,
     enum_template_origin: HashMap<String, (String, Vec<Ty>)>,
-    /// Maps a variant name (e.g. `Some`) to the template enum it belongs to
-    /// and its tag index. Variant names must be globally unique. The lowerer
-    /// uses this to resolve bare `Some(x)` calls and `Some(...)` patterns.
+    /// Variant name → (template enum, tag index). Names are globally unique.
     variant_constructors: HashMap<String, (String, usize)>,
 
     /// Ids of generic templates that came from `#comptime` declarations. When
@@ -172,9 +169,8 @@ impl Lower {
             .span
             .join(p.declarations.last().unwrap().span);
 
-        // Pass 1: register every struct and enum name (with placeholder
-        // empty bodies, filled in pass 2). Doing the names first lets struct
-        // and enum bodies reference each other and themselves freely.
+        // Pass 1: register every struct and enum name with an empty body so
+        // bodies in pass 2 can reference each other (and themselves) freely.
         for decl in &p.declarations {
             if let ast::ExprKind::EnumDef {
                 type_params,
@@ -206,9 +202,8 @@ impl Lower {
                     self.variant_constructors
                         .insert(v.name.clone(), (decl.name.clone(), idx));
                 }
-                // Pre-allocate TypeVarIds for the template so that any other
-                // type-body lowered later in pass 2 sees the right arity even
-                // when it references this enum before its own body is lowered.
+                // TypeVarIds are pre-allocated so cross-type references in
+                // pass 2 see the right arity even before bodies are lowered.
                 let tv_ids: Vec<TypeVarId> = type_params
                     .iter()
                     .map(|n| self.fresh_type_var_id(n.clone()))
@@ -301,8 +296,7 @@ impl Lower {
                         .expect("registered in pass 1")
                         .fields = lowered_fields;
                 } else {
-                    // Generic struct: type params were given fresh TypeVarIds
-                    // in pass 1; we just rehydrate the scope here.
+                    // Re-establish the pass-1 type-var scope.
                     let tv_ids = self
                         .struct_templates
                         .get(&decl.name)
@@ -343,8 +337,7 @@ impl Lower {
             }
         }
 
-        // Pass 2b: lower enum variant payload types, matching the per-variant
-        // declaration order. Mirrors struct body lowering.
+        // Pass 2b: lower enum variant payload types (mirrors struct bodies).
         for decl in &p.declarations {
             if let ast::ExprKind::EnumDef {
                 type_params,
@@ -369,7 +362,6 @@ impl Lower {
                         .expect("registered in pass 2b")
                         .variants = lowered_variants;
                 } else {
-                    // Enum's TypeVarIds were pre-allocated in pass 1.
                     let tv_ids = self
                         .enum_templates
                         .get(&decl.name)
@@ -587,9 +579,7 @@ impl Lower {
             });
         }
 
-        // Optional `: T` annotation: lower the type, push it as a hint into
-        // the value's lowering (so bare nullary variants like `None` can pick
-        // up their enum's type parameters from context), then coerce / check.
+        // Annotation is lowered first, then pushed as a hint into the value.
         let expected = match &d.ty {
             Some(t) => Some(self.lower_type(t)?),
             None => None,
@@ -648,9 +638,7 @@ impl Lower {
             });
         }
 
-        // Push the declared return type as a hint to the body's tail so a
-        // function like `() -> Option<Int> { None }` infers `None<Int>()`
-        // without explicit type args.
+        // Return type flows into the body's tail.
         let return_hint = (!ty_has_typevars(&sig.return_ty)).then(|| sig.return_ty.clone());
         let body_result = self.lower_block_with_hint(body, return_hint.as_ref());
         self.leave_scope();
@@ -676,18 +664,13 @@ impl Lower {
             }),
         })
     }
-    /// Default-hint entry to `lower_expr_with_hint`. Use this when the caller
-    /// has no expected-type context to propagate.
     fn lower_expr(&mut self, e: ast::Expr) -> Result<Expr, Error> {
         self.lower_expr_with_hint(e, None)
     }
 
-    /// Lowers an AST expression, optionally taking an expected-type `hint`
-    /// from the surrounding context. The hint is used (today) only as a
-    /// fallback when a nullary variant constructor can't otherwise infer its
-    /// enum's type arguments — `takes_opt(None)` works because the Call arm
-    /// forwards the parameter type as a hint to each arg. Most arms simply
-    /// ignore the hint or forward it unchanged.
+    /// `hint` is the surrounding expected type, used today only as a tiebreaker
+    /// for nullary variants like `None` where neither explicit type args nor
+    /// argument unification can pin the enum's type parameters.
     fn lower_expr_with_hint(
         &mut self,
         e: ast::Expr,
@@ -724,9 +707,7 @@ impl Lower {
                     });
                 }
 
-                // Bare nullary variant constructor like `None` (no `<...>` or
-                // call). Variants in the global table shadow any same-named
-                // local by intent — variant names are reserved.
+                // Variant names shadow locals — `None` is reserved.
                 if self.variant_constructors.contains_key(&name) {
                     if let Some(expr) =
                         self.try_lower_variant_call(&name, &[], Vec::new(), e.span, hint)?
@@ -876,10 +857,8 @@ impl Lower {
                 }
 
                 let callee = self.lower_expr(*callee)?;
-                // Push parameter types into each arg as a hint when concrete
-                // (no remaining TypeVars) — covers `takes_opt(None)` and
-                // anywhere else where the callee's signature pins the arg's
-                // expected type.
+                // Forward concrete param types as arg hints (TypeVar params
+                // don't pin anything, so skip them).
                 let param_hints: Vec<Option<Ty>> = if let Ty::Function { params, .. } = &callee.ty {
                     params
                         .iter()
@@ -1726,9 +1705,8 @@ impl Lower {
         self.lower_block_with_hint(b, None)
     }
 
-    /// Like `lower_block`, but pushes the surrounding expected-type `hint`
-    /// into the block's tail expression. The intermediate items don't see
-    /// the hint — only the value that ends up being the block's result.
+    /// `hint` flows into the block's tail expression only — intermediate
+    /// statements don't see it.
     fn lower_block_with_hint(
         &mut self,
         b: ast::Block,
@@ -2321,8 +2299,7 @@ impl Lower {
         Ok(mangled)
     }
 
-    /// Specializes a generic enum (or returns the cached mangled name).
-    /// Mirrors `specialize_struct`: substitute every variant's payload types.
+    /// Enum analogue of `specialize_struct`.
     fn specialize_enum(
         &mut self,
         template: &crate::hir::types::EnumDef,
@@ -2371,12 +2348,8 @@ impl Lower {
         Ok(mangled)
     }
 
-    /// Builds an EnumConstruct node for `name(args)` when `name` is a known
-    /// variant constructor. Returns `Ok(None)` if `name` isn't a variant —
-    /// the caller falls through to regular function-call lowering. `hint`
-    /// is the surrounding expected type (if any); used as a tiebreaker for
-    /// nullary variants where neither explicit type args nor argument
-    /// unification can determine the enum's type parameters.
+    /// Returns `Ok(None)` if `name` isn't a variant constructor — the caller
+    /// then falls through to regular call lowering.
     fn try_lower_variant_call(
         &mut self,
         name: &str,
@@ -2479,9 +2452,7 @@ impl Lower {
             &self.enum_template_origin,
         ) && hint_args.len() == template.type_var_ids.len()
         {
-            // Seed substitution from the surrounding expected type so that
-            // a bare `None` (or nullary variant in general) picks up its
-            // enum's type parameters from context.
+            // Seed from the hint so bare `None` picks up T from context.
             for (tv, t) in template.type_var_ids.iter().zip(hint_args.iter()) {
                 subst.insert(*tv, t.clone());
             }
@@ -2542,9 +2513,6 @@ impl Lower {
         }))
     }
 
-    /// Lowers a `match` expression: validate the scrutinee is an enum, every
-    /// arm is a known variant of that enum, and produce arms with the proper
-    /// payload bindings in scope.
     fn lower_match(
         &mut self,
         scrutinee: ast::Expr,
@@ -2552,10 +2520,9 @@ impl Lower {
         span: Span,
     ) -> Result<Expr, Error> {
         let scrutinee = self.lower_expr(scrutinee)?;
-        // For a generic template body the scrutinee type is `GenericEnum<T>`;
-        // we match against the *template's* variants and substitute payload
-        // types using the type-arg list. Once the function specializes, the
-        // bindings' types follow via substitute_expr.
+        // Inside a generic body the scrutinee is `GenericEnum<T>`; we match
+        // against the template's variants with payload types substituted.
+        // Specialization (later) updates binding types through substitute_expr.
         let (enum_def, subst): (crate::hir::types::EnumDef, HashMap<TypeVarId, Ty>) =
             match &scrutinee.ty {
                 Ty::Enum(n) => (
@@ -2575,8 +2542,6 @@ impl Lower {
                     for (tv, ty) in template.type_var_ids.iter().zip(args.iter()) {
                         subst.insert(*tv, ty.clone());
                     }
-                    // Substitute variant payload types so any payload-bindings
-                    // see the template-level (post-arg) types.
                     let mut substituted = template.clone();
                     for v in &mut substituted.variants {
                         v.fields = v
@@ -2607,7 +2572,6 @@ impl Lower {
             let arm_span = arm.span;
             let (pattern, binding_locals) =
                 self.lower_pattern(arm.pattern, &enum_def, &mut covered, &mut has_wildcard)?;
-            // Open a scope for any payload bindings introduced by the pattern.
             self.enter_scope();
             for (name, local_id, ty) in &binding_locals {
                 self.current_scope_mut().insert(name.clone(), *local_id);
@@ -2617,8 +2581,7 @@ impl Lower {
             self.leave_scope();
             let body = body?;
 
-            // Coerce successive arms to match the first arm's type when an int
-            // literal is the only difference.
+            // Widen int-literal arms to match the first arm's type.
             let body = if let Some(rt) = &result_ty {
                 coerce_through_tails(body, rt)?
             } else {
@@ -2672,8 +2635,6 @@ impl Lower {
         })
     }
 
-    /// Lowers a single AST pattern against `enum_def`, updating the coverage
-    /// vector and returning the HIR pattern plus the locals to introduce.
     fn lower_pattern(
         &mut self,
         pattern: ast::Pattern,
@@ -2696,10 +2657,7 @@ impl Lower {
                 Ok((crate::hir::types::HirPattern::Wildcard, Vec::new()))
             }
             ast::PatternKind::Binding(name) => {
-                // A bare identifier in a pattern names a variant (must be a
-                // known variant of the scrutinee's enum). Generic bindings on
-                // arbitrary scrutinees aren't supported yet — keep patterns
-                // strict so `Some(v)` and `None` are clear.
+                // A bare identifier names a variant; catch-all bindings use `_`.
                 self.resolve_variant_pattern(&name, Vec::new(), enum_def, covered, p_span)
             }
             ast::PatternKind::Variant { name, bindings } => {
@@ -3211,9 +3169,6 @@ impl Lower {
                 self.substitute_expr(target, subst, local_map)?;
             }
             ExprKind::EnumConstruct { args, .. } => {
-                // Note: enum_name was already specialized at lower time, so we
-                // only need to walk the args (the variant data may itself
-                // contain TypeVars when seen inside a generic function body).
                 for arg in args {
                     self.substitute_expr(arg, subst, local_map)?;
                 }
@@ -3221,9 +3176,6 @@ impl Lower {
             ExprKind::Match { scrutinee, arms } => {
                 self.substitute_expr(scrutinee, subst, local_map)?;
                 for arm in arms {
-                    // Pattern binding types come from the specialized enum's
-                    // variants, but those were captured at lower time. Walk
-                    // them anyway in case future cases need it.
                     if let crate::hir::types::HirPattern::Variant { bindings, .. } =
                         &mut arm.pattern
                     {
@@ -3265,10 +3217,8 @@ fn is_place_kind(kind: &ExprKind) -> bool {
     )
 }
 
-/// When a hint resolves to (or is) a known enum specialization, returns
-/// the type-argument list that would have been written explicitly. Used
-/// during bidirectional lowering so nullary variants can pick up the
-/// enum's type parameters from surrounding context.
+/// Reads the type-argument list off a hint shaped like `template_name<...>`,
+/// otherwise None.
 fn enum_type_args_from_hint(
     template_name: &str,
     hint: Option<&Ty>,

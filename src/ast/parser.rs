@@ -895,8 +895,8 @@ impl Parser {
         })
     }
 
-    /// Parses a flat pattern: `_`, `Name`, `Name(a, b, c)`. Inner field
-    /// patterns must be plain identifiers (no nesting yet).
+    /// `_`, `Name`, or `Name(a, b, c)`. Field patterns are identifiers — no
+    /// nesting yet.
     fn parse_pattern(&mut self) -> Result<Pattern, Error> {
         let tok = self.iter.consume().expect("lexer emits eof");
         let start = tok.span;
@@ -923,8 +923,6 @@ impl Parser {
                         kind: PatternKind::Variant { name, bindings },
                     })
                 } else {
-                    // Bare identifier: could be a nullary variant (resolved
-                    // by the lowerer) or a fresh binding.
                     Ok(Pattern {
                         id: self.id_gen.fresh(),
                         span: start,

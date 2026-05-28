@@ -2,8 +2,8 @@
 mod tests {
     use crate::ast::parser::Parser;
     use crate::ast::types::{
-        BinaryOperator, BlockItem, Const, Expr, ExprKind, StatementKind, TypeExprKind,
-        UnaryOperator,
+        BinaryOperator, BlockItem, Const, Expr, ExprKind, PatternKind, StatementKind,
+        TypeExprKind, UnaryOperator,
     };
     use crate::lexer::tokenize;
 
@@ -1537,5 +1537,229 @@ mod tests {
         assert!(matches!(params[2].ty.kind, TypeExprKind::Named(ref n) if n == "T"));
 
         assert!(return_ty.is_none());
+    }
+
+    // ---- Tuple types ----
+
+    #[test]
+    fn parses_tuple_type() {
+        let ty = parser("(Int, Float)").parse_type().unwrap();
+        let TypeExprKind::Tuple(elems) = ty.kind else {
+            panic!("expected tuple type, got {:?}", ty.kind);
+        };
+        assert_eq!(elems.len(), 2);
+        assert!(matches!(elems[0].kind, TypeExprKind::Int));
+        assert!(matches!(elems[1].kind, TypeExprKind::Float));
+    }
+
+    #[test]
+    fn parses_nested_tuple_type() {
+        let ty = parser("(Int, (Float, Int))").parse_type().unwrap();
+        let TypeExprKind::Tuple(outer) = ty.kind else {
+            panic!("expected outer tuple type");
+        };
+        assert_eq!(outer.len(), 2);
+        let TypeExprKind::Tuple(inner) = &outer[1].kind else {
+            panic!("expected inner tuple type");
+        };
+        assert_eq!(inner.len(), 2);
+    }
+
+    #[test]
+    fn single_element_paren_is_not_a_tuple() {
+        // `(T)` is just `T` with parens.
+        let ty = parser("(Int)").parse_type().unwrap();
+        assert!(matches!(ty.kind, TypeExprKind::Int));
+    }
+
+    // ---- Tuple values ----
+
+    #[test]
+    fn parses_tuple_value() {
+        let expr = parser("(1, 2, 3)").parse_expr().unwrap();
+        let ExprKind::Tuple(elems) = expr.kind else {
+            panic!("expected tuple, got {:?}", expr.kind);
+        };
+        assert_eq!(elems.len(), 3);
+    }
+
+    #[test]
+    fn single_element_paren_is_not_a_tuple_value() {
+        // `(x)` is just `x`.
+        let expr = parser("(5)").parse_expr().unwrap();
+        assert!(matches!(expr.kind, ExprKind::Const(Const::Int(5))));
+    }
+
+    #[test]
+    fn parses_tuple_field_access() {
+        let expr = parser("t.0").parse_expr().unwrap();
+        let ExprKind::TupleField { target, index } = expr.kind else {
+            panic!("expected tuple field, got {:?}", expr.kind);
+        };
+        assert_eq!(index, 0);
+        assert!(matches!(target.kind, ExprKind::Identifier(ref n) if n == "t"));
+    }
+
+    #[test]
+    fn parses_nested_tuple_field_access() {
+        // `t.0.1` — two consecutive `.index` accesses, not `t . 0.1` (float).
+        let expr = parser("t.0.1").parse_expr().unwrap();
+        let ExprKind::TupleField { target, index } = expr.kind else {
+            panic!("expected outer tuple field");
+        };
+        assert_eq!(index, 1);
+        let ExprKind::TupleField {
+            target: inner,
+            index: inner_idx,
+        } = target.kind
+        else {
+            panic!("expected inner tuple field");
+        };
+        assert_eq!(inner_idx, 0);
+        assert!(matches!(inner.kind, ExprKind::Identifier(ref n) if n == "t"));
+    }
+
+    // ---- Let type annotations ----
+
+    #[test]
+    fn parses_let_with_type_annotation() {
+        let decl = parser("let x: Int = 5;").parse_declaration().unwrap();
+        assert_eq!(decl.name, "x");
+        let ty = decl.ty.expect("annotation");
+        assert!(matches!(ty.kind, TypeExprKind::Int));
+    }
+
+    #[test]
+    fn parses_let_with_tuple_annotation() {
+        let decl = parser("let p: (Int, Int) = (1, 2);")
+            .parse_declaration()
+            .unwrap();
+        let ty = decl.ty.expect("annotation");
+        assert!(matches!(ty.kind, TypeExprKind::Tuple(_)));
+    }
+
+    #[test]
+    fn let_without_annotation_has_no_ty() {
+        let decl = parser("let x = 5;").parse_declaration().unwrap();
+        assert!(decl.ty.is_none());
+    }
+
+    // ---- Enum declarations ----
+
+    #[test]
+    fn parses_simple_enum_declaration() {
+        let decl = parser("let Color = enum { Red, Green, Blue };")
+            .parse_declaration()
+            .unwrap();
+        assert_eq!(decl.name, "Color");
+        let ExprKind::EnumDef {
+            type_params,
+            variants,
+        } = decl.value.kind
+        else {
+            panic!("expected enum def");
+        };
+        assert!(type_params.is_empty());
+        assert_eq!(variants.len(), 3);
+        assert_eq!(variants[0].name, "Red");
+        assert!(variants[0].fields.is_empty());
+    }
+
+    #[test]
+    fn parses_generic_enum_with_payloads() {
+        let decl = parser("let Option = enum<$T> { Some(T), None };")
+            .parse_declaration()
+            .unwrap();
+        let ExprKind::EnumDef {
+            type_params,
+            variants,
+        } = decl.value.kind
+        else {
+            panic!("expected enum def");
+        };
+        assert_eq!(type_params, vec!["T".to_string()]);
+        assert_eq!(variants.len(), 2);
+        assert_eq!(variants[0].name, "Some");
+        assert_eq!(variants[0].fields.len(), 1);
+        assert_eq!(variants[1].name, "None");
+        assert!(variants[1].fields.is_empty());
+    }
+
+    #[test]
+    fn parses_enum_multi_payload_variant() {
+        let decl = parser("let Shape = enum { Rect(Int, Int), Circle(Float) };")
+            .parse_declaration()
+            .unwrap();
+        let ExprKind::EnumDef { variants, .. } = decl.value.kind else {
+            panic!("expected enum def");
+        };
+        assert_eq!(variants[0].fields.len(), 2);
+        assert_eq!(variants[1].fields.len(), 1);
+    }
+
+    // ---- Match expressions and patterns ----
+
+    #[test]
+    fn parses_match_with_variant_patterns() {
+        let expr = parser("match x { Some(v) -> v, None -> 0 }")
+            .parse_expr()
+            .unwrap();
+        let ExprKind::Match { scrutinee, arms } = expr.kind else {
+            panic!("expected match");
+        };
+        assert!(matches!(scrutinee.kind, ExprKind::Identifier(ref n) if n == "x"));
+        assert_eq!(arms.len(), 2);
+        let PatternKind::Variant { name, bindings } = &arms[0].pattern.kind else {
+            panic!("expected variant pattern");
+        };
+        assert_eq!(name, "Some");
+        assert_eq!(bindings, &vec!["v".to_string()]);
+        let PatternKind::Binding(name) = &arms[1].pattern.kind else {
+            panic!("expected bare-identifier pattern");
+        };
+        assert_eq!(name, "None");
+    }
+
+    #[test]
+    fn parses_match_with_wildcard() {
+        let expr = parser("match x { Some(v) -> v, _ -> 0 }")
+            .parse_expr()
+            .unwrap();
+        let ExprKind::Match { arms, .. } = expr.kind else {
+            panic!("expected match");
+        };
+        assert!(matches!(arms[1].pattern.kind, PatternKind::Wildcard));
+    }
+
+    #[test]
+    fn parses_match_multi_payload_pattern() {
+        let expr = parser("match s { Rect(w, h) -> w }")
+            .parse_expr()
+            .unwrap();
+        let ExprKind::Match { arms, .. } = expr.kind else {
+            panic!("expected match");
+        };
+        let PatternKind::Variant { bindings, .. } = &arms[0].pattern.kind else {
+            panic!("expected variant pattern");
+        };
+        assert_eq!(bindings, &vec!["w".to_string(), "h".to_string()]);
+    }
+
+    // ---- Type args containing a tuple type ----
+
+    #[test]
+    fn parses_call_with_tuple_type_arg() {
+        // `Vec<(Int, Int)>()` — the type-args list scanner has to accept
+        // parens for tuple types.
+        let expr = parser("Vec<(Int, Int)>()").parse_expr().unwrap();
+        let ExprKind::Call {
+            callee, type_args, ..
+        } = expr.kind
+        else {
+            panic!("expected call");
+        };
+        assert_callee_named(&callee, "Vec");
+        assert_eq!(type_args.len(), 1);
+        assert!(matches!(type_args[0].kind, TypeExprKind::Tuple(_)));
     }
 }

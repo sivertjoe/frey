@@ -56,9 +56,7 @@ pub struct Declaration {
     pub mutable: bool,
     pub comptime: bool,
     pub name: String,
-    /// Optional `: T` annotation in `let x: T = expr;`. When present the
-    /// value must produce a value compatible with `T`; integer literals are
-    /// also coerced to `T` if it's a numeric type.
+    /// Optional `: T` annotation. Int literals coerce to a numeric `T`.
     pub ty: Option<TypeExpr>,
     pub value: Expr,
 }
@@ -191,9 +189,7 @@ pub enum ExprKind {
         type_params: Vec<String>,
         fields: Vec<StructTypeField>,
     },
-    /// `enum<$T> { Variant, Variant(T1, T2), ... }` — declares a tagged
-    /// union. Each variant has a positional field list (zero-or-more types);
-    /// nullary variants have an empty list.
+    /// `enum<$T> { Variant, Variant(T1, T2), ... }`.
     EnumDef {
         type_params: Vec<String>,
         variants: Vec<EnumVariantDef>,
@@ -256,15 +252,14 @@ pub struct Pattern {
 pub enum PatternKind {
     /// `_` — matches anything, binds nothing.
     Wildcard,
-    /// `Some(x, y)` or `None` — matches a specific enum variant. Bare
-    /// identifiers like `None` parse as a variant pattern with no fields.
+    /// `Some(x, y)` — bindings is empty for nullary variants in the parser;
+    /// bare identifiers parse as `Binding` and disambiguate at lowering.
     Variant {
         name: String,
         bindings: Vec<String>,
     },
-    /// `x` — fresh binding that matches anything. Distinguished from `Variant`
-    /// at name-resolution time (the lowerer decides based on whether the name
-    /// is a known variant).
+    /// A bare identifier in pattern position; the lowerer decides if it's a
+    /// nullary variant or a fresh binding.
     Binding(String),
 }
 

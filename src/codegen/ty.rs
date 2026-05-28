@@ -30,9 +30,8 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
 
-    /// Returns an upper bound on the byte size of `ty`, used to pick the
-    /// payload-buffer size for tagged enums. No alignment padding is
-    /// considered; this is intentionally a conservative overestimate.
+    /// Conservative byte-size upper bound (no alignment padding), used only
+    /// to size the enum payload buffer.
     pub fn approx_size_bytes(&self, ty: &Ty) -> usize {
         match ty {
             Ty::Unit => 1,
@@ -72,9 +71,8 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
 
-    /// Builds the LLVM anonymous-struct type corresponding to a Frey tuple
-    /// `(T1, T2, ...)`. Lowering is structural — two tuples with the same
-    /// element types share the same LLVM type without needing a name.
+    /// Structural LLVM type for a Frey tuple — same element types share
+    /// the same anonymous struct, no name needed.
     pub fn tuple_llvm_type(&self, elems: &[Ty]) -> inkwell::types::StructType<'ctx> {
         let field_types: Vec<BasicTypeEnum<'ctx>> =
             elems.iter().map(|e| self.lower_ty(e)).collect();

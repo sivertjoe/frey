@@ -1015,4 +1015,41 @@ mod tests {
     fn unterminated_block_comment_errors() {
         assert!(tokenize("/* never closed").is_err());
     }
+
+    #[test]
+    fn tokenizes_enum_and_match_keywords() {
+        assert_eq!(
+            kinds("enum match"),
+            vec![TokenKind::Enum, TokenKind::Match, TokenKind::Eof,]
+        );
+    }
+
+    #[test]
+    fn tuple_field_access_lexes_as_int_dot_int() {
+        // `t.0.1` must lex as identifier, dot, int(0), dot, int(1) — not as
+        // identifier, dot, float(0.1) — otherwise `.0.1` would be a single
+        // float literal and nested tuple indexing would break.
+        assert_eq!(
+            kinds("t.0.1"),
+            vec![
+                TokenKind::Identifier("t".to_string()),
+                TokenKind::Dot,
+                TokenKind::Literal(Literal::Int(0)),
+                TokenKind::Dot,
+                TokenKind::Literal(Literal::Int(1)),
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn leading_dot_float_still_works_in_expression_position() {
+        // `let x = .5;` — `.5` is a float literal because the previous token
+        // (`=`) doesn't end an expression.
+        let ks = kinds("let x = .5;");
+        assert!(matches!(
+            ks[3],
+            TokenKind::Literal(Literal::Float(f)) if (f - 0.5).abs() < 1e-6
+        ));
+    }
 }
