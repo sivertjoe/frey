@@ -4,6 +4,7 @@ mod codegen;
 mod driver;
 mod hir;
 mod lexer;
+mod modules;
 mod semantics;
 
 use std::process::ExitCode;
@@ -29,34 +30,17 @@ fn main() -> ExitCode {
         }
     };
 
-    let file = args.input.to_string_lossy().into_owned();
-
-    let src = match std::fs::read_to_string(&args.input) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: failed to read `{}`: {e}", args.input.display());
-            return ExitCode::FAILURE;
-        }
-    };
-
     if args.verbose {
-        eprintln!("[frey] lex");
+        eprintln!("[frey] load modules");
     }
-    let tokens = match lexer::tokenize(&src) {
-        Ok(tokens) => tokens,
-        Err(err) => {
-            report(&file, &src, err.span, &err.kind.to_string());
-            return ExitCode::FAILURE;
-        }
-    };
-
-    if args.verbose {
-        eprintln!("[frey] parse");
-    }
-    let ast = match ast::parse(tokens) {
+    let (sources, parse_result) = modules::resolve(&args.input);
+    let ast = match parse_result {
         Ok(program) => program,
         Err(err) => {
-            report(&file, &src, err.span, &err.kind.to_string());
+            match err.span {
+                Some(span) => report(&sources, span, &err.message),
+                None => eprintln!("\x1b[31;1merror\x1b[0m: {}", err.message),
+            }
             return ExitCode::FAILURE;
         }
     };
@@ -67,7 +51,7 @@ fn main() -> ExitCode {
     let hir = match hir::lower(ast) {
         Ok(program) => program,
         Err(err) => {
-            report(&file, &src, err.span, &err.kind.to_string());
+            report(&sources, err.span, &err.kind.to_string());
             return ExitCode::FAILURE;
         }
     };
@@ -76,7 +60,7 @@ fn main() -> ExitCode {
         eprintln!("[frey] typecheck");
     }
     if let Err(err) = semantics::type_check(&hir) {
-        report(&file, &src, err.span, &err.kind.to_string());
+        report(&sources, err.span, &err.kind.to_string());
         return ExitCode::FAILURE;
     }
 
@@ -100,11 +84,23 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn report(file: &str, src: &str, span: Span, message: &str) {
+fn report(sources: &modules::SourceMap, span: Span, message: &str) {
+    let red = "\x1b[31;1m";
+    let blue = "\x1b[34;1m";
+    let reset = "\x1b[0m";
+
     let line_num = span.start.line;
     let col = span.start.column;
 
-    let line_text = src
+    // Find which file this (global) offset belongs to; fall back to a bare
+    // message for synthetic spans with no source.
+    let Some(file) = sources.file_for_offset(span.start.offset).filter(|_| line_num > 0) else {
+        eprintln!("{red}error{reset}: {message}");
+        return;
+    };
+
+    let line_text = file
+        .src
         .split('\n')
         .nth(line_num - 1)
         .unwrap_or("")
@@ -118,15 +114,15 @@ fn report(file: &str, src: &str, span: Span, message: &str) {
 
     let gutter = line_num.to_string();
     let pad = " ".repeat(gutter.len());
-    let indent = " ".repeat(col - 1);
+    let indent = " ".repeat(col.saturating_sub(1));
     let carets = "^".repeat(caret_len);
 
-    let red = "\x1b[31;1m";
-    let blue = "\x1b[34;1m";
-    let reset = "\x1b[0m";
+    // Strip the Windows verbatim prefix (`\\?\`) for nicer paths.
+    let path = file.path.to_string_lossy();
+    let path = path.strip_prefix(r"\\?\").unwrap_or(&path);
 
     eprintln!("{red}error{reset}: {message}");
-    eprintln!("{pad} {blue}-->{reset} {file}:{line_num}:{col}");
+    eprintln!("{pad} {blue}-->{reset} {path}:{line_num}:{col}");
     eprintln!("{pad} {blue}|{reset}");
     eprintln!("{blue}{gutter} |{reset} {line_text}");
     eprintln!("{pad} {blue}|{reset} {indent}{red}{carets}{reset}");

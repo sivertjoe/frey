@@ -45,6 +45,7 @@ pub enum TokenKind {
     While,
     Break,
     Defer,
+    Import,
 
     Int,
     UInt,
@@ -158,6 +159,7 @@ impl std::fmt::Display for TokenKind {
             TokenKind::While => write!(f, "`while`"),
             TokenKind::Break => write!(f, "`break`"),
             TokenKind::Defer => write!(f, "`defer`"),
+            TokenKind::Import => write!(f, "`import`"),
             TokenKind::Dollar => write!(f, "`$`"),
             TokenKind::Hash => write!(f, "`#`"),
 

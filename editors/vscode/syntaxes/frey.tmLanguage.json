@@ -72,7 +72,7 @@
           "name": "keyword.control.frey",
           "match": "\\b(if|else|while|return|break|defer)\\b"
         },
-        { "name": "keyword.other.frey", "match": "\\b(let|mut|struct|as)\\b" }
+        { "name": "keyword.other.frey", "match": "\\b(let|mut|struct|as|import)\\b" }
       ]
     },
     "types": {

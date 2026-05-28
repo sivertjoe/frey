@@ -1,0 +1,29 @@
+// A growable array, allocated on the heap.
+
+let Vec = struct<$T> {
+    data: *T,
+    len: Int,
+    cap: Int,
+};
+
+let vec_new = <$T>() -> Vec<T> {
+    Vec<T> { data: alloc<T>(2), len: 0, cap: 2 }
+};
+
+let add = (v: *Vec<$T>, x: T) {
+    if v.len == v.cap {
+        let nc = v.cap * 2;
+        v.data = realloc<T>(v.data, nc);
+        v.cap = nc;
+    }
+    v.data[v.len] = x;
+    v.len = v.len + 1;
+};
+
+let get = <$T>(v: *Vec<T>, i: Int) -> T {
+    v.data[i]
+};
+
+let vec_destroy = (v: *Vec<$T>) {
+    free(v.data);
+};

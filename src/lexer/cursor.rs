@@ -4,15 +4,20 @@ use super::{error::Error, types::*};
 
 pub struct Cursor<'a> {
     src: &'a str,
+    /// Byte offset added to local positions so that `Position::offset` is unique
+    /// across files (used by the multi-file source map). `offset` below stays a
+    /// local index into `src`.
+    base: usize,
     offset: usize,
     line: usize,
     column: usize,
 }
 
 impl<'a> Cursor<'a> {
-    pub fn new(src: &'a str) -> Self {
+    pub fn new(src: &'a str, base: usize) -> Self {
         Self {
             src,
+            base,
             offset: 0,
             line: 1,
             column: 1,
@@ -21,7 +26,7 @@ impl<'a> Cursor<'a> {
 
     pub fn position(&self) -> Position {
         Position {
-            offset: self.offset,
+            offset: self.base + self.offset,
             line: self.line,
             column: self.column,
         }
@@ -119,6 +124,7 @@ impl<'a> Cursor<'a> {
             "while" => TokenKind::While,
             "break" => TokenKind::Break,
             "defer" => TokenKind::Defer,
+            "import" => TokenKind::Import,
             _ => TokenKind::Identifier(raw.to_string()),
         };
 

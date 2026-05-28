@@ -59,6 +59,7 @@
   "mut"
   "struct"
   "as"
+  "import"
   "if"
   "else"
   "while"

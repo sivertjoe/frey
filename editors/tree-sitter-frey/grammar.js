@@ -48,7 +48,11 @@ module.exports = grammar({
   ],
 
   rules: {
-    source_file: ($) => repeat($.declaration),
+    source_file: ($) => repeat($._top_level),
+
+    _top_level: ($) => choice($.declaration, $.import),
+
+    import: ($) => seq("import", field("path", $.string_literal), ";"),
 
     // ---- Comments ----
     line_comment: (_) => token(seq("//", /[^\n]*/)),

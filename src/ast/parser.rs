@@ -90,9 +90,9 @@ use crate::{
         error::Error,
         token_iter::TokenIter,
         types::{
-            BinaryOperator, Block, BlockItem, Const, Declaration, Expr, ExprKind, NodeIdGen, Param,
-            Program, Statement, StatementKind, StructLiteralField, StructTypeField, TypeExpr,
-            TypeExprKind,
+            BinaryOperator, Block, BlockItem, Const, Declaration, Expr, ExprKind, ImportDecl,
+            NodeIdGen, Param, Program, Statement, StatementKind, StructLiteralField,
+            StructTypeField, TypeExpr, TypeExprKind,
         },
     },
     lexer::types::{Literal, Token, TokenKind},
@@ -104,11 +104,26 @@ pub(super) struct Parser {
 }
 
 impl Parser {
+    #[cfg(test)]
     pub(super) fn new(tokens: Vec<Token>) -> Self {
         Self {
             iter: TokenIter::new(tokens),
             id_gen: NodeIdGen::new(),
         }
+    }
+
+    /// Like `new`, but starts node numbering at `node_base` so ids are unique
+    /// across the files merged by the module loader.
+    pub(super) fn new_at(tokens: Vec<Token>, node_base: u32) -> Self {
+        Self {
+            iter: TokenIter::new(tokens),
+            id_gen: NodeIdGen::with_next(node_base),
+        }
+    }
+
+    /// The next node id this parser would hand out (for chaining across files).
+    pub(super) fn node_id_count(&self) -> u32 {
+        self.id_gen.next_value()
     }
 
     pub(super) fn parse(&mut self) -> Result<Program, Error> {
@@ -153,21 +168,45 @@ impl Parser {
     }
 
     pub(super) fn parse_program(&mut self) -> Result<Program, Error> {
-        let mut decls = Vec::new();
+        let mut declarations = Vec::new();
+        let mut imports = Vec::new();
 
         while !self.eof() {
-            decls.push(self.parse_declaration()?);
+            if self.check(TokenKind::Import) {
+                imports.push(self.parse_import()?);
+            } else {
+                declarations.push(self.parse_declaration()?);
+            }
         }
 
-        if decls.is_empty() {
+        if declarations.is_empty() && imports.is_empty() {
             let eof = self.iter.peek().expect("lexer emits eof");
             return Err(Error::unexpected(eof, "declaration"));
         }
 
-        let span = decls.first().unwrap().span.join(decls.last().unwrap().span);
+        let span = if let (Some(first), Some(last)) = (declarations.first(), declarations.last()) {
+            first.span.join(last.span)
+        } else {
+            // declarations is empty, so imports is not (checked above).
+            imports.first().unwrap().span.join(imports.last().unwrap().span)
+        };
         Ok(Program {
             span,
-            declarations: decls,
+            declarations,
+            imports,
+        })
+    }
+
+    fn parse_import(&mut self) -> Result<ImportDecl, Error> {
+        let start = self.expect(TokenKind::Import)?.span;
+        let tok = self.iter.consume().expect("lexer emits eof");
+        let TokenKind::Literal(Literal::Str(path)) = tok.kind else {
+            return Err(Error::unexpected(&tok, "a module path string"));
+        };
+        let end = self.expect(TokenKind::Semicolon)?.span;
+        Ok(ImportDecl {
+            span: start.join(end),
+            path,
         })
     }
 

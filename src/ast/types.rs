@@ -18,6 +18,18 @@ impl NodeIdGen {
         Self::default()
     }
 
+    /// Starts numbering at `next` instead of 0, so ids stay unique across the
+    /// several files merged by the module loader.
+    pub fn with_next(next: u32) -> Self {
+        Self { next }
+    }
+
+    /// The next id that would be handed out — used to chain numbering between
+    /// files.
+    pub fn next_value(&self) -> u32 {
+        self.next
+    }
+
     pub fn fresh(&mut self) -> NodeId {
         let id = NodeId(self.next);
         self.next += 1;
@@ -28,6 +40,14 @@ impl NodeIdGen {
 pub struct Program {
     pub span: Span,
     pub declarations: Vec<Declaration>,
+    pub imports: Vec<ImportDecl>,
+}
+
+/// `import "path";` — pulls another file's top-level declarations into the
+/// program (resolved by the module loader before lowering).
+pub struct ImportDecl {
+    pub span: Span,
+    pub path: String,
 }
 
 pub struct Declaration {

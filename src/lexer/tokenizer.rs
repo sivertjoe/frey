@@ -4,9 +4,19 @@ use super::{
     types::{Span, Token, TokenKind},
 };
 
+/// Convenience entry used by the lexer tests (offset base 0). The compiler
+/// proper goes through `tokenize_at` so it can position multiple files.
+#[cfg(test)]
 pub fn tokenize(src: &str) -> Result<Vec<Token>, Error> {
+    tokenize_at(src, 0)
+}
+
+/// Tokenizes `src`, treating its first byte as global offset `base`. This keeps
+/// `Position::offset` unique across files so the multi-file source map can map
+/// an offset back to its file. Line/column stay relative to this file.
+pub fn tokenize_at(src: &str, base: usize) -> Result<Vec<Token>, Error> {
     let mut tokens = Vec::new();
-    let mut cursor = Cursor::new(src);
+    let mut cursor = Cursor::new(src, base);
 
     while let Some(ch) = cursor.peek() {
         match ch {
