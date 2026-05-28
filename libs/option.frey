@@ -1,0 +1,21 @@
+// Optional value: a generic enum with a payload-carrying `Some` and an
+// empty `None`. Bridged with two utility functions, `unwrap_or` and `map`.
+
+let Option = enum<$T> {
+    Some(T),
+    None,
+};
+
+let unwrap_or = (opt: Option<$T>, default: T) -> T {
+    match opt {
+        Some(v) -> v,
+        None -> default
+    }
+};
+
+let map = (opt: Option<$T>, fn: (T) -> $U) -> Option<U> {
+    match opt {
+        Some(v) -> Some(fn(v)),
+        None -> None
+    }
+};

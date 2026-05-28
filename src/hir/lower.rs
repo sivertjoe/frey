@@ -419,6 +419,9 @@ impl Lower {
             self.in_comptime = is_comptime;
             let lowered = self.lower_declaration(decl)?;
             self.in_comptime = false;
+            // Top-level decls always produce a Declaration (the alias-only
+            // path is reserved for nested function literals).
+            let lowered = lowered.expect("top-level declarations are never aliased away");
             if self.register_if_generic_template(&lowered) {
                 if is_comptime {
                     self.comptime_template_ids.insert(lowered.id);
@@ -533,7 +536,7 @@ impl Lower {
         Ok(())
     }
 
-    fn lower_declaration(&mut self, d: ast::Declaration) -> Result<Declaration, Error> {
+    fn lower_declaration(&mut self, d: ast::Declaration) -> Result<Option<Declaration>, Error> {
         // Top-level functions were pre-registered (by node id, so overloaded
         // names still find the right id). Everything else is a fresh binding.
         let pre_registered_id = if matches!(d.value.kind, ast::ExprKind::Function { .. }) {
@@ -569,14 +572,14 @@ impl Lower {
 
             let value = self.lower_top_level_function_body(params, body, sig, d.value.span)?;
             let ty = value.ty.clone();
-            return Ok(Declaration {
+            return Ok(Some(Declaration {
                 id,
                 span: d.span,
                 mutable: d.mutable,
                 name: d.name,
                 ty,
                 value,
-            });
+            }));
         }
 
         // Annotation is lowered first, then pushed as a hint into the value.
@@ -598,19 +601,32 @@ impl Lower {
                 });
             }
         }
+
+        // Nested function literal: the value is `Local(synth_id)` referencing
+        // a lifted top-level (template or monomorphic). Alias the user name
+        // directly to the synth id so call sites resolve to the same id the
+        // template / function table knows — no runtime indirection, and
+        // generic templates remain dispatchable.
+        if let ExprKind::Local(synth_id) = value.kind
+            && matches!(value.ty, Ty::Function { .. })
+        {
+            self.current_scope_mut().insert(d.name, synth_id);
+            return Ok(None);
+        }
+
         let ty = value.ty.clone();
         let id = self.id_gen.fresh();
         self.current_scope_mut().insert(d.name.clone(), id);
         self.bindings.insert(id, ty.clone());
 
-        Ok(Declaration {
+        Ok(Some(Declaration {
             id,
             span: d.span,
             mutable: d.mutable,
             name: d.name,
             ty,
             value,
-        })
+        }))
     }
 
     fn lower_top_level_function_body(
@@ -1773,22 +1789,49 @@ impl Lower {
     /// Wraps a lowered `Function` in a synthesized top-level declaration so
     /// codegen sees only module-level functions. Returns a `Local` reference
     /// to the lift; callers use it like any other function value.
+    ///
+    /// Generic functions (signatures with TypeVars) register as templates
+    /// instead, so the call site can specialize per-use exactly like a named
+    /// top-level generic.
     fn lift_function_value(&mut self, func: Function, fn_ty: Ty, span: Span) -> Expr {
         let synth_id = self.id_gen.fresh();
         let synth_name = format!("__lambda_{}", synth_id.raw());
         self.bindings.insert(synth_id, fn_ty.clone());
-        self.pending_specializations.push(Declaration {
-            id: synth_id,
-            span,
-            mutable: false,
-            name: synth_name,
-            ty: fn_ty.clone(),
-            value: Expr {
+
+        let is_generic = func.params.iter().any(|p| ty_has_typevars(&p.ty))
+            || ty_has_typevars(&func.return_ty);
+        if is_generic {
+            let mut type_var_ids = Vec::new();
+            for p in &func.params {
+                collect_typevars(&p.ty, &mut type_var_ids);
+            }
+            collect_typevars(&func.return_ty, &mut type_var_ids);
+            self.templates.insert(
+                synth_id,
+                GenericTemplate {
+                    name: synth_name,
+                    span,
+                    type_var_ids,
+                    params: func.params,
+                    return_ty: func.return_ty,
+                    body: func.body,
+                },
+            );
+        } else {
+            self.pending_specializations.push(Declaration {
+                id: synth_id,
                 span,
+                mutable: false,
+                name: synth_name,
                 ty: fn_ty.clone(),
-                kind: ExprKind::Function(func),
-            },
-        });
+                value: Expr {
+                    span,
+                    ty: fn_ty.clone(),
+                    kind: ExprKind::Function(func),
+                },
+            });
+        }
+
         Expr {
             span,
             ty: fn_ty,
@@ -1896,8 +1939,11 @@ impl Lower {
         for item in b.items {
             match item {
                 ast::BlockItem::Declaration(d) => {
-                    let d = self.lower_declaration(d)?;
-                    items.push(BlockItem::Declaration(d));
+                    // Nested function literals alias their name to a lifted
+                    // top-level synth id and produce no block item.
+                    if let Some(d) = self.lower_declaration(d)? {
+                        items.push(BlockItem::Declaration(d));
+                    }
                 }
                 ast::BlockItem::Statement(statement) => {
                     let s = self.lower_statement(statement)?;
@@ -2625,17 +2671,11 @@ impl Lower {
                 let ty = self.lower_type(t)?;
                 subst.insert(*tv, ty);
             }
-        } else if let Some(hint_args) = enum_type_args_from_hint(
-            &enum_template_name,
-            hint,
-            &self.enum_template_origin,
-        ) && hint_args.len() == template.type_var_ids.len()
-        {
-            // Seed from the hint so bare `None` picks up T from context.
-            for (tv, t) in template.type_var_ids.iter().zip(hint_args.iter()) {
-                subst.insert(*tv, t.clone());
-            }
         }
+        // Hint seeding is only used as a last resort below (when no args are
+        // present to drive unification, or when args left some TypeVars
+        // unbound). Seeding eagerly here would block unify from later
+        // refining a TypeVar hint (e.g. `Some(v.get(0))` inside a `map(...)`).
 
         // Lower args, coerce against (currently-substituted) field type, unify.
         let mut lowered_args = Vec::with_capacity(args.len());
@@ -2655,10 +2695,21 @@ impl Lower {
             lowered_args.push(v);
         }
 
-        // Every type var must be resolved now.
+        // Fall back to the hint for any slot that arg-unification didn't bind.
+        let hint_args = enum_type_args_from_hint(
+            &enum_template_name,
+            hint,
+            &self.enum_template_origin,
+        );
         let mut resolved_args = Vec::with_capacity(template.type_var_ids.len());
-        for tv in &template.type_var_ids {
-            let Some(t) = subst.get(tv) else {
+        for (i, tv) in template.type_var_ids.iter().enumerate() {
+            let t = subst.get(tv).cloned().or_else(|| {
+                hint_args
+                    .as_ref()
+                    .filter(|args| args.len() == template.type_var_ids.len())
+                    .map(|args| args[i].clone())
+            });
+            let Some(t) = t else {
                 return Err(Error {
                     span,
                     kind: ErrorKind::CannotInferEnumTypeArg {
@@ -2666,7 +2717,7 @@ impl Lower {
                     },
                 });
             };
-            resolved_args.push(t.clone());
+            resolved_args.push(t);
         }
 
         // Inside a generic function body, type args may still be TypeVars.
