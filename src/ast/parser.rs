@@ -90,9 +90,9 @@ use crate::{
         error::Error,
         token_iter::TokenIter,
         types::{
-            BinaryOperator, Block, BlockItem, Const, Declaration, Expr, ExprKind, ImportDecl,
-            NodeIdGen, Param, Program, Statement, StatementKind, StructLiteralField,
-            StructTypeField, TypeExpr, TypeExprKind,
+            BinaryOperator, Block, BlockItem, Const, Declaration, EnumVariantDef, Expr, ExprKind,
+            ImportDecl, MatchArm, NodeIdGen, Param, Pattern, PatternKind, Program, Statement,
+            StatementKind, StructLiteralField, StructTypeField, TypeExpr, TypeExprKind,
         },
     },
     lexer::types::{Literal, Token, TokenKind},
@@ -153,6 +153,12 @@ impl Parser {
             false
         };
         let name = self.ident()?;
+        let ty = if self.check(TokenKind::Colon) {
+            self.expect(TokenKind::Colon)?;
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
         self.expect(TokenKind::Equal)?;
         let expr = self.parse_expr()?;
         self.expect(TokenKind::Semicolon)?;
@@ -163,6 +169,7 @@ impl Parser {
             mutable,
             comptime,
             name,
+            ty,
             value: expr,
         })
     }
@@ -801,6 +808,140 @@ impl Parser {
         })
     }
 
+    fn parse_enum_def(&mut self) -> Result<Expr, Error> {
+        let start = self.expect(TokenKind::Enum)?.span;
+
+        let type_params = if self.check(TokenKind::LessThan) {
+            self.parse_type_param_list()?
+        } else {
+            Vec::new()
+        };
+
+        self.expect(TokenKind::LeftBrace)?;
+        let mut variants = Vec::new();
+        while !self.check(TokenKind::RightBrace) {
+            if !variants.is_empty() {
+                self.expect(TokenKind::Comma)?;
+                if self.check(TokenKind::RightBrace) {
+                    break;
+                }
+            }
+            let v_start = self.iter.peek().expect("lexer emits eof").span;
+            let name = self.ident()?;
+            let mut fields = Vec::new();
+            let mut end = v_start;
+            if self.check(TokenKind::LeftParen) {
+                self.expect(TokenKind::LeftParen)?;
+                while !self.check(TokenKind::RightParen) {
+                    if !fields.is_empty() {
+                        self.expect(TokenKind::Comma)?;
+                    }
+                    fields.push(self.parse_type()?);
+                }
+                end = self.expect(TokenKind::RightParen)?.span;
+            }
+            variants.push(EnumVariantDef {
+                id: self.id_gen.fresh(),
+                span: v_start.join(end),
+                name,
+                fields,
+            });
+        }
+        let end = self.expect(TokenKind::RightBrace)?.span;
+        Ok(Expr {
+            id: self.id_gen.fresh(),
+            span: start.join(end),
+            kind: ExprKind::EnumDef {
+                type_params,
+                variants,
+            },
+        })
+    }
+
+    fn parse_match(&mut self) -> Result<Expr, Error> {
+        let start = self.expect(TokenKind::Match)?.span;
+        let scrutinee = self.parse_expr()?;
+        self.expect(TokenKind::LeftBrace)?;
+        let mut arms = Vec::new();
+        while !self.check(TokenKind::RightBrace) {
+            if !arms.is_empty() {
+                self.expect(TokenKind::Comma)?;
+                if self.check(TokenKind::RightBrace) {
+                    break;
+                }
+            }
+            let arm_start = self.iter.peek().expect("lexer emits eof").span;
+            let pattern = self.parse_pattern()?;
+            // `-> body`
+            self.expect(TokenKind::Minus)?;
+            self.expect(TokenKind::GreaterThan)?;
+            let body = self.parse_expr()?;
+            let span = arm_start.join(body.span);
+            arms.push(MatchArm {
+                id: self.id_gen.fresh(),
+                span,
+                pattern,
+                body,
+            });
+        }
+        let end = self.expect(TokenKind::RightBrace)?.span;
+        Ok(Expr {
+            id: self.id_gen.fresh(),
+            span: start.join(end),
+            kind: ExprKind::Match {
+                scrutinee: Box::new(scrutinee),
+                arms,
+            },
+        })
+    }
+
+    /// Parses a flat pattern: `_`, `Name`, `Name(a, b, c)`. Inner field
+    /// patterns must be plain identifiers (no nesting yet).
+    fn parse_pattern(&mut self) -> Result<Pattern, Error> {
+        let tok = self.iter.consume().expect("lexer emits eof");
+        let start = tok.span;
+        match tok.kind {
+            TokenKind::Identifier(name) if name == "_" => Ok(Pattern {
+                id: self.id_gen.fresh(),
+                span: start,
+                kind: PatternKind::Wildcard,
+            }),
+            TokenKind::Identifier(name) => {
+                if self.check(TokenKind::LeftParen) {
+                    self.expect(TokenKind::LeftParen)?;
+                    let mut bindings = Vec::new();
+                    while !self.check(TokenKind::RightParen) {
+                        if !bindings.is_empty() {
+                            self.expect(TokenKind::Comma)?;
+                        }
+                        bindings.push(self.ident()?);
+                    }
+                    let end = self.expect(TokenKind::RightParen)?.span;
+                    Ok(Pattern {
+                        id: self.id_gen.fresh(),
+                        span: start.join(end),
+                        kind: PatternKind::Variant { name, bindings },
+                    })
+                } else {
+                    // Bare identifier: could be a nullary variant (resolved
+                    // by the lowerer) or a fresh binding.
+                    Ok(Pattern {
+                        id: self.id_gen.fresh(),
+                        span: start,
+                        kind: PatternKind::Binding(name),
+                    })
+                }
+            }
+            _ => Err(Error::unexpected(
+                &Token {
+                    kind: tok.kind,
+                    span: start,
+                },
+                "pattern (identifier, `Variant(...)`, or `_`)",
+            )),
+        }
+    }
+
     /// Parses a `<$K, $V>` generic parameter list, returning the names without
     /// the `$`. The opening `<` must be the current token.
     fn parse_type_param_list(&mut self) -> Result<Vec<String>, Error> {
@@ -920,6 +1061,8 @@ impl Parser {
                 })
             }
             TokenKind::Struct => return self.parse_struct_def(),
+            TokenKind::Enum => return self.parse_enum_def(),
+            TokenKind::Match => return self.parse_match(),
             // A leading generic parameter list introduces a generic function
             // literal: `<$K, $V>(params) -> ret { body }`.
             TokenKind::LessThan => {

@@ -286,6 +286,30 @@ impl Typechecker {
                 self.check_expr(target)?;
                 Ok(())
             }
+            ExprKind::EnumConstruct { args, .. } => {
+                for arg in args {
+                    self.check_expr(arg)?;
+                }
+                Ok(())
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                self.check_expr(scrutinee)?;
+                for arm in arms {
+                    if let crate::hir::types::HirPattern::Variant { bindings, .. } = &arm.pattern {
+                        for (name, local_id, _ty) in bindings {
+                            self.bindings.insert(
+                                *local_id,
+                                BindingInfo {
+                                    name: name.clone(),
+                                    mutable: false,
+                                },
+                            );
+                        }
+                    }
+                    self.check_expr(&arm.body)?;
+                }
+                Ok(())
+            }
         }
     }
 

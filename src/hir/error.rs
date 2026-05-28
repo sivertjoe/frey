@@ -101,6 +101,42 @@ pub enum ErrorKind {
         len: usize,
         index: usize,
     },
+    /// A `let X: T = ...;` annotation was written on a top-level function
+    /// declaration where the signature is already given by the function
+    /// literal itself.
+    TypeAnnotationNotAllowed,
+    /// Two enums declared a variant with the same name (variants are global).
+    DuplicateVariant {
+        name: String,
+        other_enum: String,
+    },
+    /// A pattern's variant name doesn't belong to the scrutinee's enum.
+    UnknownVariant {
+        name: String,
+    },
+    /// A variant pattern bound the wrong number of fields.
+    VariantArityMismatch {
+        name: String,
+        expected: usize,
+        found: usize,
+    },
+    /// A `match` expression doesn't cover every variant and has no wildcard.
+    NonExhaustiveMatch {
+        missing: Vec<String>,
+    },
+    /// A `match` arm's variant repeats one already covered earlier.
+    DuplicateMatchArm {
+        name: String,
+    },
+    /// Match scrutinee isn't an enum.
+    MatchOnNonEnum {
+        found: Ty,
+    },
+    /// `None` (or any nullary variant) was used without type-arg context
+    /// when its enum is generic and T can't be inferred.
+    CannotInferEnumTypeArg {
+        variant: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -236,6 +272,50 @@ impl fmt::Display for ErrorKind {
                 write!(
                     f,
                     "tuple index {index} out of range for tuple of length {len}"
+                )
+            }
+            ErrorKind::TypeAnnotationNotAllowed => {
+                write!(
+                    f,
+                    "type annotations are not allowed on function declarations; the signature comes from the function itself"
+                )
+            }
+            ErrorKind::DuplicateVariant { name, other_enum } => {
+                write!(
+                    f,
+                    "variant `{name}` is already declared in `enum {other_enum}`; variant names must be unique across all enums"
+                )
+            }
+            ErrorKind::UnknownVariant { name } => {
+                write!(f, "no enum variant named `{name}`")
+            }
+            ErrorKind::VariantArityMismatch {
+                name,
+                expected,
+                found,
+            } => {
+                write!(
+                    f,
+                    "variant `{name}` takes {expected} field(s), but the pattern binds {found}"
+                )
+            }
+            ErrorKind::NonExhaustiveMatch { missing } => {
+                write!(
+                    f,
+                    "non-exhaustive match: missing variant(s) {}; add an arm or use `_` to catch the rest",
+                    missing.join(", ")
+                )
+            }
+            ErrorKind::DuplicateMatchArm { name } => {
+                write!(f, "variant `{name}` is covered by more than one arm")
+            }
+            ErrorKind::MatchOnNonEnum { found } => {
+                write!(f, "`match` requires an enum value, got {found:?}")
+            }
+            ErrorKind::CannotInferEnumTypeArg { variant } => {
+                write!(
+                    f,
+                    "cannot infer type arguments for `{variant}`; provide them explicitly like `{variant}<Type>`"
                 )
             }
         }

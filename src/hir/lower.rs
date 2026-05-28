@@ -54,6 +54,17 @@ pub struct Lower {
     struct_specialization_cache: HashMap<(String, Vec<Ty>), String>,
     struct_template_origin: HashMap<String, (String, Vec<Ty>)>,
 
+    /// Specialized enum table — same shape and lifecycle as `structs`.
+    enums: HashMap<String, crate::hir::types::EnumDef>,
+    /// Enum templates, by source name. Variants have type-variable field types.
+    enum_templates: HashMap<String, crate::hir::types::EnumDef>,
+    enum_specialization_cache: HashMap<(String, Vec<Ty>), String>,
+    enum_template_origin: HashMap<String, (String, Vec<Ty>)>,
+    /// Maps a variant name (e.g. `Some`) to the template enum it belongs to
+    /// and its tag index. Variant names must be globally unique. The lowerer
+    /// uses this to resolve bare `Some(x)` calls and `Some(...)` patterns.
+    variant_constructors: HashMap<String, (String, usize)>,
+
     /// Ids of generic templates that came from `#comptime` declarations. When
     /// one is specialized, the substitution pass folds comptime constructs
     /// (type comparisons, `static if`) and drops unreachable code.
@@ -88,6 +99,11 @@ impl Lower {
             struct_templates: HashMap::default(),
             struct_specialization_cache: HashMap::default(),
             struct_template_origin: HashMap::default(),
+            enums: HashMap::default(),
+            enum_templates: HashMap::default(),
+            enum_specialization_cache: HashMap::default(),
+            enum_template_origin: HashMap::default(),
+            variant_constructors: HashMap::default(),
             comptime_template_ids: HashSet::default(),
             in_comptime: false,
             in_comptime_subst: false,
@@ -156,14 +172,18 @@ impl Lower {
             .span
             .join(p.declarations.last().unwrap().span);
 
-        // Pass 1: register every struct name. Non-generic structs go into
-        // `structs` with an empty fields list (filled in pass 2); generic
-        // structs go into `struct_templates` similarly. This lets a struct's
-        // body reference its own name (via `*T`) and other structs by name
-        // before their bodies are lowered.
+        // Pass 1: register every struct and enum name (with placeholder
+        // empty bodies, filled in pass 2). Doing the names first lets struct
+        // and enum bodies reference each other and themselves freely.
         for decl in &p.declarations {
-            if let ast::ExprKind::StructDef { type_params, .. } = &decl.value.kind {
-                if self.structs.contains_key(&decl.name)
+            if let ast::ExprKind::EnumDef {
+                type_params,
+                variants,
+            } = &decl.value.kind
+            {
+                if self.enums.contains_key(&decl.name)
+                    || self.enum_templates.contains_key(&decl.name)
+                    || self.structs.contains_key(&decl.name)
                     || self.struct_templates.contains_key(&decl.name)
                 {
                     return Err(Error {
@@ -173,12 +193,67 @@ impl Lower {
                         },
                     });
                 }
+                for (idx, v) in variants.iter().enumerate() {
+                    if let Some((other, _)) = self.variant_constructors.get(&v.name) {
+                        return Err(Error {
+                            span: v.span,
+                            kind: ErrorKind::DuplicateVariant {
+                                name: v.name.clone(),
+                                other_enum: other.clone(),
+                            },
+                        });
+                    }
+                    self.variant_constructors
+                        .insert(v.name.clone(), (decl.name.clone(), idx));
+                }
+                // Pre-allocate TypeVarIds for the template so that any other
+                // type-body lowered later in pass 2 sees the right arity even
+                // when it references this enum before its own body is lowered.
+                let tv_ids: Vec<TypeVarId> = type_params
+                    .iter()
+                    .map(|n| self.fresh_type_var_id(n.clone()))
+                    .collect();
+                let placeholder = crate::hir::types::EnumDef {
+                    name: decl.name.clone(),
+                    type_var_ids: tv_ids,
+                    variants: variants
+                        .iter()
+                        .map(|v| crate::hir::types::EnumVariant {
+                            name: v.name.clone(),
+                            fields: Vec::new(),
+                        })
+                        .collect(),
+                };
+                if type_params.is_empty() {
+                    self.enums.insert(decl.name.clone(), placeholder);
+                } else {
+                    self.enum_templates.insert(decl.name.clone(), placeholder);
+                }
+                continue;
+            }
+            if let ast::ExprKind::StructDef { type_params, .. } = &decl.value.kind {
+                if self.structs.contains_key(&decl.name)
+                    || self.struct_templates.contains_key(&decl.name)
+                    || self.enums.contains_key(&decl.name)
+                    || self.enum_templates.contains_key(&decl.name)
+                {
+                    return Err(Error {
+                        span: decl.span,
+                        kind: ErrorKind::AlreadyDefined {
+                            name: decl.name.clone(),
+                        },
+                    });
+                }
+                let tv_ids: Vec<TypeVarId> = type_params
+                    .iter()
+                    .map(|n| self.fresh_type_var_id(n.clone()))
+                    .collect();
                 if type_params.is_empty() {
                     self.structs.insert(
                         decl.name.clone(),
                         StructDef {
                             name: decl.name.clone(),
-                            type_var_ids: Vec::new(),
+                            type_var_ids: tv_ids,
                             fields: Vec::new(),
                         },
                     );
@@ -187,7 +262,7 @@ impl Lower {
                         decl.name.clone(),
                         StructDef {
                             name: decl.name.clone(),
-                            type_var_ids: Vec::new(),
+                            type_var_ids: tv_ids,
                             fields: Vec::new(),
                         },
                     );
@@ -226,26 +301,20 @@ impl Lower {
                         .expect("registered in pass 1")
                         .fields = lowered_fields;
                 } else {
-                    // Generic struct: type params are introduced from the
-                    // explicit `<$K, $V>` list.
+                    // Generic struct: type params were given fresh TypeVarIds
+                    // in pass 1; we just rehydrate the scope here.
+                    let tv_ids = self
+                        .struct_templates
+                        .get(&decl.name)
+                        .expect("registered in pass 1")
+                        .type_var_ids
+                        .clone();
                     self.push_type_var_scope();
-                    let mut tv_ids = Vec::with_capacity(type_params.len());
-                    for name in type_params {
-                        if self.structs.contains_key(name)
-                            || self.struct_templates.contains_key(name)
-                        {
-                            self.pop_type_var_scope();
-                            return Err(Error {
-                                span: decl.span,
-                                kind: ErrorKind::GenericIsAlsoAStruct { name: name.clone() },
-                            });
-                        }
-                        let id = self.fresh_type_var_id(name.clone());
+                    for (name, id) in type_params.iter().zip(tv_ids.iter()) {
                         self.type_var_scopes
                             .last_mut()
                             .unwrap()
-                            .insert(name.clone(), id);
-                        tv_ids.push(id);
+                            .insert(name.clone(), *id);
                     }
 
                     let mut lowered_fields = Vec::with_capacity(fields.len());
@@ -266,12 +335,73 @@ impl Lower {
                     }
                     self.pop_type_var_scope();
 
-                    let entry = self
-                        .struct_templates
+                    self.struct_templates
                         .get_mut(&decl.name)
-                        .expect("registered in pass 1");
-                    entry.type_var_ids = tv_ids;
-                    entry.fields = lowered_fields;
+                        .expect("registered in pass 1")
+                        .fields = lowered_fields;
+                }
+            }
+        }
+
+        // Pass 2b: lower enum variant payload types, matching the per-variant
+        // declaration order. Mirrors struct body lowering.
+        for decl in &p.declarations {
+            if let ast::ExprKind::EnumDef {
+                type_params,
+                variants,
+            } = &decl.value.kind
+            {
+                if type_params.is_empty() {
+                    let mut lowered_variants = Vec::with_capacity(variants.len());
+                    for v in variants {
+                        let fields: Vec<Ty> = v
+                            .fields
+                            .iter()
+                            .map(|t| self.lower_type(t))
+                            .collect::<Result<_, _>>()?;
+                        lowered_variants.push(crate::hir::types::EnumVariant {
+                            name: v.name.clone(),
+                            fields,
+                        });
+                    }
+                    self.enums
+                        .get_mut(&decl.name)
+                        .expect("registered in pass 2b")
+                        .variants = lowered_variants;
+                } else {
+                    // Enum's TypeVarIds were pre-allocated in pass 1.
+                    let tv_ids = self
+                        .enum_templates
+                        .get(&decl.name)
+                        .expect("registered in pass 1")
+                        .type_var_ids
+                        .clone();
+                    self.push_type_var_scope();
+                    for (name, id) in type_params.iter().zip(tv_ids.iter()) {
+                        self.type_var_scopes
+                            .last_mut()
+                            .unwrap()
+                            .insert(name.clone(), *id);
+                    }
+
+                    let mut lowered_variants = Vec::with_capacity(variants.len());
+                    for v in variants {
+                        let fields: Vec<Ty> = v
+                            .fields
+                            .iter()
+                            .map(|t| self.lower_type(t))
+                            .collect::<Result<_, _>>()?;
+                        lowered_variants.push(crate::hir::types::EnumVariant {
+                            name: v.name.clone(),
+                            fields,
+                        });
+                    }
+                    self.pop_type_var_scope();
+
+                    self.enum_templates
+                        .get_mut(&decl.name)
+                        .expect("registered in pass 1")
+                        .variants = lowered_variants;
                 }
             }
         }
@@ -287,7 +417,10 @@ impl Lower {
         // instead of being emitted as declarations.
         let mut decls = Vec::new();
         for decl in p.declarations {
-            if matches!(decl.value.kind, ast::ExprKind::StructDef { .. }) {
+            if matches!(
+                decl.value.kind,
+                ast::ExprKind::StructDef { .. } | ast::ExprKind::EnumDef { .. }
+            ) {
                 continue;
             }
             let is_comptime = decl.comptime;
@@ -317,6 +450,7 @@ impl Lower {
             span,
             declarations: decls,
             structs: std::mem::take(&mut self.structs),
+            enums: std::mem::take(&mut self.enums),
         })
     }
 
@@ -426,6 +560,12 @@ impl Lower {
         // Pre-registered top-level functions: lower the body using the
         // already-lowered signature (don't re-call lower_type on `$T`).
         if let Some(id) = pre_registered_id {
+            if d.ty.is_some() {
+                return Err(Error {
+                    span: d.span,
+                    kind: ErrorKind::TypeAnnotationNotAllowed,
+                });
+            }
             let sig = self
                 .pending_fn_sigs
                 .remove(&id)
@@ -447,7 +587,27 @@ impl Lower {
             });
         }
 
-        let value = self.lower_expr(d.value)?;
+        // Optional `: T` annotation: lower the type, push it as a hint into
+        // the value's lowering (so bare nullary variants like `None` can pick
+        // up their enum's type parameters from context), then coerce / check.
+        let expected = match &d.ty {
+            Some(t) => Some(self.lower_type(t)?),
+            None => None,
+        };
+
+        let mut value = self.lower_expr_with_hint(d.value, expected.as_ref())?;
+        if let Some(target) = &expected {
+            value = coerce_through_tails(value, target)?;
+            if value.ty != *target {
+                return Err(Error {
+                    span: value.span,
+                    kind: ErrorKind::TypeMismatch {
+                        expected: target.clone(),
+                        found: value.ty.clone(),
+                    },
+                });
+            }
+        }
         let ty = value.ty.clone();
         let id = self.id_gen.fresh();
         self.current_scope_mut().insert(d.name.clone(), id);
@@ -488,7 +648,11 @@ impl Lower {
             });
         }
 
-        let body_result = self.lower_block(body);
+        // Push the declared return type as a hint to the body's tail so a
+        // function like `() -> Option<Int> { None }` infers `None<Int>()`
+        // without explicit type args.
+        let return_hint = (!ty_has_typevars(&sig.return_ty)).then(|| sig.return_ty.clone());
+        let body_result = self.lower_block_with_hint(body, return_hint.as_ref());
         self.leave_scope();
         self.pop_type_var_scope();
 
@@ -512,7 +676,23 @@ impl Lower {
             }),
         })
     }
+    /// Default-hint entry to `lower_expr_with_hint`. Use this when the caller
+    /// has no expected-type context to propagate.
     fn lower_expr(&mut self, e: ast::Expr) -> Result<Expr, Error> {
+        self.lower_expr_with_hint(e, None)
+    }
+
+    /// Lowers an AST expression, optionally taking an expected-type `hint`
+    /// from the surrounding context. The hint is used (today) only as a
+    /// fallback when a nullary variant constructor can't otherwise infer its
+    /// enum's type arguments — `takes_opt(None)` works because the Call arm
+    /// forwards the parameter type as a hint to each arg. Most arms simply
+    /// ignore the hint or forward it unchanged.
+    fn lower_expr_with_hint(
+        &mut self,
+        e: ast::Expr,
+        hint: Option<&Ty>,
+    ) -> Result<Expr, Error> {
         match e.kind {
             ast::ExprKind::Const(ast::Const::Int(n)) => Ok(Expr {
                 span: e.span,
@@ -542,6 +722,17 @@ impl Lower {
                         ty: Ty::Unit,
                         kind: ExprKind::TypeValue(Ty::TypeVar(tv)),
                     });
+                }
+
+                // Bare nullary variant constructor like `None` (no `<...>` or
+                // call). Variants in the global table shadow any same-named
+                // local by intent — variant names are reserved.
+                if self.variant_constructors.contains_key(&name) {
+                    if let Some(expr) =
+                        self.try_lower_variant_call(&name, &[], Vec::new(), e.span, hint)?
+                    {
+                        return Ok(expr);
+                    }
                 }
 
                 let Some(local_id) = self.resolve(&name) else {
@@ -641,6 +832,19 @@ impl Lower {
                     }
                 }
 
+                // Enum variant constructor: `Some(x)`, `Ok<Int, String>(42)`.
+                if let ast::ExprKind::Identifier(n) = &callee.kind
+                    && self.variant_constructors.contains_key(n)
+                {
+                    let name = n.clone();
+                    if let Some(expr) =
+                        self.try_lower_variant_call(&name, &type_args, args, e.span, hint)?
+                    {
+                        return Ok(expr);
+                    }
+                    unreachable!("variant_constructors entry guarantees Ok(Some)");
+                }
+
                 // Overloaded direct call: pick the overload matching the args.
                 if let ast::ExprKind::Identifier(name) = &callee.kind
                     && self.overloads.get(name).is_some_and(|c| c.len() > 1)
@@ -672,9 +876,25 @@ impl Lower {
                 }
 
                 let callee = self.lower_expr(*callee)?;
+                // Push parameter types into each arg as a hint when concrete
+                // (no remaining TypeVars) — covers `takes_opt(None)` and
+                // anywhere else where the callee's signature pins the arg's
+                // expected type.
+                let param_hints: Vec<Option<Ty>> = if let Ty::Function { params, .. } = &callee.ty {
+                    params
+                        .iter()
+                        .map(|p| (!ty_has_typevars(p)).then(|| p.clone()))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
                 let args: Vec<Expr> = args
                     .into_iter()
-                    .map(|a| self.lower_expr(a))
+                    .enumerate()
+                    .map(|(i, a)| {
+                        let h = param_hints.get(i).and_then(|h| h.as_ref());
+                        self.lower_expr_with_hint(a, h)
+                    })
                     .collect::<Result<_, _>>()?;
                 let explicit_type_args: Vec<Ty> = type_args
                     .iter()
@@ -734,7 +954,7 @@ impl Lower {
             }
 
             ast::ExprKind::Block(block) => {
-                let b = self.lower_block(block)?;
+                let b = self.lower_block_with_hint(block, hint)?;
                 let ty = b.tail.ty.clone();
                 Ok(Expr {
                     span: e.span,
@@ -749,7 +969,7 @@ impl Lower {
             } => {
                 let condition = self.lower_expr(*condition)?;
 
-                let then_block = self.lower_block(then_branch)?;
+                let then_block = self.lower_block_with_hint(then_branch, hint)?;
                 let then_span = then_block.span;
                 let then_expr = Expr {
                     span: then_span,
@@ -758,7 +978,7 @@ impl Lower {
                 };
 
                 let else_expr = match else_branch {
-                    Some(else_branch) => self.lower_expr(*else_branch)?,
+                    Some(else_branch) => self.lower_expr_with_hint(*else_branch, hint)?,
                     None => unit_expr(end_of(e.span)),
                 };
 
@@ -1071,6 +1291,16 @@ impl Lower {
                     },
                 })
             }
+            ast::ExprKind::EnumDef { .. } => {
+                // Enum definitions at top level are consumed by lower_program
+                // and never reach here. Inside an expression context they have
+                // no runtime value.
+                Err(Error {
+                    span: e.span,
+                    kind: ErrorKind::StructDefNotAllowedHere,
+                })
+            }
+            ast::ExprKind::Match { scrutinee, arms } => self.lower_match(*scrutinee, arms, e.span),
         }
     }
 
@@ -1292,7 +1522,16 @@ impl Lower {
         }
         let mut subst = HashMap::new();
         for (p, a) in params.iter().zip(arg_tys.iter()) {
-            if unify(p, a, Span::default(), &mut subst, &self.struct_template_origin).is_err() {
+            if unify(
+                p,
+                a,
+                Span::default(),
+                &mut subst,
+                &self.struct_template_origin,
+                &self.enum_template_origin,
+            )
+            .is_err()
+            {
                 return false;
             }
         }
@@ -1458,7 +1697,8 @@ impl Lower {
             });
         }
 
-        let mut body = self.lower_block(body)?;
+        let return_hint = (!ty_has_typevars(&return_ty)).then(|| return_ty.clone());
+        let mut body = self.lower_block_with_hint(body, return_hint.as_ref())?;
         if body.tail.ty != return_ty && return_ty.is_number() && return_ty != Ty::Int {
             let tail = std::mem::replace(&mut body.tail, Box::new(unit_expr(body.span)));
             body.tail = Box::new(coerce_through_tails(*tail, &return_ty)?);
@@ -1483,6 +1723,17 @@ impl Lower {
     }
 
     fn lower_block(&mut self, b: ast::Block) -> Result<Block, Error> {
+        self.lower_block_with_hint(b, None)
+    }
+
+    /// Like `lower_block`, but pushes the surrounding expected-type `hint`
+    /// into the block's tail expression. The intermediate items don't see
+    /// the hint — only the value that ends up being the block's result.
+    fn lower_block_with_hint(
+        &mut self,
+        b: ast::Block,
+        hint: Option<&Ty>,
+    ) -> Result<Block, Error> {
         let mut items = Vec::new();
 
         for item in b.items {
@@ -1499,7 +1750,7 @@ impl Lower {
         }
 
         let tail = match b.tail {
-            Some(expr) => Box::new(self.lower_expr(*expr)?),
+            Some(expr) => Box::new(self.lower_expr_with_hint(*expr, hint)?),
             None => Box::new(unit_expr(end_of(b.span))),
         };
 
@@ -1647,7 +1898,11 @@ impl Lower {
                     Ok(Ty::TypeVar(id))
                 } else if self.structs.contains_key(name) {
                     Ok(Ty::Struct(name.clone()))
-                } else if self.struct_templates.contains_key(name) {
+                } else if self.enums.contains_key(name) {
+                    Ok(Ty::Enum(name.clone()))
+                } else if self.struct_templates.contains_key(name)
+                    || self.enum_templates.contains_key(name)
+                {
                     Err(Error {
                         span: t.span,
                         kind: ErrorKind::MissingTypeArguments { name: name.clone() },
@@ -1662,47 +1917,71 @@ impl Lower {
                 }
             }
             ast::TypeExprKind::NamedGeneric { name, args } => {
-                // Concrete struct? Then `Foo<...>` is wrong — Foo isn't generic.
-                if self.structs.contains_key(name) {
+                // Concrete struct/enum? Then `Foo<...>` is wrong — Foo isn't generic.
+                if self.structs.contains_key(name) || self.enums.contains_key(name) {
                     return Err(Error {
                         span: t.span,
                         kind: ErrorKind::UnexpectedTypeArguments { name: name.clone() },
                     });
                 }
-                let template = self
-                    .struct_templates
-                    .get(name)
-                    .cloned()
-                    .ok_or_else(|| Error {
-                        span: t.span,
-                        kind: ErrorKind::UnknownType { name: name.clone() },
-                    })?;
-                if template.type_var_ids.len() != args.len() {
-                    return Err(Error {
-                        span: t.span,
-                        kind: ErrorKind::TypeArgArityMismatch {
+                if let Some(template) = self.struct_templates.get(name).cloned() {
+                    if template.type_var_ids.len() != args.len() {
+                        return Err(Error {
+                            span: t.span,
+                            kind: ErrorKind::TypeArgArityMismatch {
+                                name: name.clone(),
+                                expected: template.type_var_ids.len(),
+                                found: args.len(),
+                            },
+                        });
+                    }
+                    let lowered_args: Vec<Ty> = args
+                        .iter()
+                        .map(|a| self.lower_type(a))
+                        .collect::<Result<_, _>>()?;
+                    let still_generic = lowered_args
+                        .iter()
+                        .any(|a| ty_has_typevars(a) || matches!(a, Ty::GenericStruct { .. }));
+                    if still_generic {
+                        return Ok(Ty::GenericStruct {
                             name: name.clone(),
-                            expected: template.type_var_ids.len(),
-                            found: args.len(),
-                        },
-                    });
-                }
-                let lowered_args: Vec<Ty> = args
-                    .iter()
-                    .map(|a| self.lower_type(a))
-                    .collect::<Result<_, _>>()?;
-                let still_generic = lowered_args
-                    .iter()
-                    .any(|a| ty_has_typevars(a) || matches!(a, Ty::GenericStruct { .. }));
-                if still_generic {
-                    Ok(Ty::GenericStruct {
-                        name: name.clone(),
-                        args: lowered_args,
-                    })
-                } else {
+                            args: lowered_args,
+                        });
+                    }
                     let specialized = self.specialize_struct(&template, lowered_args, t.span)?;
-                    Ok(Ty::Struct(specialized))
+                    return Ok(Ty::Struct(specialized));
                 }
+                if let Some(template) = self.enum_templates.get(name).cloned() {
+                    if template.type_var_ids.len() != args.len() {
+                        return Err(Error {
+                            span: t.span,
+                            kind: ErrorKind::TypeArgArityMismatch {
+                                name: name.clone(),
+                                expected: template.type_var_ids.len(),
+                                found: args.len(),
+                            },
+                        });
+                    }
+                    let lowered_args: Vec<Ty> = args
+                        .iter()
+                        .map(|a| self.lower_type(a))
+                        .collect::<Result<_, _>>()?;
+                    let still_generic = lowered_args
+                        .iter()
+                        .any(|a| ty_has_typevars(a) || matches!(a, Ty::GenericEnum { .. }));
+                    if still_generic {
+                        return Ok(Ty::GenericEnum {
+                            name: name.clone(),
+                            args: lowered_args,
+                        });
+                    }
+                    let specialized = self.specialize_enum(&template, lowered_args, t.span)?;
+                    return Ok(Ty::Enum(specialized));
+                }
+                Err(Error {
+                    span: t.span,
+                    kind: ErrorKind::UnknownType { name: name.clone() },
+                })
             }
             ast::TypeExprKind::Tuple(elems) => {
                 let lowered: Vec<Ty> = elems
@@ -1953,6 +2232,7 @@ impl Lower {
                 field_span,
                 &mut subst,
                 &self.struct_template_origin,
+                &self.enum_template_origin,
             )?;
         }
         for tv in &template.type_var_ids {
@@ -2041,6 +2321,447 @@ impl Lower {
         Ok(mangled)
     }
 
+    /// Specializes a generic enum (or returns the cached mangled name).
+    /// Mirrors `specialize_struct`: substitute every variant's payload types.
+    fn specialize_enum(
+        &mut self,
+        template: &crate::hir::types::EnumDef,
+        args: Vec<Ty>,
+        _span: Span,
+    ) -> Result<String, Error> {
+        let cache_key = (template.name.clone(), args.clone());
+        if let Some(cached) = self.enum_specialization_cache.get(&cache_key) {
+            return Ok(cached.clone());
+        }
+
+        let mangled = mangle_struct_specialization(&template.name, &args);
+        self.enum_specialization_cache
+            .insert(cache_key, mangled.clone());
+        self.enum_template_origin
+            .insert(mangled.clone(), (template.name.clone(), args.clone()));
+
+        let mut subst = HashMap::new();
+        for (tv, ty) in template.type_var_ids.iter().zip(args.iter()) {
+            subst.insert(*tv, ty.clone());
+        }
+
+        let variants = template.variants.clone();
+        let mut new_variants = Vec::with_capacity(variants.len());
+        for v in variants {
+            let fields: Vec<Ty> = v
+                .fields
+                .iter()
+                .map(|t| self.substitute_ty(t, &subst))
+                .collect();
+            new_variants.push(crate::hir::types::EnumVariant {
+                name: v.name,
+                fields,
+            });
+        }
+
+        self.enums.insert(
+            mangled.clone(),
+            crate::hir::types::EnumDef {
+                name: mangled.clone(),
+                type_var_ids: Vec::new(),
+                variants: new_variants,
+            },
+        );
+
+        Ok(mangled)
+    }
+
+    /// Builds an EnumConstruct node for `name(args)` when `name` is a known
+    /// variant constructor. Returns `Ok(None)` if `name` isn't a variant —
+    /// the caller falls through to regular function-call lowering. `hint`
+    /// is the surrounding expected type (if any); used as a tiebreaker for
+    /// nullary variants where neither explicit type args nor argument
+    /// unification can determine the enum's type parameters.
+    fn try_lower_variant_call(
+        &mut self,
+        name: &str,
+        type_args: &[ast::TypeExpr],
+        args: Vec<ast::Expr>,
+        span: Span,
+        hint: Option<&Ty>,
+    ) -> Result<Option<Expr>, Error> {
+        let Some(&(ref enum_template_name, variant_index)) = self.variant_constructors.get(name)
+        else {
+            return Ok(None);
+        };
+        let enum_template_name = enum_template_name.clone();
+
+        // Non-generic enum: variant fields are already concrete.
+        if let Some(enum_def) = self.enums.get(&enum_template_name).cloned() {
+            if !type_args.is_empty() {
+                return Err(Error {
+                    span,
+                    kind: ErrorKind::UnexpectedTypeArguments {
+                        name: enum_template_name.clone(),
+                    },
+                });
+            }
+            let variant = &enum_def.variants[variant_index];
+            if variant.fields.len() != args.len() {
+                return Err(Error {
+                    span,
+                    kind: ErrorKind::VariantArityMismatch {
+                        name: name.to_string(),
+                        expected: variant.fields.len(),
+                        found: args.len(),
+                    },
+                });
+            }
+            let mut lowered_args = Vec::with_capacity(args.len());
+            for (arg, field_ty) in args.into_iter().zip(variant.fields.iter()) {
+                let v = self.lower_expr_with_hint(arg, Some(field_ty))?;
+                let v = coerce_int_literal(v, field_ty)?;
+                if v.ty != *field_ty {
+                    return Err(Error {
+                        span: v.span,
+                        kind: ErrorKind::TypeMismatch {
+                            expected: field_ty.clone(),
+                            found: v.ty.clone(),
+                        },
+                    });
+                }
+                lowered_args.push(v);
+            }
+            return Ok(Some(Expr {
+                span,
+                ty: Ty::Enum(enum_def.name.clone()),
+                kind: ExprKind::EnumConstruct {
+                    enum_name: enum_def.name,
+                    variant_index,
+                    args: lowered_args,
+                },
+            }));
+        }
+
+        // Generic enum: unify args + explicit type args to infer the
+        // substitution, then specialize.
+        let template = self
+            .enum_templates
+            .get(&enum_template_name)
+            .cloned()
+            .expect("variant_constructors points to a known template");
+        let variant = &template.variants[variant_index];
+        if variant.fields.len() != args.len() {
+            return Err(Error {
+                span,
+                kind: ErrorKind::VariantArityMismatch {
+                    name: name.to_string(),
+                    expected: variant.fields.len(),
+                    found: args.len(),
+                },
+            });
+        }
+
+        let mut subst: HashMap<TypeVarId, Ty> = HashMap::new();
+        if !type_args.is_empty() {
+            if type_args.len() != template.type_var_ids.len() {
+                return Err(Error {
+                    span,
+                    kind: ErrorKind::TypeArgArityMismatch {
+                        name: enum_template_name.clone(),
+                        expected: template.type_var_ids.len(),
+                        found: type_args.len(),
+                    },
+                });
+            }
+            for (tv, t) in template.type_var_ids.iter().zip(type_args.iter()) {
+                let ty = self.lower_type(t)?;
+                subst.insert(*tv, ty);
+            }
+        } else if let Some(hint_args) = enum_type_args_from_hint(
+            &enum_template_name,
+            hint,
+            &self.enum_template_origin,
+        ) && hint_args.len() == template.type_var_ids.len()
+        {
+            // Seed substitution from the surrounding expected type so that
+            // a bare `None` (or nullary variant in general) picks up its
+            // enum's type parameters from context.
+            for (tv, t) in template.type_var_ids.iter().zip(hint_args.iter()) {
+                subst.insert(*tv, t.clone());
+            }
+        }
+
+        // Lower args, coerce against (currently-substituted) field type, unify.
+        let mut lowered_args = Vec::with_capacity(args.len());
+        for (arg, field_ty) in args.into_iter().zip(variant.fields.iter()) {
+            let coerce_target = self.substitute_ty(field_ty, &subst);
+            let arg_hint = (!ty_has_typevars(&coerce_target)).then(|| coerce_target.clone());
+            let v = self.lower_expr_with_hint(arg, arg_hint.as_ref())?;
+            let v = coerce_int_literal(v, &coerce_target)?;
+            crate::hir::generics::unify(
+                field_ty,
+                &v.ty,
+                v.span,
+                &mut subst,
+                &self.struct_template_origin,
+                &self.enum_template_origin,
+            )?;
+            lowered_args.push(v);
+        }
+
+        // Every type var must be resolved now.
+        let mut concrete_args = Vec::with_capacity(template.type_var_ids.len());
+        for tv in &template.type_var_ids {
+            match subst.get(tv) {
+                Some(t) if !ty_has_typevars(t) => concrete_args.push(t.clone()),
+                _ => {
+                    return Err(Error {
+                        span,
+                        kind: ErrorKind::CannotInferEnumTypeArg {
+                            variant: name.to_string(),
+                        },
+                    });
+                }
+            }
+        }
+
+        let mangled = self.specialize_enum(&template, concrete_args, span)?;
+        let def = self
+            .enums
+            .get(&mangled)
+            .expect("specialize_enum inserts the definition");
+        let coerced_args: Vec<Expr> = lowered_args
+            .into_iter()
+            .zip(def.variants[variant_index].fields.iter())
+            .map(|(v, target)| coerce_int_literal(v, target))
+            .collect::<Result<_, _>>()?;
+        Ok(Some(Expr {
+            span,
+            ty: Ty::Enum(mangled.clone()),
+            kind: ExprKind::EnumConstruct {
+                enum_name: mangled,
+                variant_index,
+                args: coerced_args,
+            },
+        }))
+    }
+
+    /// Lowers a `match` expression: validate the scrutinee is an enum, every
+    /// arm is a known variant of that enum, and produce arms with the proper
+    /// payload bindings in scope.
+    fn lower_match(
+        &mut self,
+        scrutinee: ast::Expr,
+        arms: Vec<ast::MatchArm>,
+        span: Span,
+    ) -> Result<Expr, Error> {
+        let scrutinee = self.lower_expr(scrutinee)?;
+        // For a generic template body the scrutinee type is `GenericEnum<T>`;
+        // we match against the *template's* variants and substitute payload
+        // types using the type-arg list. Once the function specializes, the
+        // bindings' types follow via substitute_expr.
+        let (enum_def, subst): (crate::hir::types::EnumDef, HashMap<TypeVarId, Ty>) =
+            match &scrutinee.ty {
+                Ty::Enum(n) => (
+                    self.enums
+                        .get(n)
+                        .cloned()
+                        .expect("Ty::Enum must reference a known enum"),
+                    HashMap::new(),
+                ),
+                Ty::GenericEnum { name, args } => {
+                    let template = self
+                        .enum_templates
+                        .get(name)
+                        .cloned()
+                        .expect("GenericEnum must reference a known template");
+                    let mut subst = HashMap::new();
+                    for (tv, ty) in template.type_var_ids.iter().zip(args.iter()) {
+                        subst.insert(*tv, ty.clone());
+                    }
+                    // Substitute variant payload types so any payload-bindings
+                    // see the template-level (post-arg) types.
+                    let mut substituted = template.clone();
+                    for v in &mut substituted.variants {
+                        v.fields = v
+                            .fields
+                            .iter()
+                            .map(|t| self.substitute_ty(t, &subst))
+                            .collect();
+                    }
+                    (substituted, subst)
+                }
+                other => {
+                    return Err(Error {
+                        span: scrutinee.span,
+                        kind: ErrorKind::MatchOnNonEnum {
+                            found: other.clone(),
+                        },
+                    });
+                }
+            };
+        let _ = subst; // Already applied to enum_def above.
+
+        let mut hir_arms: Vec<crate::hir::types::MatchArm> = Vec::with_capacity(arms.len());
+        let mut covered: Vec<bool> = vec![false; enum_def.variants.len()];
+        let mut has_wildcard = false;
+        let mut result_ty: Option<Ty> = None;
+
+        for arm in arms {
+            let arm_span = arm.span;
+            let (pattern, binding_locals) =
+                self.lower_pattern(arm.pattern, &enum_def, &mut covered, &mut has_wildcard)?;
+            // Open a scope for any payload bindings introduced by the pattern.
+            self.enter_scope();
+            for (name, local_id, ty) in &binding_locals {
+                self.current_scope_mut().insert(name.clone(), *local_id);
+                self.bindings.insert(*local_id, ty.clone());
+            }
+            let body = self.lower_expr(arm.body);
+            self.leave_scope();
+            let body = body?;
+
+            // Coerce successive arms to match the first arm's type when an int
+            // literal is the only difference.
+            let body = if let Some(rt) = &result_ty {
+                coerce_through_tails(body, rt)?
+            } else {
+                body
+            };
+
+            if let Some(rt) = &result_ty {
+                if body.ty != *rt {
+                    return Err(Error {
+                        span: body.span,
+                        kind: ErrorKind::TypeMismatch {
+                            expected: rt.clone(),
+                            found: body.ty.clone(),
+                        },
+                    });
+                }
+            } else {
+                result_ty = Some(body.ty.clone());
+            }
+
+            hir_arms.push(crate::hir::types::MatchArm {
+                span: arm_span,
+                pattern,
+                body,
+            });
+        }
+
+        if !has_wildcard {
+            let missing: Vec<String> = enum_def
+                .variants
+                .iter()
+                .zip(covered.iter())
+                .filter_map(|(v, &c)| (!c).then(|| v.name.clone()))
+                .collect();
+            if !missing.is_empty() {
+                return Err(Error {
+                    span,
+                    kind: ErrorKind::NonExhaustiveMatch { missing },
+                });
+            }
+        }
+
+        let ty = result_ty.unwrap_or(Ty::Unit);
+        Ok(Expr {
+            span,
+            ty,
+            kind: ExprKind::Match {
+                scrutinee: Box::new(scrutinee),
+                arms: hir_arms,
+            },
+        })
+    }
+
+    /// Lowers a single AST pattern against `enum_def`, updating the coverage
+    /// vector and returning the HIR pattern plus the locals to introduce.
+    fn lower_pattern(
+        &mut self,
+        pattern: ast::Pattern,
+        enum_def: &crate::hir::types::EnumDef,
+        covered: &mut [bool],
+        has_wildcard: &mut bool,
+    ) -> Result<(crate::hir::types::HirPattern, Vec<(String, LocalId, Ty)>), Error> {
+        let p_span = pattern.span;
+        match pattern.kind {
+            ast::PatternKind::Wildcard => {
+                if *has_wildcard {
+                    return Err(Error {
+                        span: p_span,
+                        kind: ErrorKind::DuplicateMatchArm {
+                            name: "_".to_string(),
+                        },
+                    });
+                }
+                *has_wildcard = true;
+                Ok((crate::hir::types::HirPattern::Wildcard, Vec::new()))
+            }
+            ast::PatternKind::Binding(name) => {
+                // A bare identifier in a pattern names a variant (must be a
+                // known variant of the scrutinee's enum). Generic bindings on
+                // arbitrary scrutinees aren't supported yet — keep patterns
+                // strict so `Some(v)` and `None` are clear.
+                self.resolve_variant_pattern(&name, Vec::new(), enum_def, covered, p_span)
+            }
+            ast::PatternKind::Variant { name, bindings } => {
+                self.resolve_variant_pattern(&name, bindings, enum_def, covered, p_span)
+            }
+        }
+    }
+
+    fn resolve_variant_pattern(
+        &mut self,
+        name: &str,
+        bindings: Vec<String>,
+        enum_def: &crate::hir::types::EnumDef,
+        covered: &mut [bool],
+        p_span: Span,
+    ) -> Result<(crate::hir::types::HirPattern, Vec<(String, LocalId, Ty)>), Error> {
+        let (idx, variant) = enum_def
+            .variants
+            .iter()
+            .enumerate()
+            .find(|(_, v)| v.name == name)
+            .ok_or_else(|| Error {
+                span: p_span,
+                kind: ErrorKind::UnknownVariant {
+                    name: name.to_string(),
+                },
+            })?;
+        if variant.fields.len() != bindings.len() {
+            return Err(Error {
+                span: p_span,
+                kind: ErrorKind::VariantArityMismatch {
+                    name: name.to_string(),
+                    expected: variant.fields.len(),
+                    found: bindings.len(),
+                },
+            });
+        }
+        if covered[idx] {
+            return Err(Error {
+                span: p_span,
+                kind: ErrorKind::DuplicateMatchArm {
+                    name: name.to_string(),
+                },
+            });
+        }
+        covered[idx] = true;
+        let mut binding_locals = Vec::with_capacity(bindings.len());
+        for (binding_name, field_ty) in bindings.iter().zip(variant.fields.iter()) {
+            let local_id = self.id_gen.fresh();
+            binding_locals.push((binding_name.clone(), local_id, field_ty.clone()));
+        }
+        let bindings_for_hir: Vec<(String, LocalId, Ty)> = binding_locals.clone();
+        Ok((
+            crate::hir::types::HirPattern::Variant {
+                enum_name: enum_def.name.clone(),
+                variant_index: idx,
+                bindings: bindings_for_hir,
+            },
+            binding_locals,
+        ))
+    }
+
     fn substitute_ty(&mut self, ty: &Ty, subst: &HashMap<TypeVarId, Ty>) -> Ty {
         match ty {
             Ty::TypeVar(id) => subst.get(id).cloned().unwrap_or(Ty::TypeVar(*id)),
@@ -2081,6 +2802,28 @@ impl Lower {
             }
             Ty::Tuple(elems) => {
                 Ty::Tuple(elems.iter().map(|e| self.substitute_ty(e, subst)).collect())
+            }
+            Ty::GenericEnum { name, args } => {
+                let new_args: Vec<Ty> = args.iter().map(|a| self.substitute_ty(a, subst)).collect();
+                let still_generic = new_args
+                    .iter()
+                    .any(|a| ty_has_typevars(a) || matches!(a, Ty::GenericEnum { .. }));
+                if still_generic {
+                    Ty::GenericEnum {
+                        name: name.clone(),
+                        args: new_args,
+                    }
+                } else {
+                    let template = self
+                        .enum_templates
+                        .get(name)
+                        .cloned()
+                        .expect("GenericEnum must reference a known template");
+                    let specialized = self
+                        .specialize_enum(&template, new_args, Span::default())
+                        .expect("specialize_enum cannot fail on concrete args");
+                    Ty::Enum(specialized)
+                }
             }
             _ => ty.clone(),
         }
@@ -2152,6 +2895,7 @@ impl Lower {
                 call_span,
                 &mut subst,
                 &self.struct_template_origin,
+                &self.enum_template_origin,
             )?;
         }
 
@@ -2466,6 +3210,30 @@ impl Lower {
             ExprKind::TupleField { target, .. } => {
                 self.substitute_expr(target, subst, local_map)?;
             }
+            ExprKind::EnumConstruct { args, .. } => {
+                // Note: enum_name was already specialized at lower time, so we
+                // only need to walk the args (the variant data may itself
+                // contain TypeVars when seen inside a generic function body).
+                for arg in args {
+                    self.substitute_expr(arg, subst, local_map)?;
+                }
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                self.substitute_expr(scrutinee, subst, local_map)?;
+                for arm in arms {
+                    // Pattern binding types come from the specialized enum's
+                    // variants, but those were captured at lower time. Walk
+                    // them anyway in case future cases need it.
+                    if let crate::hir::types::HirPattern::Variant { bindings, .. } =
+                        &mut arm.pattern
+                    {
+                        for (_, _, ty) in bindings {
+                            *ty = self.substitute_ty(ty, subst);
+                        }
+                    }
+                    self.substitute_expr(&mut arm.body, subst, local_map)?;
+                }
+            }
         }
         if let Some(ty) = updated_call_ty {
             e.ty = ty;
@@ -2495,6 +3263,32 @@ fn is_place_kind(kind: &ExprKind) -> bool {
             | ExprKind::Subscript { .. }
             | ExprKind::Deref(_)
     )
+}
+
+/// When a hint resolves to (or is) a known enum specialization, returns
+/// the type-argument list that would have been written explicitly. Used
+/// during bidirectional lowering so nullary variants can pick up the
+/// enum's type parameters from surrounding context.
+fn enum_type_args_from_hint(
+    template_name: &str,
+    hint: Option<&Ty>,
+    enum_origins: &HashMap<String, (String, Vec<Ty>)>,
+) -> Option<Vec<Ty>> {
+    let hint = hint?;
+    match hint {
+        Ty::Enum(spec) => enum_origins
+            .get(spec)
+            .filter(|(tname, _)| tname == template_name)
+            .map(|(_, args)| args.clone()),
+        Ty::GenericEnum { name, args } if name == template_name => {
+            if args.iter().any(ty_has_typevars) {
+                None
+            } else {
+                Some(args.clone())
+            }
+        }
+        _ => None,
+    }
 }
 
 fn mangle_specialization(name: &str, tys: &[Ty]) -> String {

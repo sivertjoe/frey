@@ -12,6 +12,7 @@ pub fn ty_has_typevars(ty: &Ty) -> bool {
             params.iter().any(ty_has_typevars) || ty_has_typevars(return_ty)
         }
         Ty::GenericStruct { args, .. } => args.iter().any(ty_has_typevars),
+        Ty::GenericEnum { args, .. } => args.iter().any(ty_has_typevars),
         Ty::Tuple(elems) => elems.iter().any(ty_has_typevars),
         _ => false,
     }
@@ -37,6 +38,11 @@ pub fn collect_typevars(ty: &Ty, out: &mut Vec<TypeVarId>) {
                 collect_typevars(a, out);
             }
         }
+        Ty::GenericEnum { args, .. } => {
+            for a in args {
+                collect_typevars(a, out);
+            }
+        }
         Ty::Tuple(elems) => {
             for e in elems {
                 collect_typevars(e, out);
@@ -52,6 +58,7 @@ pub fn unify(
     span: crate::lexer::types::Span,
     subst: &mut HashMap<TypeVarId, Ty>,
     struct_origins: &HashMap<String, (String, Vec<Ty>)>,
+    enum_origins: &HashMap<String, (String, Vec<Ty>)>,
 ) -> Result<(), Error> {
     match (param_ty, arg_ty) {
         (Ty::TypeVar(id), concrete) => {
@@ -71,7 +78,7 @@ pub fn unify(
                 Ok(())
             }
         }
-        (Ty::Ptr(p), Ty::Ptr(a)) => unify(p, a, span, subst, struct_origins),
+        (Ty::Ptr(p), Ty::Ptr(a)) => unify(p, a, span, subst, struct_origins, enum_origins),
         (
             Ty::Array {
                 element: ep,
@@ -81,7 +88,7 @@ pub fn unify(
                 element: ea,
                 count: ca,
             },
-        ) if cp == ca => unify(ep, ea, span, subst, struct_origins),
+        ) if cp == ca => unify(ep, ea, span, subst, struct_origins, enum_origins),
         (
             Ty::Function {
                 params: ps,
@@ -93,15 +100,15 @@ pub fn unify(
             },
         ) if ps.len() == as_.len() => {
             for (p, a) in ps.iter().zip(as_.iter()) {
-                unify(p, a, span, subst, struct_origins)?;
+                unify(p, a, span, subst, struct_origins, enum_origins)?;
             }
-            unify(rp, ra, span, subst, struct_origins)
+            unify(rp, ra, span, subst, struct_origins, enum_origins)
         }
         (Ty::GenericStruct { name: n1, args: a1 }, Ty::GenericStruct { name: n2, args: a2 })
             if n1 == n2 && a1.len() == a2.len() =>
         {
             for (x, y) in a1.iter().zip(a2.iter()) {
-                unify(x, y, span, subst, struct_origins)?;
+                unify(x, y, span, subst, struct_origins, enum_origins)?;
             }
             Ok(())
         }
@@ -109,7 +116,31 @@ pub fn unify(
         | (Ty::Struct(spec), Ty::GenericStruct { name, args }) => match struct_origins.get(spec) {
             Some((tname, targs)) if tname == name && targs.len() == args.len() => {
                 for (x, y) in args.iter().zip(targs.iter()) {
-                    unify(x, y, span, subst, struct_origins)?;
+                    unify(x, y, span, subst, struct_origins, enum_origins)?;
+                }
+                Ok(())
+            }
+            _ => Err(Error {
+                span,
+                kind: ErrorKind::TypeMismatch {
+                    expected: param_ty.clone(),
+                    found: arg_ty.clone(),
+                },
+            }),
+        },
+        (Ty::GenericEnum { name: n1, args: a1 }, Ty::GenericEnum { name: n2, args: a2 })
+            if n1 == n2 && a1.len() == a2.len() =>
+        {
+            for (x, y) in a1.iter().zip(a2.iter()) {
+                unify(x, y, span, subst, struct_origins, enum_origins)?;
+            }
+            Ok(())
+        }
+        (Ty::GenericEnum { name, args }, Ty::Enum(spec))
+        | (Ty::Enum(spec), Ty::GenericEnum { name, args }) => match enum_origins.get(spec) {
+            Some((tname, targs)) if tname == name && targs.len() == args.len() => {
+                for (x, y) in args.iter().zip(targs.iter()) {
+                    unify(x, y, span, subst, struct_origins, enum_origins)?;
                 }
                 Ok(())
             }
@@ -123,7 +154,7 @@ pub fn unify(
         },
         (Ty::Tuple(a), Ty::Tuple(b)) if a.len() == b.len() => {
             for (x, y) in a.iter().zip(b.iter()) {
-                unify(x, y, span, subst, struct_origins)?;
+                unify(x, y, span, subst, struct_origins, enum_origins)?;
             }
             Ok(())
         }

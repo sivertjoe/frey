@@ -56,6 +56,13 @@ pub enum Ty {
     GenericStruct { name: String, args: Vec<Ty> },
     /// Anonymous tuple of two-or-more element types.
     Tuple(Vec<Ty>),
+    /// A specialized enum (tagged union). The string is the mangled name of
+    /// a concrete instantiation registered in `enums`, like `Option_Int`.
+    Enum(String),
+    /// An enum template referenced with type arguments that still contain
+    /// type variables, e.g. `Option<T>` inside a generic function body.
+    /// Becomes `Ty::Enum(...)` once concrete arguments arrive.
+    GenericEnum { name: String, args: Vec<Ty> },
 }
 
 impl Ty {
@@ -101,6 +108,7 @@ pub struct Program {
     pub span: Span,
     pub declarations: Vec<Declaration>,
     pub structs: std::collections::HashMap<String, StructDef>,
+    pub enums: std::collections::HashMap<String, EnumDef>,
 }
 
 #[derive(Clone)]
@@ -116,6 +124,40 @@ impl fmt::Debug for StructDef {
             .field("name", &self.name)
             .field("fields", &self.fields)
             .finish()
+    }
+}
+
+/// A specialized enum (no type variables left). Variants are stored as
+/// `(name, field_types)` in declaration order, indexed by tag value.
+#[derive(Clone)]
+pub struct EnumDef {
+    pub name: String,
+    pub type_var_ids: Vec<TypeVarId>,
+    pub variants: Vec<EnumVariant>,
+}
+
+#[derive(Clone)]
+pub struct EnumVariant {
+    pub name: String,
+    pub fields: Vec<Ty>,
+}
+
+impl fmt::Debug for EnumDef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EnumDef")
+            .field("name", &self.name)
+            .field("variants", &self.variants)
+            .finish()
+    }
+}
+
+impl fmt::Debug for EnumVariant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.fields.is_empty() {
+            write!(f, "{}", self.name)
+        } else {
+            write!(f, "{}{:?}", self.name, self.fields)
+        }
     }
 }
 
@@ -205,6 +247,72 @@ pub enum ExprKind {
         elem_ty: Ty,
         args: Vec<Expr>,
     },
+    /// Constructs an enum value: `Some(x)`, `None`, etc. `enum_name` is the
+    /// specialized name registered in the enum table; `variant_index` is the
+    /// tag value.
+    EnumConstruct {
+        enum_name: String,
+        variant_index: usize,
+        args: Vec<Expr>,
+    },
+    /// `match scrutinee { Pat -> arm, ... }`. All arms produce the same type
+    /// (`Expr::ty` on the surrounding Expr). Patterns are flat — variant
+    /// names with one identifier per payload, or `_`.
+    Match {
+        scrutinee: Box<Expr>,
+        arms: Vec<MatchArm>,
+    },
+}
+
+#[derive(Clone)]
+pub struct MatchArm {
+    pub span: Span,
+    pub pattern: HirPattern,
+    pub body: Expr,
+}
+
+#[derive(Clone)]
+pub enum HirPattern {
+    Wildcard,
+    Variant {
+        enum_name: String,
+        variant_index: usize,
+        /// Bindings introduced for each payload field, in order. Each entry
+        /// is a fresh `LocalId` in `bindings` with its known field type.
+        bindings: Vec<(String, LocalId, Ty)>,
+    },
+}
+
+impl fmt::Debug for MatchArm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MatchArm")
+            .field("pattern", &self.pattern)
+            .field("body", &self.body)
+            .finish()
+    }
+}
+
+impl fmt::Debug for HirPattern {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            HirPattern::Wildcard => write!(f, "_"),
+            HirPattern::Variant {
+                enum_name,
+                variant_index,
+                bindings,
+            } => {
+                let names: Vec<&str> =
+                    bindings.iter().map(|(n, _, _)| n.as_str()).collect();
+                write!(
+                    f,
+                    "{}::#{} ({})",
+                    enum_name,
+                    variant_index,
+                    names.join(", ")
+                )
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -321,6 +429,17 @@ impl fmt::Debug for Ty {
                 }
                 write!(f, ")")
             }
+            Ty::Enum(name) => write!(f, "{name}"),
+            Ty::GenericEnum { name, args } => {
+                write!(f, "{name}<")?;
+                for (i, a) in args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{a:?}")?;
+                }
+                write!(f, ">")
+            }
         }
     }
 }
@@ -404,6 +523,22 @@ impl fmt::Debug for ExprKind {
                 elem_ty,
                 args,
             } => write!(f, "{kind:?}<{elem_ty:?}>{args:?}"),
+            ExprKind::EnumConstruct {
+                enum_name,
+                variant_index,
+                args,
+            } => {
+                write!(f, "{enum_name}::#{variant_index}")?;
+                if !args.is_empty() {
+                    write!(f, "{args:?}")?;
+                }
+                Ok(())
+            }
+            ExprKind::Match { scrutinee, arms } => f
+                .debug_struct("Match")
+                .field("scrutinee", scrutinee)
+                .field("arms", arms)
+                .finish(),
         }
     }
 }

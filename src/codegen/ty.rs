@@ -20,9 +20,54 @@ impl<'ctx> Codegen<'ctx> {
             Ty::Array { element, count } => self.lower_ty(element).array_type(*count as u32).into(),
             Ty::Struct(name) => self.struct_llvm[name].into(),
             Ty::Tuple(elems) => self.tuple_llvm_type(elems).into(),
+            Ty::Enum(name) => self.enum_llvm[name].into(),
 
-            Ty::TypeVar(_) | Ty::GenericStruct { .. } => {
-                unreachable!("specialization should have eliminated TypeVars and GenericStructs")
+            Ty::TypeVar(_) | Ty::GenericStruct { .. } | Ty::GenericEnum { .. } => {
+                unreachable!(
+                    "specialization should have eliminated TypeVars, GenericStructs, and GenericEnums"
+                )
+            }
+        }
+    }
+
+    /// Returns an upper bound on the byte size of `ty`, used to pick the
+    /// payload-buffer size for tagged enums. No alignment padding is
+    /// considered; this is intentionally a conservative overestimate.
+    pub fn approx_size_bytes(&self, ty: &Ty) -> usize {
+        match ty {
+            Ty::Unit => 1,
+            Ty::I8 | Ty::U8 => 1,
+            Ty::Int | Ty::UInt | Ty::I32 | Ty::U32 | Ty::Float | Ty::F32 => 4,
+            Ty::I64 | Ty::U64 | Ty::F64 => 8,
+            Ty::Ptr(_) | Ty::Function { .. } => 8,
+            Ty::Array { element, count } => self.approx_size_bytes(element) * count,
+            Ty::Tuple(elems) => elems.iter().map(|e| self.approx_size_bytes(e)).sum(),
+            Ty::Struct(name) => {
+                let def = self
+                    .struct_defs
+                    .get(name)
+                    .expect("struct def registered before sizing");
+                def.fields
+                    .iter()
+                    .map(|(_, t)| self.approx_size_bytes(t))
+                    .sum::<usize>()
+                    .max(1)
+            }
+            Ty::Enum(name) => {
+                let def = self
+                    .enum_defs
+                    .get(name)
+                    .expect("enum def registered before sizing");
+                let payload = def
+                    .variants
+                    .iter()
+                    .map(|v| v.fields.iter().map(|t| self.approx_size_bytes(t)).sum())
+                    .max()
+                    .unwrap_or(0);
+                4 + payload
+            }
+            Ty::TypeVar(_) | Ty::GenericStruct { .. } | Ty::GenericEnum { .. } => {
+                unreachable!("approx_size_bytes called on unspecialized type")
             }
         }
     }
@@ -75,8 +120,11 @@ impl<'ctx> Codegen<'ctx> {
                 .fn_type(param_types, false),
             Ty::Struct(name) => self.struct_llvm[name].fn_type(param_types, false),
             Ty::Tuple(elems) => self.tuple_llvm_type(elems).fn_type(param_types, false),
-            Ty::TypeVar(_) | Ty::GenericStruct { .. } => {
-                unreachable!("specialization should have eliminated TypeVars and GenericStructs")
+            Ty::Enum(name) => self.enum_llvm[name].fn_type(param_types, false),
+            Ty::TypeVar(_) | Ty::GenericStruct { .. } | Ty::GenericEnum { .. } => {
+                unreachable!(
+                    "specialization should have eliminated TypeVars, GenericStructs, and GenericEnums"
+                )
             }
         }
     }

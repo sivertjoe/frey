@@ -427,10 +427,225 @@ impl<'ctx> Codegen<'ctx> {
                     )?)
                 }
             }
+            ExprKind::EnumConstruct {
+                enum_name,
+                variant_index,
+                args,
+            } => self.lower_enum_construct(&enum_name, variant_index, args),
+            ExprKind::Match { scrutinee, arms } => self.lower_match(*scrutinee, arms, expr.ty),
             ExprKind::TypeValue(_) | ExprKind::CompError(_) => {
                 unreachable!("comptime-only nodes are eliminated during specialization")
             }
         }
+    }
+
+    /// Builds a tagged-union value for `Variant(args...)`. Layout is
+    /// `{i32 tag, [N x i8] payload}`; the variant's fields are inserted via
+    /// a bitcast over the payload buffer.
+    fn lower_enum_construct(
+        &mut self,
+        enum_name: &str,
+        variant_index: usize,
+        args: Vec<Expr>,
+    ) -> Result<BasicValueEnum<'ctx>, Error> {
+        let enum_llvm_ty = self.enum_llvm[enum_name];
+        let slot = self.builder.build_alloca(enum_llvm_ty, "")?;
+
+        // Tag.
+        let tag_ptr = self
+            .builder
+            .build_struct_gep(enum_llvm_ty, slot, 0, "")?;
+        let tag_val = self
+            .context
+            .i32_type()
+            .const_int(variant_index as u64, false);
+        self.builder.build_store(tag_ptr, tag_val)?;
+
+        // Payload: GEP to the byte buffer, then store the variant's tuple
+        // struct value via a single store (LLVM ptrs are opaque, so the
+        // pointer type alone is enough — no bitcast needed).
+        if !args.is_empty() {
+            let payload_ptr = self
+                .builder
+                .build_struct_gep(enum_llvm_ty, slot, 1, "")?;
+            let elem_tys: Vec<Ty> = args.iter().map(|a| a.ty.clone()).collect();
+            let variant_struct = self.tuple_llvm_type(&elem_tys);
+            let mut agg: inkwell::values::AggregateValueEnum<'ctx> =
+                variant_struct.get_undef().into();
+            for (i, a) in args.into_iter().enumerate() {
+                let v = self.lower_expr(a)?;
+                agg = self.builder.build_insert_value(agg, v, i as u32, "")?;
+            }
+            self.builder
+                .build_store(payload_ptr, agg.into_struct_value())?;
+        }
+
+        Ok(self.builder.build_load(enum_llvm_ty, slot, "")?)
+    }
+
+    /// Lowers `match scrutinee { ... }` as a switch on the tag with per-arm
+    /// blocks. Payload bindings load via GEP+bitcast from the scrutinee's
+    /// stored slot; arm values join through a phi at the exit block.
+    fn lower_match(
+        &mut self,
+        scrutinee: Expr,
+        arms: Vec<crate::hir::types::MatchArm>,
+        result_ty: Ty,
+    ) -> Result<BasicValueEnum<'ctx>, Error> {
+        let enum_name = match &scrutinee.ty {
+            Ty::Enum(n) => n.clone(),
+            _ => unreachable!("typechecker guarantees match scrutinee is Enum"),
+        };
+        let enum_llvm_ty = self.enum_llvm[&enum_name];
+
+        // Spill the scrutinee so we can GEP into it.
+        let scrutinee_val = self.lower_expr(scrutinee)?;
+        let slot = self.builder.build_alloca(enum_llvm_ty, "")?;
+        self.builder.build_store(slot, scrutinee_val)?;
+
+        let tag_ptr = self
+            .builder
+            .build_struct_gep(enum_llvm_ty, slot, 0, "")?;
+        let tag_val = self
+            .builder
+            .build_load(self.context.i32_type(), tag_ptr, "")?
+            .into_int_value();
+        // GEP to the payload buffer ONCE, before any branching — arm blocks
+        // share the same pointer (they only differ in how they bitcast it).
+        let payload_ptr = self
+            .builder
+            .build_struct_gep(enum_llvm_ty, slot, 1, "")?;
+
+        let function = self
+            .builder
+            .get_insert_block()
+            .expect("inside a function")
+            .get_parent()
+            .expect("bb has parent");
+
+        let exit_bb = self.context.append_basic_block(function, "match.exit");
+
+        // Build each arm's BB, plus a wildcard/default BB.
+        let mut variant_targets: Vec<(u64, inkwell::basic_block::BasicBlock<'ctx>, usize)> =
+            Vec::new();
+        let mut wildcard_bb: Option<inkwell::basic_block::BasicBlock<'ctx>> = None;
+        let mut wildcard_arm_idx: Option<usize> = None;
+        for (i, arm) in arms.iter().enumerate() {
+            match &arm.pattern {
+                crate::hir::types::HirPattern::Variant { variant_index, .. } => {
+                    let bb = self
+                        .context
+                        .append_basic_block(function, &format!("match.arm{i}"));
+                    variant_targets.push((*variant_index as u64, bb, i));
+                }
+                crate::hir::types::HirPattern::Wildcard => {
+                    let bb = self.context.append_basic_block(function, "match.wild");
+                    wildcard_bb = Some(bb);
+                    wildcard_arm_idx = Some(i);
+                }
+            }
+        }
+
+        // If no wildcard, use an unreachable block for unmatched tags. Frontend
+        // exhaustiveness check guarantees this is dead, but LLVM needs a target.
+        let default_bb = wildcard_bb.unwrap_or_else(|| {
+            self.context
+                .append_basic_block(function, "match.unreachable")
+        });
+
+        // Build the switch.
+        let cases: Vec<(IntValue<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> = variant_targets
+            .iter()
+            .map(|(tag, bb, _)| {
+                (
+                    self.context.i32_type().const_int(*tag, false),
+                    *bb,
+                )
+            })
+            .collect();
+        self.builder.build_switch(tag_val, default_bb, &cases)?;
+
+        // If no wildcard, the default block is unreachable.
+        if wildcard_bb.is_none() {
+            self.builder.position_at_end(default_bb);
+            self.builder.build_unreachable()?;
+        }
+
+        // Lower each arm body, collecting (value, originating-block) pairs
+        // for the exit phi.
+        let mut incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
+            Vec::with_capacity(arms.len());
+
+        for (tag, bb, arm_idx) in &variant_targets {
+            self.builder.position_at_end(*bb);
+            let arm = &arms[*arm_idx];
+            let crate::hir::types::HirPattern::Variant { bindings, .. } = &arm.pattern else {
+                unreachable!();
+            };
+            // Bind each payload field via a tuple-struct view of the payload.
+            if !bindings.is_empty() {
+                let elem_tys: Vec<Ty> =
+                    bindings.iter().map(|(_, _, t)| t.clone()).collect();
+                let variant_struct = self.tuple_llvm_type(&elem_tys);
+                for (i, (_, local_id, field_ty)) in bindings.iter().enumerate() {
+                    let field_ptr = self.builder.build_struct_gep(
+                        variant_struct,
+                        payload_ptr,
+                        i as u32,
+                        "",
+                    )?;
+                    let field_llvm_ty = self.lower_ty(field_ty);
+                    let value_slot = self.builder.build_alloca(field_llvm_ty, "")?;
+                    let v = self.builder.build_load(field_llvm_ty, field_ptr, "")?;
+                    self.builder.build_store(value_slot, v)?;
+                    self.locals.insert(*local_id, value_slot);
+                }
+            }
+            // Avoid an "unused" warning while keeping the tag value around
+            // for debugging when reading IR.
+            let _ = tag;
+
+            let value = self.lower_expr(arm.body.clone())?;
+            let end_bb = self
+                .builder
+                .get_insert_block()
+                .expect("arm body produced a basic block");
+            incoming.push((value, end_bb));
+            self.builder.build_unconditional_branch(exit_bb)?;
+        }
+
+        if let Some(arm_idx) = wildcard_arm_idx {
+            self.builder.position_at_end(default_bb);
+            let arm = &arms[arm_idx];
+            let value = self.lower_expr(arm.body.clone())?;
+            let end_bb = self
+                .builder
+                .get_insert_block()
+                .expect("arm body produced a basic block");
+            incoming.push((value, end_bb));
+            self.builder.build_unconditional_branch(exit_bb)?;
+        }
+
+        self.builder.position_at_end(exit_bb);
+        let result_llvm_ty = self.lower_ty(&result_ty);
+        let phi = self.builder.build_phi(result_llvm_ty, "match.value")?;
+        let phi_incoming: Vec<(&dyn inkwell::values::BasicValue<'ctx>, _)> = incoming
+            .iter()
+            .map(|(v, bb)| {
+                let bv: &dyn inkwell::values::BasicValue<'ctx> = match v {
+                    BasicValueEnum::IntValue(i) => i,
+                    BasicValueEnum::FloatValue(f) => f,
+                    BasicValueEnum::PointerValue(p) => p,
+                    BasicValueEnum::ArrayValue(a) => a,
+                    BasicValueEnum::StructValue(s) => s,
+                    BasicValueEnum::VectorValue(v) => v,
+                    BasicValueEnum::ScalableVectorValue(v) => v,
+                };
+                (bv, *bb)
+            })
+            .collect();
+        phi.add_incoming(&phi_incoming);
+        Ok(phi.as_basic_value())
     }
 
     /// Emits a heap intrinsic as a call to libc `malloc`/`realloc`/`free`.

@@ -121,6 +121,8 @@ impl<'a> Cursor<'a> {
             "return" => TokenKind::Return,
             "as" => TokenKind::As,
             "struct" => TokenKind::Struct,
+            "enum" => TokenKind::Enum,
+            "match" => TokenKind::Match,
             "while" => TokenKind::While,
             "break" => TokenKind::Break,
             "defer" => TokenKind::Defer,

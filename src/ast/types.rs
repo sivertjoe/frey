@@ -56,6 +56,10 @@ pub struct Declaration {
     pub mutable: bool,
     pub comptime: bool,
     pub name: String,
+    /// Optional `: T` annotation in `let x: T = expr;`. When present the
+    /// value must produce a value compatible with `T`; integer literals are
+    /// also coerced to `T` if it's a numeric type.
+    pub ty: Option<TypeExpr>,
     pub value: Expr,
 }
 
@@ -187,6 +191,18 @@ pub enum ExprKind {
         type_params: Vec<String>,
         fields: Vec<StructTypeField>,
     },
+    /// `enum<$T> { Variant, Variant(T1, T2), ... }` — declares a tagged
+    /// union. Each variant has a positional field list (zero-or-more types);
+    /// nullary variants have an empty list.
+    EnumDef {
+        type_params: Vec<String>,
+        variants: Vec<EnumVariantDef>,
+    },
+    /// `match scrutinee { Pat -> arm_expr, ... }`.
+    Match {
+        scrutinee: Box<Expr>,
+        arms: Vec<MatchArm>,
+    },
     StructLiteral {
         name: String,
         type_args: Vec<TypeExpr>,
@@ -211,6 +227,51 @@ pub struct StructTypeField {
     pub span: Span,
     pub name: String,
     pub ty: TypeExpr,
+}
+
+#[derive(Debug)]
+pub struct EnumVariantDef {
+    pub id: NodeId,
+    pub span: Span,
+    pub name: String,
+    /// Positional payload types; empty for nullary variants like `None`.
+    pub fields: Vec<TypeExpr>,
+}
+
+#[derive(Debug)]
+pub struct MatchArm {
+    pub id: NodeId,
+    pub span: Span,
+    pub pattern: Pattern,
+    pub body: Expr,
+}
+
+pub struct Pattern {
+    pub id: NodeId,
+    pub span: Span,
+    pub kind: PatternKind,
+}
+
+#[derive(Debug)]
+pub enum PatternKind {
+    /// `_` — matches anything, binds nothing.
+    Wildcard,
+    /// `Some(x, y)` or `None` — matches a specific enum variant. Bare
+    /// identifiers like `None` parse as a variant pattern with no fields.
+    Variant {
+        name: String,
+        bindings: Vec<String>,
+    },
+    /// `x` — fresh binding that matches anything. Distinguished from `Variant`
+    /// at name-resolution time (the lowerer decides based on whether the name
+    /// is a known variant).
+    Binding(String),
+}
+
+impl fmt::Debug for Pattern {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.kind.fmt(f)
+    }
 }
 
 #[derive(Debug)]
@@ -295,6 +356,7 @@ impl fmt::Debug for Declaration {
             .field("mutable", &self.mutable)
             .field("comptime", &self.comptime)
             .field("name", &self.name)
+            .field("ty", &self.ty)
             .field("value", &self.value)
             .finish()
     }
