@@ -7,11 +7,15 @@
 ; The `#comptime` directive
 (comptime_attribute) @keyword
 
-; Declaration names: struct types, functions, then plain variables.
+; Declaration names: struct/enum types, functions, then plain variables.
 ; (Earlier patterns win, so the specific ones come first.)
 (declaration
   name: (identifier) @type
   value: (struct_definition))
+
+(declaration
+  name: (identifier) @type
+  value: (enum_definition))
 
 (declaration
   name: (identifier) @function
@@ -45,6 +49,15 @@
   name: (identifier) @property)
 (field_expression
   field: (identifier) @property)
+(tuple_field_expression
+  index: (integer_literal) @property)
+
+; Enum variants (declaration site, constructor call, and patterns).
+(enum_variant
+  name: (identifier) @enumMember)
+(variant_pattern
+  name: (identifier) @enumMember)
+(wildcard_pattern) @keyword
 
 ; Types
 (primitive_type) @type.builtin
@@ -58,6 +71,8 @@
   "let"
   "mut"
   "struct"
+  "enum"
+  "match"
   "as"
   "import"
   "if"

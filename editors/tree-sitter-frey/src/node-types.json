@@ -36,6 +36,10 @@
           "named": true
         },
         {
+          "type": "enum_definition",
+          "named": true
+        },
+        {
           "type": "field_expression",
           "named": true
         },
@@ -57,6 +61,10 @@
         },
         {
           "type": "integer_literal",
+          "named": true
+        },
+        {
+          "type": "match_expression",
           "named": true
         },
         {
@@ -85,6 +93,14 @@
         },
         {
           "type": "subscript_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_field_expression",
           "named": true
         },
         {
@@ -139,6 +155,10 @@
           "named": true
         },
         {
+          "type": "enum_definition",
+          "named": true
+        },
+        {
           "type": "field_expression",
           "named": true
         },
@@ -160,6 +180,10 @@
         },
         {
           "type": "integer_literal",
+          "named": true
+        },
+        {
+          "type": "match_expression",
           "named": true
         },
         {
@@ -188,6 +212,14 @@
         },
         {
           "type": "subscript_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_field_expression",
           "named": true
         },
         {
@@ -242,6 +274,10 @@
           "named": true
         },
         {
+          "type": "tuple_type",
+          "named": true
+        },
+        {
           "type": "type_identifier",
           "named": true
         }
@@ -285,6 +321,10 @@
             "named": true
           },
           {
+            "type": "enum_definition",
+            "named": true
+          },
+          {
             "type": "field_expression",
             "named": true
           },
@@ -306,6 +346,10 @@
           },
           {
             "type": "integer_literal",
+            "named": true
+          },
+          {
+            "type": "match_expression",
             "named": true
           },
           {
@@ -334,6 +378,14 @@
           },
           {
             "type": "subscript_expression",
+            "named": true
+          },
+          {
+            "type": "tuple_expression",
+            "named": true
+          },
+          {
+            "type": "tuple_field_expression",
             "named": true
           },
           {
@@ -383,6 +435,10 @@
             "named": true
           },
           {
+            "type": "enum_definition",
+            "named": true
+          },
+          {
             "type": "field_expression",
             "named": true
           },
@@ -404,6 +460,10 @@
           },
           {
             "type": "integer_literal",
+            "named": true
+          },
+          {
+            "type": "match_expression",
             "named": true
           },
           {
@@ -432,6 +492,14 @@
           },
           {
             "type": "subscript_expression",
+            "named": true
+          },
+          {
+            "type": "tuple_expression",
+            "named": true
+          },
+          {
+            "type": "tuple_field_expression",
             "named": true
           },
           {
@@ -487,6 +555,10 @@
             "named": true
           },
           {
+            "type": "enum_definition",
+            "named": true
+          },
+          {
             "type": "field_expression",
             "named": true
           },
@@ -508,6 +580,10 @@
           },
           {
             "type": "integer_literal",
+            "named": true
+          },
+          {
+            "type": "match_expression",
             "named": true
           },
           {
@@ -536,6 +612,14 @@
           },
           {
             "type": "subscript_expression",
+            "named": true
+          },
+          {
+            "type": "tuple_expression",
+            "named": true
+          },
+          {
+            "type": "tuple_field_expression",
             "named": true
           },
           {
@@ -663,6 +747,10 @@
             "named": true
           },
           {
+            "type": "enum_definition",
+            "named": true
+          },
+          {
             "type": "field_expression",
             "named": true
           },
@@ -684,6 +772,10 @@
           },
           {
             "type": "integer_literal",
+            "named": true
+          },
+          {
+            "type": "match_expression",
             "named": true
           },
           {
@@ -715,6 +807,14 @@
             "named": true
           },
           {
+            "type": "tuple_expression",
+            "named": true
+          },
+          {
+            "type": "tuple_field_expression",
+            "named": true
+          },
+          {
             "type": "type_value",
             "named": true
           },
@@ -728,6 +828,21 @@
           }
         ]
       }
+    }
+  },
+  {
+    "type": "binding_pattern",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "identifier",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -779,6 +894,10 @@
           "named": true
         },
         {
+          "type": "enum_definition",
+          "named": true
+        },
+        {
           "type": "expression_statement",
           "named": true
         },
@@ -804,6 +923,10 @@
         },
         {
           "type": "integer_literal",
+          "named": true
+        },
+        {
+          "type": "match_expression",
           "named": true
         },
         {
@@ -836,6 +959,14 @@
         },
         {
           "type": "subscript_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_field_expression",
           "named": true
         },
         {
@@ -895,6 +1026,10 @@
             "named": true
           },
           {
+            "type": "enum_definition",
+            "named": true
+          },
+          {
             "type": "field_expression",
             "named": true
           },
@@ -916,6 +1051,10 @@
           },
           {
             "type": "integer_literal",
+            "named": true
+          },
+          {
+            "type": "match_expression",
             "named": true
           },
           {
@@ -944,6 +1083,14 @@
           },
           {
             "type": "subscript_expression",
+            "named": true
+          },
+          {
+            "type": "tuple_expression",
+            "named": true
+          },
+          {
+            "type": "tuple_field_expression",
             "named": true
           },
           {
@@ -1009,6 +1156,10 @@
             "named": true
           },
           {
+            "type": "tuple_type",
+            "named": true
+          },
+          {
             "type": "type_identifier",
             "named": true
           }
@@ -1048,6 +1199,10 @@
           "named": true
         },
         {
+          "type": "enum_definition",
+          "named": true
+        },
+        {
           "type": "field_expression",
           "named": true
         },
@@ -1069,6 +1224,10 @@
         },
         {
           "type": "integer_literal",
+          "named": true
+        },
+        {
+          "type": "match_expression",
           "named": true
         },
         {
@@ -1097,6 +1256,14 @@
         },
         {
           "type": "subscript_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_field_expression",
           "named": true
         },
         {
@@ -1129,6 +1296,44 @@
         "types": [
           {
             "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "array_type",
+            "named": true
+          },
+          {
+            "type": "function_type",
+            "named": true
+          },
+          {
+            "type": "generic_application",
+            "named": true
+          },
+          {
+            "type": "generic_type",
+            "named": true
+          },
+          {
+            "type": "pointer_type",
+            "named": true
+          },
+          {
+            "type": "primitive_type",
+            "named": true
+          },
+          {
+            "type": "tuple_type",
+            "named": true
+          },
+          {
+            "type": "type_identifier",
             "named": true
           }
         ]
@@ -1166,6 +1371,10 @@
             "named": true
           },
           {
+            "type": "enum_definition",
+            "named": true
+          },
+          {
             "type": "field_expression",
             "named": true
           },
@@ -1187,6 +1396,10 @@
           },
           {
             "type": "integer_literal",
+            "named": true
+          },
+          {
+            "type": "match_expression",
             "named": true
           },
           {
@@ -1215,6 +1428,14 @@
           },
           {
             "type": "subscript_expression",
+            "named": true
+          },
+          {
+            "type": "tuple_expression",
+            "named": true
+          },
+          {
+            "type": "tuple_field_expression",
             "named": true
           },
           {
@@ -1280,6 +1501,10 @@
           "named": true
         },
         {
+          "type": "enum_definition",
+          "named": true
+        },
+        {
           "type": "field_expression",
           "named": true
         },
@@ -1301,6 +1526,10 @@
         },
         {
           "type": "integer_literal",
+          "named": true
+        },
+        {
+          "type": "match_expression",
           "named": true
         },
         {
@@ -1329,6 +1558,14 @@
         },
         {
           "type": "subscript_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_field_expression",
           "named": true
         },
         {
@@ -1383,6 +1620,10 @@
           "named": true
         },
         {
+          "type": "enum_definition",
+          "named": true
+        },
+        {
           "type": "field_expression",
           "named": true
         },
@@ -1404,6 +1645,10 @@
         },
         {
           "type": "integer_literal",
+          "named": true
+        },
+        {
+          "type": "match_expression",
           "named": true
         },
         {
@@ -1435,6 +1680,14 @@
           "named": true
         },
         {
+          "type": "tuple_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_field_expression",
+          "named": true
+        },
+        {
           "type": "type_value",
           "named": true
         },
@@ -1444,6 +1697,79 @@
         },
         {
           "type": "while_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "enum_definition",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "enum_variant",
+          "named": true
+        },
+        {
+          "type": "type_parameters",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "enum_variant",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "array_type",
+          "named": true
+        },
+        {
+          "type": "function_type",
+          "named": true
+        },
+        {
+          "type": "generic_application",
+          "named": true
+        },
+        {
+          "type": "generic_type",
+          "named": true
+        },
+        {
+          "type": "pointer_type",
+          "named": true
+        },
+        {
+          "type": "primitive_type",
+          "named": true
+        },
+        {
+          "type": "tuple_type",
+          "named": true
+        },
+        {
+          "type": "type_identifier",
           "named": true
         }
       ]
@@ -1486,6 +1812,10 @@
           "named": true
         },
         {
+          "type": "enum_definition",
+          "named": true
+        },
+        {
           "type": "field_expression",
           "named": true
         },
@@ -1507,6 +1837,10 @@
         },
         {
           "type": "integer_literal",
+          "named": true
+        },
+        {
+          "type": "match_expression",
           "named": true
         },
         {
@@ -1535,6 +1869,14 @@
         },
         {
           "type": "subscript_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_field_expression",
           "named": true
         },
         {
@@ -1600,6 +1942,10 @@
           "named": true
         },
         {
+          "type": "enum_definition",
+          "named": true
+        },
+        {
           "type": "field_expression",
           "named": true
         },
@@ -1621,6 +1967,10 @@
         },
         {
           "type": "integer_literal",
+          "named": true
+        },
+        {
+          "type": "match_expression",
           "named": true
         },
         {
@@ -1649,6 +1999,14 @@
         },
         {
           "type": "subscript_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_field_expression",
           "named": true
         },
         {
@@ -1713,6 +2071,10 @@
             "named": true
           },
           {
+            "type": "enum_definition",
+            "named": true
+          },
+          {
             "type": "field_expression",
             "named": true
           },
@@ -1734,6 +2096,10 @@
           },
           {
             "type": "integer_literal",
+            "named": true
+          },
+          {
+            "type": "match_expression",
             "named": true
           },
           {
@@ -1762,6 +2128,14 @@
           },
           {
             "type": "subscript_expression",
+            "named": true
+          },
+          {
+            "type": "tuple_expression",
+            "named": true
+          },
+          {
+            "type": "tuple_field_expression",
             "named": true
           },
           {
@@ -1823,6 +2197,10 @@
             "named": true
           },
           {
+            "type": "tuple_type",
+            "named": true
+          },
+          {
             "type": "type_identifier",
             "named": true
           }
@@ -1874,6 +2252,10 @@
         },
         {
           "type": "primitive_type",
+          "named": true
+        },
+        {
+          "type": "tuple_type",
           "named": true
         },
         {
@@ -1961,6 +2343,10 @@
             "named": true
           },
           {
+            "type": "enum_definition",
+            "named": true
+          },
+          {
             "type": "field_expression",
             "named": true
           },
@@ -1982,6 +2368,10 @@
           },
           {
             "type": "integer_literal",
+            "named": true
+          },
+          {
+            "type": "match_expression",
             "named": true
           },
           {
@@ -2010,6 +2400,14 @@
           },
           {
             "type": "subscript_expression",
+            "named": true
+          },
+          {
+            "type": "tuple_expression",
+            "named": true
+          },
+          {
+            "type": "tuple_field_expression",
             "named": true
           },
           {
@@ -2059,6 +2457,10 @@
             "named": true
           },
           {
+            "type": "enum_definition",
+            "named": true
+          },
+          {
             "type": "field_expression",
             "named": true
           },
@@ -2080,6 +2482,10 @@
           },
           {
             "type": "integer_literal",
+            "named": true
+          },
+          {
+            "type": "match_expression",
             "named": true
           },
           {
@@ -2108,6 +2514,14 @@
           },
           {
             "type": "subscript_expression",
+            "named": true
+          },
+          {
+            "type": "tuple_expression",
+            "named": true
+          },
+          {
+            "type": "tuple_field_expression",
             "named": true
           },
           {
@@ -2153,6 +2567,274 @@
     }
   },
   {
+    "type": "match_arm",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "array_expression",
+            "named": true
+          },
+          {
+            "type": "assignment_expression",
+            "named": true
+          },
+          {
+            "type": "binary_expression",
+            "named": true
+          },
+          {
+            "type": "block",
+            "named": true
+          },
+          {
+            "type": "call_expression",
+            "named": true
+          },
+          {
+            "type": "cast_expression",
+            "named": true
+          },
+          {
+            "type": "dereference_expression",
+            "named": true
+          },
+          {
+            "type": "enum_definition",
+            "named": true
+          },
+          {
+            "type": "field_expression",
+            "named": true
+          },
+          {
+            "type": "float_literal",
+            "named": true
+          },
+          {
+            "type": "function_literal",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "if_expression",
+            "named": true
+          },
+          {
+            "type": "integer_literal",
+            "named": true
+          },
+          {
+            "type": "match_expression",
+            "named": true
+          },
+          {
+            "type": "parenthesized_expression",
+            "named": true
+          },
+          {
+            "type": "pipe_expression",
+            "named": true
+          },
+          {
+            "type": "reference_expression",
+            "named": true
+          },
+          {
+            "type": "string_literal",
+            "named": true
+          },
+          {
+            "type": "struct_definition",
+            "named": true
+          },
+          {
+            "type": "struct_literal",
+            "named": true
+          },
+          {
+            "type": "subscript_expression",
+            "named": true
+          },
+          {
+            "type": "tuple_expression",
+            "named": true
+          },
+          {
+            "type": "tuple_field_expression",
+            "named": true
+          },
+          {
+            "type": "type_value",
+            "named": true
+          },
+          {
+            "type": "unary_expression",
+            "named": true
+          },
+          {
+            "type": "while_expression",
+            "named": true
+          }
+        ]
+      },
+      "pattern": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "binding_pattern",
+            "named": true
+          },
+          {
+            "type": "variant_pattern",
+            "named": true
+          },
+          {
+            "type": "wildcard_pattern",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "match_expression",
+    "named": true,
+    "fields": {
+      "scrutinee": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "array_expression",
+            "named": true
+          },
+          {
+            "type": "assignment_expression",
+            "named": true
+          },
+          {
+            "type": "binary_expression",
+            "named": true
+          },
+          {
+            "type": "block",
+            "named": true
+          },
+          {
+            "type": "call_expression",
+            "named": true
+          },
+          {
+            "type": "cast_expression",
+            "named": true
+          },
+          {
+            "type": "dereference_expression",
+            "named": true
+          },
+          {
+            "type": "enum_definition",
+            "named": true
+          },
+          {
+            "type": "field_expression",
+            "named": true
+          },
+          {
+            "type": "float_literal",
+            "named": true
+          },
+          {
+            "type": "function_literal",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "if_expression",
+            "named": true
+          },
+          {
+            "type": "integer_literal",
+            "named": true
+          },
+          {
+            "type": "match_expression",
+            "named": true
+          },
+          {
+            "type": "parenthesized_expression",
+            "named": true
+          },
+          {
+            "type": "pipe_expression",
+            "named": true
+          },
+          {
+            "type": "reference_expression",
+            "named": true
+          },
+          {
+            "type": "string_literal",
+            "named": true
+          },
+          {
+            "type": "struct_definition",
+            "named": true
+          },
+          {
+            "type": "struct_literal",
+            "named": true
+          },
+          {
+            "type": "subscript_expression",
+            "named": true
+          },
+          {
+            "type": "tuple_expression",
+            "named": true
+          },
+          {
+            "type": "tuple_field_expression",
+            "named": true
+          },
+          {
+            "type": "type_value",
+            "named": true
+          },
+          {
+            "type": "unary_expression",
+            "named": true
+          },
+          {
+            "type": "while_expression",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "match_arm",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "parameter",
     "named": true,
     "fields": {
@@ -2192,6 +2874,10 @@
           },
           {
             "type": "primitive_type",
+            "named": true
+          },
+          {
+            "type": "tuple_type",
             "named": true
           },
           {
@@ -2254,6 +2940,10 @@
           "named": true
         },
         {
+          "type": "enum_definition",
+          "named": true
+        },
+        {
           "type": "field_expression",
           "named": true
         },
@@ -2275,6 +2965,10 @@
         },
         {
           "type": "integer_literal",
+          "named": true
+        },
+        {
+          "type": "match_expression",
           "named": true
         },
         {
@@ -2303,6 +2997,14 @@
         },
         {
           "type": "subscript_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_field_expression",
           "named": true
         },
         {
@@ -2357,6 +3059,10 @@
           "named": true
         },
         {
+          "type": "enum_definition",
+          "named": true
+        },
+        {
           "type": "field_expression",
           "named": true
         },
@@ -2378,6 +3084,10 @@
         },
         {
           "type": "integer_literal",
+          "named": true
+        },
+        {
+          "type": "match_expression",
           "named": true
         },
         {
@@ -2406,6 +3116,14 @@
         },
         {
           "type": "subscript_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_field_expression",
           "named": true
         },
         {
@@ -2453,6 +3171,10 @@
         },
         {
           "type": "primitive_type",
+          "named": true
+        },
+        {
+          "type": "tuple_type",
           "named": true
         },
         {
@@ -2504,6 +3226,10 @@
           "named": true
         },
         {
+          "type": "enum_definition",
+          "named": true
+        },
+        {
           "type": "field_expression",
           "named": true
         },
@@ -2525,6 +3251,10 @@
         },
         {
           "type": "integer_literal",
+          "named": true
+        },
+        {
+          "type": "match_expression",
           "named": true
         },
         {
@@ -2553,6 +3283,14 @@
         },
         {
           "type": "subscript_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_field_expression",
           "named": true
         },
         {
@@ -2607,6 +3345,10 @@
           "named": true
         },
         {
+          "type": "enum_definition",
+          "named": true
+        },
+        {
           "type": "field_expression",
           "named": true
         },
@@ -2628,6 +3370,10 @@
         },
         {
           "type": "integer_literal",
+          "named": true
+        },
+        {
+          "type": "match_expression",
           "named": true
         },
         {
@@ -2656,6 +3402,14 @@
         },
         {
           "type": "subscript_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_field_expression",
           "named": true
         },
         {
@@ -2770,6 +3524,10 @@
             "named": true
           },
           {
+            "type": "tuple_type",
+            "named": true
+          },
+          {
             "type": "type_identifier",
             "named": true
           }
@@ -2844,6 +3602,10 @@
           "named": true
         },
         {
+          "type": "enum_definition",
+          "named": true
+        },
+        {
           "type": "field_expression",
           "named": true
         },
@@ -2865,6 +3627,10 @@
         },
         {
           "type": "integer_literal",
+          "named": true
+        },
+        {
+          "type": "match_expression",
           "named": true
         },
         {
@@ -2896,6 +3662,14 @@
           "named": true
         },
         {
+          "type": "tuple_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_field_expression",
+          "named": true
+        },
+        {
           "type": "type_value",
           "named": true
         },
@@ -2905,6 +3679,298 @@
         },
         {
           "type": "while_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "tuple_expression",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "array_expression",
+          "named": true
+        },
+        {
+          "type": "assignment_expression",
+          "named": true
+        },
+        {
+          "type": "binary_expression",
+          "named": true
+        },
+        {
+          "type": "block",
+          "named": true
+        },
+        {
+          "type": "call_expression",
+          "named": true
+        },
+        {
+          "type": "cast_expression",
+          "named": true
+        },
+        {
+          "type": "dereference_expression",
+          "named": true
+        },
+        {
+          "type": "enum_definition",
+          "named": true
+        },
+        {
+          "type": "field_expression",
+          "named": true
+        },
+        {
+          "type": "float_literal",
+          "named": true
+        },
+        {
+          "type": "function_literal",
+          "named": true
+        },
+        {
+          "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "if_expression",
+          "named": true
+        },
+        {
+          "type": "integer_literal",
+          "named": true
+        },
+        {
+          "type": "match_expression",
+          "named": true
+        },
+        {
+          "type": "parenthesized_expression",
+          "named": true
+        },
+        {
+          "type": "pipe_expression",
+          "named": true
+        },
+        {
+          "type": "reference_expression",
+          "named": true
+        },
+        {
+          "type": "string_literal",
+          "named": true
+        },
+        {
+          "type": "struct_definition",
+          "named": true
+        },
+        {
+          "type": "struct_literal",
+          "named": true
+        },
+        {
+          "type": "subscript_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_field_expression",
+          "named": true
+        },
+        {
+          "type": "type_value",
+          "named": true
+        },
+        {
+          "type": "unary_expression",
+          "named": true
+        },
+        {
+          "type": "while_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "tuple_field_expression",
+    "named": true,
+    "fields": {
+      "index": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "integer_literal",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "array_expression",
+          "named": true
+        },
+        {
+          "type": "assignment_expression",
+          "named": true
+        },
+        {
+          "type": "binary_expression",
+          "named": true
+        },
+        {
+          "type": "block",
+          "named": true
+        },
+        {
+          "type": "call_expression",
+          "named": true
+        },
+        {
+          "type": "cast_expression",
+          "named": true
+        },
+        {
+          "type": "dereference_expression",
+          "named": true
+        },
+        {
+          "type": "enum_definition",
+          "named": true
+        },
+        {
+          "type": "field_expression",
+          "named": true
+        },
+        {
+          "type": "float_literal",
+          "named": true
+        },
+        {
+          "type": "function_literal",
+          "named": true
+        },
+        {
+          "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "if_expression",
+          "named": true
+        },
+        {
+          "type": "integer_literal",
+          "named": true
+        },
+        {
+          "type": "match_expression",
+          "named": true
+        },
+        {
+          "type": "parenthesized_expression",
+          "named": true
+        },
+        {
+          "type": "pipe_expression",
+          "named": true
+        },
+        {
+          "type": "reference_expression",
+          "named": true
+        },
+        {
+          "type": "string_literal",
+          "named": true
+        },
+        {
+          "type": "struct_definition",
+          "named": true
+        },
+        {
+          "type": "struct_literal",
+          "named": true
+        },
+        {
+          "type": "subscript_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_field_expression",
+          "named": true
+        },
+        {
+          "type": "type_value",
+          "named": true
+        },
+        {
+          "type": "unary_expression",
+          "named": true
+        },
+        {
+          "type": "while_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "tuple_type",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "array_type",
+          "named": true
+        },
+        {
+          "type": "function_type",
+          "named": true
+        },
+        {
+          "type": "generic_application",
+          "named": true
+        },
+        {
+          "type": "generic_type",
+          "named": true
+        },
+        {
+          "type": "pointer_type",
+          "named": true
+        },
+        {
+          "type": "primitive_type",
+          "named": true
+        },
+        {
+          "type": "tuple_type",
+          "named": true
+        },
+        {
+          "type": "type_identifier",
           "named": true
         }
       ]
@@ -3030,6 +4096,10 @@
           "named": true
         },
         {
+          "type": "enum_definition",
+          "named": true
+        },
+        {
           "type": "field_expression",
           "named": true
         },
@@ -3051,6 +4121,10 @@
         },
         {
           "type": "integer_literal",
+          "named": true
+        },
+        {
+          "type": "match_expression",
           "named": true
         },
         {
@@ -3082,6 +4156,14 @@
           "named": true
         },
         {
+          "type": "tuple_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_field_expression",
+          "named": true
+        },
+        {
           "type": "type_value",
           "named": true
         },
@@ -3091,6 +4173,32 @@
         },
         {
           "type": "while_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "variant_pattern",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "identifier",
           "named": true
         }
       ]
@@ -3143,6 +4251,10 @@
             "named": true
           },
           {
+            "type": "enum_definition",
+            "named": true
+          },
+          {
             "type": "field_expression",
             "named": true
           },
@@ -3164,6 +4276,10 @@
           },
           {
             "type": "integer_literal",
+            "named": true
+          },
+          {
+            "type": "match_expression",
             "named": true
           },
           {
@@ -3192,6 +4308,14 @@
           },
           {
             "type": "subscript_expression",
+            "named": true
+          },
+          {
+            "type": "tuple_expression",
+            "named": true
+          },
+          {
+            "type": "tuple_field_expression",
             "named": true
           },
           {
@@ -3368,6 +4492,10 @@
     "named": false
   },
   {
+    "type": "enum",
+    "named": false
+  },
+  {
     "type": "escape_sequence",
     "named": true
   },
@@ -3421,6 +4549,10 @@
     "extra": true
   },
   {
+    "type": "match",
+    "named": false
+  },
+  {
     "type": "mut",
     "named": false
   },
@@ -3447,6 +4579,10 @@
   {
     "type": "while",
     "named": false
+  },
+  {
+    "type": "wildcard_pattern",
+    "named": true
   },
   {
     "type": "{",

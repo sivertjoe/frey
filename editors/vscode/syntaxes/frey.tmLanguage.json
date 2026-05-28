@@ -46,6 +46,15 @@
           }
         },
         {
+          "comment": "Enum type definition: `let Name = enum`",
+          "match": "\\b(let)\\b\\s+([A-Za-z_]\\w*)\\s*(=)\\s*(?=enum\\b)",
+          "captures": {
+            "1": { "name": "keyword.other.let.frey" },
+            "2": { "name": "entity.name.type.frey" },
+            "3": { "name": "keyword.operator.assignment.frey" }
+          }
+        },
+        {
           "comment": "Function definition: `let [mut] name = (` or `let name = <..>(`",
           "match": "\\b(let)\\b\\s+(?:(mut)\\s+)?([A-Za-z_]\\w*)\\s*(=)\\s*(?=(?:<[^>;{}]*>\\s*)?\\()",
           "captures": {
@@ -56,7 +65,7 @@
           }
         },
         {
-          "comment": "Variable binding: `let [mut] name`",
+          "comment": "Variable binding with optional type annotation: `let [mut] name[: T]`",
           "match": "\\b(let)\\b\\s+(?:(mut)\\s+)?([A-Za-z_]\\w*)",
           "captures": {
             "1": { "name": "keyword.other.let.frey" },
@@ -70,9 +79,9 @@
       "patterns": [
         {
           "name": "keyword.control.frey",
-          "match": "\\b(if|else|while|return|break|defer)\\b"
+          "match": "\\b(if|else|while|return|break|defer|match)\\b"
         },
-        { "name": "keyword.other.frey", "match": "\\b(let|mut|struct|as|import)\\b" }
+        { "name": "keyword.other.frey", "match": "\\b(let|mut|struct|enum|as|import)\\b" }
       ]
     },
     "types": {

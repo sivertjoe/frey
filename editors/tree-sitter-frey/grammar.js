@@ -66,6 +66,7 @@ module.exports = grammar({
         "let",
         optional("mut"),
         field("name", $.identifier),
+        optional(seq(":", field("type", $._type))),
         "=",
         field("value", $._expression),
         ";",
@@ -83,6 +84,16 @@ module.exports = grammar({
         $.pointer_type,
         $.array_type,
         $.function_type,
+        $.tuple_type,
+      ),
+
+    tuple_type: ($) =>
+      seq(
+        "(",
+        $._type,
+        repeat1(seq(",", $._type)),
+        optional(","),
+        ")",
       ),
 
     primitive_type: (_) =>
@@ -107,9 +118,9 @@ module.exports = grammar({
     generic_application: ($) =>
       seq(field("name", $.identifier), $.type_arguments),
 
-    // Type arguments are kept flat (no nested `<...>`), which matches the
-    // language (the parser doesn't handle `>>`) and breaks the recursive
-    // `<` ambiguity between comparisons and generics.
+    // Flat (no nested `<...>`), matching the parser and avoiding ambiguity
+    // with comparisons. Tuple/function types inside `<...>` aren't recognised
+    // for highlighting — the real parser accepts them.
     type_arguments: ($) =>
       seq(
         "<",
@@ -141,12 +152,15 @@ module.exports = grammar({
         $.type_value,
         $.function_literal,
         $.struct_definition,
+        $.enum_definition,
         $.struct_literal,
         $.array_expression,
+        $.tuple_expression,
         $.parenthesized_expression,
         $.block,
         $.if_expression,
         $.while_expression,
+        $.match_expression,
         $.unary_expression,
         $.reference_expression,
         $.dereference_expression,
@@ -157,6 +171,7 @@ module.exports = grammar({
         $.call_expression,
         $.subscript_expression,
         $.field_expression,
+        $.tuple_field_expression,
       ),
 
     // A bare type used in expression position (only meaningful in #comptime).
@@ -187,6 +202,20 @@ module.exports = grammar({
     struct_field: ($) =>
       seq(field("name", $.identifier), ":", field("type", $._type)),
 
+    enum_definition: ($) =>
+      seq(
+        "enum",
+        optional($.type_parameters),
+        "{",
+        sepBy(",", $.enum_variant),
+        "}",
+      ),
+    enum_variant: ($) =>
+      seq(
+        field("name", $.identifier),
+        optional(seq("(", sepBy1(",", $._type), ")")),
+      ),
+
     struct_literal: ($) =>
       seq(
         field("name", $.identifier),
@@ -199,6 +228,15 @@ module.exports = grammar({
       seq(field("name", $.identifier), ":", field("value", $._expression)),
 
     array_expression: ($) => seq("[", sepBy(",", $._expression), "]"),
+
+    tuple_expression: ($) =>
+      seq(
+        "(",
+        $._expression,
+        repeat1(seq(",", $._expression)),
+        optional(","),
+        ")",
+      ),
 
     block: ($) =>
       seq("{", repeat($._statement), optional($._expression), "}"),
@@ -215,6 +253,32 @@ module.exports = grammar({
 
     while_expression: ($) =>
       seq("while", field("condition", $._expression), field("body", $.block)),
+
+    match_expression: ($) =>
+      seq(
+        "match",
+        field("scrutinee", $._expression),
+        "{",
+        sepBy(",", $.match_arm),
+        "}",
+      ),
+    match_arm: ($) =>
+      seq(
+        field("pattern", $._pattern),
+        "->",
+        field("body", $._expression),
+      ),
+    _pattern: ($) =>
+      choice($.wildcard_pattern, $.variant_pattern, $.binding_pattern),
+    wildcard_pattern: (_) => "_",
+    variant_pattern: ($) =>
+      seq(
+        field("name", $.identifier),
+        "(",
+        sepBy(",", $.identifier),
+        ")",
+      ),
+    binding_pattern: ($) => $.identifier,
 
     unary_expression: ($) =>
       prec(PREC.unary, seq(choice("-", "!"), $._expression)),
@@ -285,6 +349,9 @@ module.exports = grammar({
 
     field_expression: ($) =>
       prec(PREC.call, seq($._expression, ".", field("field", $.identifier))),
+
+    tuple_field_expression: ($) =>
+      prec(PREC.call, seq($._expression, ".", field("index", $.integer_literal))),
 
     // ---- Statements ----
     _statement: ($) =>
