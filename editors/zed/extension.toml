@@ -10,5 +10,5 @@ description = "Syntax highlighting for the Frey language"
 # contains the generated `src/parser.c`. Update `repository` to your remote.
 [grammars.frey]
 repository = "file:///C:/Source/frey"
-rev = "993e31e8616936b7eeb53f0aa356e01eaea42f4e"
+rev = "6a36d2d99a373b4031dd5ed7d956b3307e75cadd"
 path = "editors/tree-sitter-frey"
