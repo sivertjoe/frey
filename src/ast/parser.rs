@@ -409,6 +409,55 @@ impl Parser {
         })
     }
 
+    /// True when the upcoming `{ ident (, ident)* :` shape is a closure
+    /// literal — `{x : expr}` or `{x, y, z : expr}`. The `{` must be the
+    /// current token. Blocks never start with `ident :` (a declaration would
+    /// require `let`), so the check is non-ambiguous.
+    fn looks_like_closure(&self) -> bool {
+        debug_assert!(matches!(
+            self.iter.peek().map(|t| &t.kind),
+            Some(TokenKind::LeftBrace)
+        ));
+        let mut at = 1;
+        loop {
+            if !matches!(
+                self.iter.peek_nth(at).map(|t| &t.kind),
+                Some(TokenKind::Identifier(_))
+            ) {
+                return false;
+            }
+            at += 1;
+            match self.iter.peek_nth(at).map(|t| &t.kind) {
+                Some(TokenKind::Colon) => return true,
+                Some(TokenKind::Comma) => at += 1,
+                _ => return false,
+            }
+        }
+    }
+
+    fn parse_closure(&mut self) -> Result<Expr, Error> {
+        let left = self.expect(TokenKind::LeftBrace)?.span;
+        let mut params = Vec::new();
+        loop {
+            params.push(self.ident()?);
+            if self.check(TokenKind::Colon) {
+                break;
+            }
+            self.expect(TokenKind::Comma)?;
+        }
+        self.expect(TokenKind::Colon)?;
+        let body = self.parse_expr()?;
+        let right = self.expect(TokenKind::RightBrace)?.span;
+        Ok(Expr {
+            id: self.id_gen.fresh(),
+            span: left.join(right),
+            kind: ExprKind::Closure {
+                params,
+                body: Box::new(body),
+            },
+        })
+    }
+
     pub(super) fn parse_block(&mut self) -> Result<Block, Error> {
         let left = self.expect(TokenKind::LeftBrace)?.span;
         let mut items = Vec::new();
@@ -1137,6 +1186,9 @@ impl Parser {
                 }
             }
             TokenKind::LeftBrace => {
+                if self.looks_like_closure() {
+                    return self.parse_closure();
+                }
                 let block = self.parse_block()?;
                 Ok(Expr {
                     id: self.id_gen.fresh(),

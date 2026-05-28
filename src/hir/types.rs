@@ -9,6 +9,12 @@ use std::fmt;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LocalId(u32);
 
+impl LocalId {
+    pub fn raw(self) -> u32 {
+        self.0
+    }
+}
+
 #[derive(Default)]
 pub struct LocalIdGen {
     next: u32,

@@ -134,6 +134,14 @@ pub enum ErrorKind {
     CannotInferEnumTypeArg {
         variant: String,
     },
+    /// A `{x : body}` closure had no expected function type to drive
+    /// parameter inference.
+    ClosureTypeUnknown,
+    /// Closure parameter count doesn't match the expected function arity.
+    ClosureArityMismatch {
+        expected: usize,
+        found: usize,
+    },
 }
 
 impl fmt::Display for Error {
@@ -313,6 +321,18 @@ impl fmt::Display for ErrorKind {
                 write!(
                     f,
                     "cannot infer type arguments for `{variant}`; provide them explicitly like `{variant}<Type>`"
+                )
+            }
+            ErrorKind::ClosureTypeUnknown => {
+                write!(
+                    f,
+                    "cannot infer this closure's parameter types; use it where an expected function type is known"
+                )
+            }
+            ErrorKind::ClosureArityMismatch { expected, found } => {
+                write!(
+                    f,
+                    "closure has {found} parameter(s), but {expected} were expected"
                 )
             }
         }

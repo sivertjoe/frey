@@ -145,6 +145,13 @@ pub enum ExprKind {
         return_ty: Option<TypeExpr>,
         body: Block,
     },
+    /// `{x : expr}` / `{x, y : expr}` — anonymous function literal. Param
+    /// and return types come from the expected-type hint at the call site;
+    /// captures aren't supported (the body lowers in a globals-only scope).
+    Closure {
+        params: Vec<String>,
+        body: Box<Expr>,
+    },
     Array(Vec<Expr>),
     Cast {
         expr: Box<Expr>,

@@ -1747,6 +1747,42 @@ mod tests {
 
     // ---- Type args containing a tuple type ----
 
+    // ---- Closures ----
+
+    #[test]
+    fn parses_single_param_closure() {
+        let expr = parser("{x : x * 2}").parse_expr().unwrap();
+        let ExprKind::Closure { params, body } = expr.kind else {
+            panic!("expected closure, got {:?}", expr.kind);
+        };
+        assert_eq!(params, vec!["x".to_string()]);
+        assert!(matches!(body.kind, ExprKind::Binary { .. }));
+    }
+
+    #[test]
+    fn parses_multi_param_closure() {
+        let expr = parser("{x, y, z : x + y + z}").parse_expr().unwrap();
+        let ExprKind::Closure { params, .. } = expr.kind else {
+            panic!("expected closure");
+        };
+        assert_eq!(params, vec!["x", "y", "z"]);
+    }
+
+    #[test]
+    fn block_with_let_is_not_a_closure() {
+        // `{ let x = 1; x }` is a block, not a closure.
+        let expr = parser("{ let x = 1; x }").parse_expr().unwrap();
+        assert!(matches!(expr.kind, ExprKind::Block(_)));
+    }
+
+    #[test]
+    fn block_with_expression_statement_is_not_a_closure() {
+        // `{ x; }` is a block; without a `:` after the identifier, the
+        // closure peek bails out.
+        let expr = parser("{ x; }").parse_expr().unwrap();
+        assert!(matches!(expr.kind, ExprKind::Block(_)));
+    }
+
     #[test]
     fn parses_call_with_tuple_type_arg() {
         // `Vec<(Int, Int)>()` — the type-args list scanner has to accept

@@ -35,7 +35,9 @@ impl<'ctx> Codegen<'ctx> {
                 Ok(self.builder.build_load(llvm_ty, ptr, "")?)
             }
             ExprKind::Function(_) => {
-                todo!("nested function literals require closure support")
+                unreachable!(
+                    "function literals are lifted to top-level declarations during HIR lowering"
+                )
             }
             ExprKind::Unary { operand, op } => {
                 let value = self.lower_expr(*operand)?;

@@ -759,15 +759,18 @@ impl Lower {
                 return_ty,
                 body,
             } => {
-                // Inline function literals: get their own type-var scope.
-                // Top-level functions go through lower_declaration directly
-                // (and don't hit this arm).
+                // Inline (named or anonymous) function literals: get their
+                // own type-var scope. `lower_function_value` lifts the result
+                // to a synthesized top-level function and returns a Local ref.
                 self.push_type_var_scope();
                 let result = self
                     .declare_type_params(&type_params, e.span)
                     .and_then(|()| self.lower_function_value(params, return_ty, body, e.span));
                 self.pop_type_var_scope();
                 result
+            }
+            ast::ExprKind::Closure { params, body } => {
+                self.lower_closure(params, *body, hint, e.span)
             }
             ast::ExprKind::Call {
                 callee,
@@ -857,28 +860,11 @@ impl Lower {
                 }
 
                 let callee = self.lower_expr(*callee)?;
-                // Forward concrete param types as arg hints (TypeVar params
-                // don't pin anything, so skip them).
-                let param_hints: Vec<Option<Ty>> = if let Ty::Function { params, .. } = &callee.ty {
-                    params
-                        .iter()
-                        .map(|p| (!ty_has_typevars(p)).then(|| p.clone()))
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-                let args: Vec<Expr> = args
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, a)| {
-                        let h = param_hints.get(i).and_then(|h| h.as_ref());
-                        self.lower_expr_with_hint(a, h)
-                    })
-                    .collect::<Result<_, _>>()?;
                 let explicit_type_args: Vec<Ty> = type_args
                     .iter()
                     .map(|t| self.lower_type(t))
                     .collect::<Result<_, _>>()?;
+                let args = self.lower_call_args(&callee, args, &explicit_type_args, e.span)?;
                 self.finish_call(callee, args, explicit_type_args, e.span)
             }
             ast::ExprKind::Unary { op, expr } => {
@@ -1279,7 +1265,9 @@ impl Lower {
                     kind: ErrorKind::StructDefNotAllowedHere,
                 })
             }
-            ast::ExprKind::Match { scrutinee, arms } => self.lower_match(*scrutinee, arms, e.span),
+            ast::ExprKind::Match { scrutinee, arms } => {
+                self.lower_match(*scrutinee, arms, e.span, hint)
+            }
         }
     }
 
@@ -1394,10 +1382,7 @@ impl Lower {
                     index,
                 },
             };
-            let args: Vec<Expr> = args
-                .into_iter()
-                .map(|a| self.lower_expr(a))
-                .collect::<Result<_, _>>()?;
+            let args = self.lower_call_args(&callee, args, &explicit_type_args, span)?;
             return self.finish_call(callee, args, explicit_type_args, span);
         }
 
@@ -1690,15 +1675,209 @@ impl Lower {
             return_ty: Box::new(return_ty.clone()),
         };
 
-        Ok(Expr {
+        let func = Function {
+            params: hir_params,
+            return_ty,
+            body,
+        };
+        Ok(self.lift_function_value(func, ty, span))
+    }
+
+    /// Lowers a call's argument list with hints derived from the callee's
+    /// parameter types. Closure args are deferred to a second pass so that
+    /// non-closure args can extend the substitution first — without this
+    /// step, `map<Int, Int>(Some(10), {x: x*2})` wouldn't see `Int` for `x`.
+    fn lower_call_args(
+        &mut self,
+        callee: &Expr,
+        args: Vec<ast::Expr>,
+        explicit_type_args: &[Ty],
+        _span: Span,
+    ) -> Result<Vec<Expr>, Error> {
+        let param_types: Vec<Ty> = match &callee.ty {
+            Ty::Function { params, .. } => params.clone(),
+            _ => return self.lower_args_no_hints(args),
+        };
+
+        // Seed substitution from the callee template (if any) and explicit
+        // type args. This lets `map<Int, Int>(...)` immediately substitute T
+        // and U in the param types before we hand them down as hints.
+        let mut subst: HashMap<TypeVarId, Ty> = HashMap::new();
+        if let ExprKind::Local(id) = &callee.kind
+            && let Some(template) = self.templates.get(id)
+            && explicit_type_args.len() == template.type_var_ids.len()
+        {
+            for (tv, ty) in template
+                .type_var_ids
+                .iter()
+                .zip(explicit_type_args.iter())
+            {
+                subst.insert(*tv, ty.clone());
+            }
+        }
+
+        let n = args.len();
+        let mut args_opts: Vec<Option<ast::Expr>> = args.into_iter().map(Some).collect();
+        let mut lowered: Vec<Option<Expr>> = (0..n).map(|_| None).collect();
+
+        // Pass 1: lower non-closure args, extending subst as we go.
+        for i in 0..n {
+            let is_closure = matches!(
+                args_opts[i].as_ref().map(|a| &a.kind),
+                Some(ast::ExprKind::Closure { .. })
+            );
+            if is_closure {
+                continue;
+            }
+            let arg = args_opts[i].take().unwrap();
+            let param_ty = param_types.get(i).cloned();
+            let hint = param_ty.as_ref().map(|p| self.substitute_ty(p, &subst));
+            // Forward the hint even if it still has TypeVars — variant
+            // constructors can emit a deferred (GenericEnum-typed)
+            // EnumConstruct, and everyone else ignores the hint anyway.
+            let v = self.lower_expr_with_hint(arg, hint.as_ref())?;
+            if let Some(p) = &param_ty {
+                // Best-effort: don't error here — finish_call/specialize_call
+                // will produce the real diagnostic if the types don't fit.
+                let _ = crate::hir::generics::unify(
+                    p,
+                    &v.ty,
+                    v.span,
+                    &mut subst,
+                    &self.struct_template_origin,
+                    &self.enum_template_origin,
+                );
+            }
+            lowered[i] = Some(v);
+        }
+
+        // Pass 2: closures, with hints refined by pass 1's substitution.
+        for i in 0..n {
+            if lowered[i].is_some() {
+                continue;
+            }
+            let arg = args_opts[i].take().unwrap();
+            let param_ty = param_types.get(i).cloned();
+            let hint = param_ty.as_ref().map(|p| self.substitute_ty(p, &subst));
+            let v = self.lower_expr_with_hint(arg, hint.as_ref())?;
+            lowered[i] = Some(v);
+        }
+
+        Ok(lowered.into_iter().map(Option::unwrap).collect())
+    }
+
+    fn lower_args_no_hints(&mut self, args: Vec<ast::Expr>) -> Result<Vec<Expr>, Error> {
+        args.into_iter().map(|a| self.lower_expr(a)).collect()
+    }
+
+    /// Wraps a lowered `Function` in a synthesized top-level declaration so
+    /// codegen sees only module-level functions. Returns a `Local` reference
+    /// to the lift; callers use it like any other function value.
+    fn lift_function_value(&mut self, func: Function, fn_ty: Ty, span: Span) -> Expr {
+        let synth_id = self.id_gen.fresh();
+        let synth_name = format!("__lambda_{}", synth_id.raw());
+        self.bindings.insert(synth_id, fn_ty.clone());
+        self.pending_specializations.push(Declaration {
+            id: synth_id,
             span,
-            ty,
-            kind: ExprKind::Function(Function {
-                params: hir_params,
-                return_ty,
-                body,
-            }),
-        })
+            mutable: false,
+            name: synth_name,
+            ty: fn_ty.clone(),
+            value: Expr {
+                span,
+                ty: fn_ty.clone(),
+                kind: ExprKind::Function(func),
+            },
+        });
+        Expr {
+            span,
+            ty: fn_ty,
+            kind: ExprKind::Local(synth_id),
+        }
+    }
+
+    /// Lowers a closure literal `{x, y : body}` using `hint` as the expected
+    /// function type. The body is lowered in a globals-only scope to forbid
+    /// captures, then the result is lifted to a synthesized top-level fn.
+    fn lower_closure(
+        &mut self,
+        params: Vec<String>,
+        body: ast::Expr,
+        hint: Option<&Ty>,
+        span: Span,
+    ) -> Result<Expr, Error> {
+        let Some(Ty::Function {
+            params: hint_params,
+            return_ty: hint_return,
+        }) = hint
+        else {
+            return Err(Error {
+                span,
+                kind: ErrorKind::ClosureTypeUnknown,
+            });
+        };
+        if hint_params.len() != params.len() {
+            return Err(Error {
+                span,
+                kind: ErrorKind::ClosureArityMismatch {
+                    expected: hint_params.len(),
+                    found: params.len(),
+                },
+            });
+        }
+        if hint_params.iter().any(ty_has_typevars) {
+            return Err(Error {
+                span,
+                kind: ErrorKind::ClosureTypeUnknown,
+            });
+        }
+
+        // Save scopes; lower the body seeing only globals + closure params.
+        let saved_scopes = std::mem::replace(&mut self.scopes, Vec::new());
+        let global_scope = saved_scopes[0].clone();
+        self.scopes.push(global_scope);
+        self.scopes.push(HashMap::new());
+
+        let mut hir_params = Vec::with_capacity(params.len());
+        for (name, ty) in params.into_iter().zip(hint_params.iter()) {
+            let id = self.id_gen.fresh();
+            self.current_scope_mut().insert(name.clone(), id);
+            self.bindings.insert(id, ty.clone());
+            hir_params.push(Param {
+                id,
+                span,
+                name,
+                ty: ty.clone(),
+            });
+        }
+
+        let return_hint = if !ty_has_typevars(hint_return) {
+            Some((**hint_return).clone())
+        } else {
+            None
+        };
+        let body_result = self.lower_expr_with_hint(body, return_hint.as_ref());
+        self.scopes = saved_scopes;
+        let body_expr = body_result?;
+
+        let return_ty = body_expr.ty.clone();
+        // Wrap the body expression in a single-tail block so codegen can
+        // reuse its function-lowering path verbatim.
+        let body_block = Block {
+            span,
+            items: Vec::new(),
+            tail: Box::new(body_expr),
+        };
+        let fn_ty = Ty::Function {
+            params: hir_params.iter().map(|p| p.ty.clone()).collect(),
+            return_ty: Box::new(return_ty.clone()),
+        };
+        let func = Function {
+            params: hir_params,
+            return_ty,
+            body: body_block,
+        };
+        Ok(self.lift_function_value(func, fn_ty, span))
     }
 
     fn lower_block(&mut self, b: ast::Block) -> Result<Block, Error> {
@@ -2477,22 +2656,39 @@ impl Lower {
         }
 
         // Every type var must be resolved now.
-        let mut concrete_args = Vec::with_capacity(template.type_var_ids.len());
+        let mut resolved_args = Vec::with_capacity(template.type_var_ids.len());
         for tv in &template.type_var_ids {
-            match subst.get(tv) {
-                Some(t) if !ty_has_typevars(t) => concrete_args.push(t.clone()),
-                _ => {
-                    return Err(Error {
-                        span,
-                        kind: ErrorKind::CannotInferEnumTypeArg {
-                            variant: name.to_string(),
-                        },
-                    });
-                }
-            }
+            let Some(t) = subst.get(tv) else {
+                return Err(Error {
+                    span,
+                    kind: ErrorKind::CannotInferEnumTypeArg {
+                        variant: name.to_string(),
+                    },
+                });
+            };
+            resolved_args.push(t.clone());
         }
 
-        let mangled = self.specialize_enum(&template, concrete_args, span)?;
+        // Inside a generic function body, type args may still be TypeVars.
+        // Defer specialization to substitute_expr: emit an EnumConstruct
+        // tagged with the template name and a generic enum type. The
+        // post-specialization walk re-mangles it once args are concrete.
+        if resolved_args.iter().any(ty_has_typevars) {
+            return Ok(Some(Expr {
+                span,
+                ty: Ty::GenericEnum {
+                    name: enum_template_name.clone(),
+                    args: resolved_args,
+                },
+                kind: ExprKind::EnumConstruct {
+                    enum_name: enum_template_name,
+                    variant_index,
+                    args: lowered_args,
+                },
+            }));
+        }
+
+        let mangled = self.specialize_enum(&template, resolved_args, span)?;
         let def = self
             .enums
             .get(&mangled)
@@ -2518,6 +2714,7 @@ impl Lower {
         scrutinee: ast::Expr,
         arms: Vec<ast::MatchArm>,
         span: Span,
+        hint: Option<&Ty>,
     ) -> Result<Expr, Error> {
         let scrutinee = self.lower_expr(scrutinee)?;
         // Inside a generic body the scrutinee is `GenericEnum<T>`; we match
@@ -2577,7 +2774,10 @@ impl Lower {
                 self.current_scope_mut().insert(name.clone(), *local_id);
                 self.bindings.insert(*local_id, ty.clone());
             }
-            let body = self.lower_expr(arm.body);
+            // Arm bodies see (in priority order): the first arm's type once
+            // we have it, then the outer hint.
+            let arm_hint = result_ty.as_ref().or(hint);
+            let body = self.lower_expr_with_hint(arm.body, arm_hint);
             self.leave_scope();
             let body = body?;
 
@@ -3168,9 +3368,31 @@ impl Lower {
             ExprKind::TupleField { target, .. } => {
                 self.substitute_expr(target, subst, local_map)?;
             }
-            ExprKind::EnumConstruct { args, .. } => {
-                for arg in args {
+            ExprKind::EnumConstruct {
+                enum_name,
+                variant_index,
+                args,
+            } => {
+                for arg in args.iter_mut() {
                     self.substitute_expr(arg, subst, local_map)?;
+                }
+                // If e.ty resolved to a concrete Ty::Enum (substitute_ty above
+                // handles GenericEnum→Enum), point enum_name at the
+                // specialization and coerce int-literal args against the now-
+                // concrete variant field types.
+                if let Ty::Enum(mangled) = &e.ty {
+                    *enum_name = mangled.clone();
+                    let variant_fields = self
+                        .enums
+                        .get(mangled)
+                        .expect("substitute_ty registered this enum")
+                        .variants[*variant_index]
+                        .fields
+                        .clone();
+                    for (arg, target) in args.iter_mut().zip(variant_fields.iter()) {
+                        let taken = std::mem::replace(arg, unit_expr(arg.span));
+                        *arg = coerce_int_literal(taken, target)?;
+                    }
                 }
             }
             ExprKind::Match { scrutinee, arms } => {
@@ -3218,7 +3440,8 @@ fn is_place_kind(kind: &ExprKind) -> bool {
 }
 
 /// Reads the type-argument list off a hint shaped like `template_name<...>`,
-/// otherwise None.
+/// otherwise None. Args may still contain TypeVars (caller decides whether
+/// to specialize now or defer through substitute_expr).
 fn enum_type_args_from_hint(
     template_name: &str,
     hint: Option<&Ty>,
@@ -3230,13 +3453,7 @@ fn enum_type_args_from_hint(
             .get(spec)
             .filter(|(tname, _)| tname == template_name)
             .map(|(_, args)| args.clone()),
-        Ty::GenericEnum { name, args } if name == template_name => {
-            if args.iter().any(ty_has_typevars) {
-                None
-            } else {
-                Some(args.clone())
-            }
-        }
+        Ty::GenericEnum { name, args } if name == template_name => Some(args.clone()),
         _ => None,
     }
 }
