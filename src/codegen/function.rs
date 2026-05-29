@@ -22,14 +22,6 @@ impl<'ctx> Codegen<'ctx> {
                     .const_initializer(&decl.value)
                     .expect("global initializer must be a constant literal");
                 global.set_initializer(&init);
-                // Immutable globals get marked `constant` so LLVM can place
-                // them in `.rodata` and inline reads aggressively.
-                if !decl.mutable {
-                    global.set_constant(true);
-                }
-                // Store the global's pointer in `locals` so `Local(id)` reads
-                // and `Assign { target: id }` writes go through the same code
-                // path as function locals.
                 self.locals.insert(decl.id, global.as_pointer_value());
             }
         }

@@ -168,7 +168,6 @@ impl fmt::Debug for EnumVariant {
 pub struct Declaration {
     pub id: LocalId,
     pub span: Span,
-    pub mutable: bool,
     pub name: String,
     pub ty: Ty,
     pub value: Expr,
@@ -250,6 +249,9 @@ pub enum ExprKind {
         elem_ty: Ty,
         args: Vec<Expr>,
     },
+    /// `let x: T;` — zero-pattern initializer for `T` (every byte zero).
+    /// Synthesized by HIR lowering when a declaration has no `= value`.
+    ZeroInit(Ty),
     /// `Some(x)`, `None`, ... — `enum_name` is the specialized name.
     EnumConstruct {
         enum_name: String,
@@ -453,7 +455,6 @@ impl fmt::Debug for Declaration {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Declaration")
             .field("id", &self.id)
-            .field("mutable", &self.mutable)
             .field("name", &self.name)
             .field("ty", &self.ty)
             .field("value", &self.value)
@@ -520,6 +521,7 @@ impl fmt::Debug for ExprKind {
                 elem_ty,
                 args,
             } => write!(f, "{kind:?}<{elem_ty:?}>{args:?}"),
+            ExprKind::ZeroInit(ty) => write!(f, "ZeroInit<{ty:?}>"),
             ExprKind::EnumConstruct {
                 enum_name,
                 variant_index,

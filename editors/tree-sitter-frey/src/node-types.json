@@ -1340,7 +1340,7 @@
       },
       "value": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "array_expression",
@@ -4550,10 +4550,6 @@
   },
   {
     "type": "match",
-    "named": false
-  },
-  {
-    "type": "mut",
     "named": false
   },
   {

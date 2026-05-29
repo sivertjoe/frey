@@ -69,7 +69,6 @@
 ; Keywords
 [
   "let"
-  "mut"
   "struct"
   "enum"
   "match"

@@ -146,12 +146,6 @@ impl Parser {
 
         let let_span = self.expect(TokenKind::Let)?.span;
         let start = attr_span.unwrap_or(let_span);
-        let mutable = if self.check(TokenKind::Mut) {
-            self.expect(TokenKind::Mut)?;
-            true
-        } else {
-            false
-        };
         let name = self.ident()?;
         let ty = if self.check(TokenKind::Colon) {
             self.expect(TokenKind::Colon)?;
@@ -159,18 +153,34 @@ impl Parser {
         } else {
             None
         };
-        self.expect(TokenKind::Equal)?;
-        let expr = self.parse_expr()?;
-        self.expect(TokenKind::Semicolon)?;
+        // `let x: T;` — zero-initialized; `let x = expr;` or `let x: T = expr;`
+        // — explicit value.
+        let value = if self.check(TokenKind::Semicolon) {
+            None
+        } else {
+            self.expect(TokenKind::Equal)?;
+            Some(self.parse_expr()?)
+        };
+        let end = self.expect(TokenKind::Semicolon)?.span;
+        let span = start.join(value.as_ref().map(|e| e.span).unwrap_or(end));
+
+        if value.is_none() && ty.is_none() {
+            return Err(Error::unexpected(
+                &Token {
+                    kind: TokenKind::Semicolon,
+                    span: end,
+                },
+                "`=` and an initializer, or `: T` for zero-initialization",
+            ));
+        }
 
         Ok(Declaration {
             id: self.id_gen.fresh(),
-            span: start.join(expr.span),
-            mutable,
+            span,
             comptime,
             name,
             ty,
-            value: expr,
+            value,
         })
     }
 

@@ -203,7 +203,7 @@ mod tests {
     fn parses_declaration() {
         let decl = parser("let x = 5;").parse_declaration().unwrap();
         assert_eq!(decl.name, "x");
-        assert!(matches!(decl.value.kind, ExprKind::Const(Const::Int(5))));
+        assert!(matches!(decl.value.unwrap().kind, ExprKind::Const(Const::Int(5))));
     }
 
     #[test]
@@ -546,7 +546,7 @@ mod tests {
         let ExprKind::Cast {
             expr: inner,
             target,
-        } = &decl.value.kind
+        } = &decl.value.as_ref().unwrap().kind
         else {
             panic!("expected cast as declaration value");
         };
@@ -566,16 +566,19 @@ mod tests {
     }
 
     #[test]
-    fn parses_let_mut() {
-        let decl = parser("let mut x = 5;").parse_declaration().unwrap();
-        assert!(decl.mutable);
+    fn parses_let_with_zero_init() {
+        let decl = parser("let x: Int;").parse_declaration().unwrap();
         assert_eq!(decl.name, "x");
+        assert!(decl.value.is_none());
+        assert!(matches!(
+            decl.ty.expect("annotation required for zero-init").kind,
+            TypeExprKind::Int
+        ));
     }
 
     #[test]
-    fn parses_let_immutable_by_default() {
-        let decl = parser("let x = 5;").parse_declaration().unwrap();
-        assert!(!decl.mutable);
+    fn parses_let_without_value_or_type_errors() {
+        assert!(parser("let x;").parse_declaration().is_err());
     }
 
     fn assert_assign_target_named(target: &Expr, expected: &str) {
@@ -732,7 +735,7 @@ mod tests {
         // `let xs = [1, 2, 3];`
         let decl = parser("let xs = [1, 2, 3];").parse_declaration().unwrap();
         assert_eq!(decl.name, "xs");
-        let ExprKind::Array(items) = &decl.value.kind else {
+        let ExprKind::Array(items) = &decl.value.as_ref().unwrap().kind else {
             panic!("expected array literal as declaration value");
         };
         assert_eq!(items.len(), 3);
@@ -1057,8 +1060,9 @@ mod tests {
             .parse_declaration()
             .unwrap();
         assert_eq!(decl.name, "Point");
-        let ExprKind::StructDef { fields, .. } = decl.value.kind else {
-            panic!("expected struct def, got {:?}", decl.value.kind);
+        let value = decl.value.unwrap();
+        let ExprKind::StructDef { fields, .. } = value.kind else {
+            panic!("expected struct def");
         };
         assert_eq!(fields.len(), 2);
         assert_eq!(fields[0].name, "x");
@@ -1072,7 +1076,7 @@ mod tests {
         let decl = parser("let Empty = struct {};")
             .parse_declaration()
             .unwrap();
-        let ExprKind::StructDef { fields, .. } = decl.value.kind else {
+        let ExprKind::StructDef { fields, .. } = decl.value.unwrap().kind else {
             panic!("expected struct def");
         };
         assert!(fields.is_empty());
@@ -1083,7 +1087,7 @@ mod tests {
         let decl = parser("let Point = struct { x: Int, y: Int, };")
             .parse_declaration()
             .unwrap();
-        let ExprKind::StructDef { fields, .. } = decl.value.kind else {
+        let ExprKind::StructDef { fields, .. } = decl.value.unwrap().kind else {
             panic!("expected struct def");
         };
         assert_eq!(fields.len(), 2);
@@ -1095,7 +1099,7 @@ mod tests {
         let decl = parser("let Node = struct { value: Int, next: *Node };")
             .parse_declaration()
             .unwrap();
-        let ExprKind::StructDef { fields, .. } = decl.value.kind else {
+        let ExprKind::StructDef { fields, .. } = decl.value.unwrap().kind else {
             panic!("expected struct def");
         };
         assert_eq!(fields[1].name, "next");
@@ -1276,7 +1280,7 @@ mod tests {
         let ExprKind::StructDef {
             type_params,
             fields,
-        } = decl.value.kind
+        } = decl.value.unwrap().kind
         else {
             panic!("expected struct def");
         };
@@ -1291,7 +1295,7 @@ mod tests {
         let decl = parser("let Pair = struct<$A, $B> { fst: A, snd: B };")
             .parse_declaration()
             .unwrap();
-        let ExprKind::StructDef { type_params, .. } = decl.value.kind else {
+        let ExprKind::StructDef { type_params, .. } = decl.value.unwrap().kind else {
             panic!("expected struct def");
         };
         assert_eq!(type_params, vec!["A".to_string(), "B".to_string()]);
@@ -1452,7 +1456,7 @@ mod tests {
     #[test]
     fn parses_string_in_declaration() {
         let decl = parser("let s = \"hi\";").parse_declaration().unwrap();
-        let ExprKind::Const(Const::Str(s)) = decl.value.kind else {
+        let ExprKind::Const(Const::Str(s)) = decl.value.unwrap().kind else {
             panic!("expected string literal");
         };
         assert_eq!(s, "hi");
@@ -1520,7 +1524,7 @@ mod tests {
 
         let ExprKind::Function {
             params, return_ty, ..
-        } = decl.value.kind
+        } = decl.value.unwrap().kind
         else {
             panic!("expected function literal");
         };
@@ -1655,7 +1659,7 @@ mod tests {
         let ExprKind::EnumDef {
             type_params,
             variants,
-        } = decl.value.kind
+        } = decl.value.unwrap().kind
         else {
             panic!("expected enum def");
         };
@@ -1673,7 +1677,7 @@ mod tests {
         let ExprKind::EnumDef {
             type_params,
             variants,
-        } = decl.value.kind
+        } = decl.value.unwrap().kind
         else {
             panic!("expected enum def");
         };
@@ -1690,7 +1694,7 @@ mod tests {
         let decl = parser("let Shape = enum { Rect(Int, Int), Circle(Float) };")
             .parse_declaration()
             .unwrap();
-        let ExprKind::EnumDef { variants, .. } = decl.value.kind else {
+        let ExprKind::EnumDef { variants, .. } = decl.value.unwrap().kind else {
             panic!("expected enum def");
         };
         assert_eq!(variants[0].fields.len(), 2);

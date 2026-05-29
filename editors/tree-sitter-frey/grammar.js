@@ -64,11 +64,9 @@ module.exports = grammar({
       seq(
         optional($.comptime_attribute),
         "let",
-        optional("mut"),
         field("name", $.identifier),
         optional(seq(":", field("type", $._type))),
-        "=",
-        field("value", $._expression),
+        optional(seq("=", field("value", $._expression))),
         ";",
       ),
 

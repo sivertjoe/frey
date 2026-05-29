@@ -142,6 +142,11 @@ pub enum ErrorKind {
         expected: usize,
         found: usize,
     },
+    /// `let x;` — no value and no `: T`, nothing to zero-initialize against.
+    MissingTypeForZeroInit,
+    /// `let x: T;` where `T` still contains a TypeVar (zero pattern needs a
+    /// concrete layout).
+    ZeroInitOfGenericType,
 }
 
 impl fmt::Display for Error {
@@ -333,6 +338,18 @@ impl fmt::Display for ErrorKind {
                 write!(
                     f,
                     "closure has {found} parameter(s), but {expected} were expected"
+                )
+            }
+            ErrorKind::MissingTypeForZeroInit => {
+                write!(
+                    f,
+                    "`let name;` requires a `: T` annotation so the zero-initializer has a layout"
+                )
+            }
+            ErrorKind::ZeroInitOfGenericType => {
+                write!(
+                    f,
+                    "cannot zero-initialize a generic type; provide a concrete `T` in the annotation"
                 )
             }
         }

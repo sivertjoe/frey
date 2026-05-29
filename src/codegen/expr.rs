@@ -435,6 +435,7 @@ impl<'ctx> Codegen<'ctx> {
                 args,
             } => self.lower_enum_construct(&enum_name, variant_index, args),
             ExprKind::Match { scrutinee, arms } => self.lower_match(*scrutinee, arms, expr.ty),
+            ExprKind::ZeroInit(ty) => Ok(zero_value(self.lower_ty(&ty))),
             ExprKind::TypeValue(_) | ExprKind::CompError(_) => {
                 unreachable!("comptime-only nodes are eliminated during specialization")
             }
@@ -1158,4 +1159,18 @@ fn is_place(e: &Expr) -> bool {
             | ExprKind::Field { .. }
             | ExprKind::TupleField { .. }
     )
+}
+
+/// All-zero constant for any basic LLVM type. Used to materialize `let x: T;`.
+fn zero_value(ty: inkwell::types::BasicTypeEnum<'_>) -> BasicValueEnum<'_> {
+    use inkwell::types::BasicTypeEnum::*;
+    match ty {
+        IntType(t) => t.const_zero().into(),
+        FloatType(t) => t.const_zero().into(),
+        PointerType(t) => t.const_null().into(),
+        ArrayType(t) => t.const_zero().into(),
+        StructType(t) => t.const_zero().into(),
+        VectorType(t) => t.const_zero().into(),
+        ScalableVectorType(t) => t.const_zero().into(),
+    }
 }

@@ -172,10 +172,11 @@ impl Lower {
         // Pass 1: register every struct and enum name with an empty body so
         // bodies in pass 2 can reference each other (and themselves) freely.
         for decl in &p.declarations {
-            if let ast::ExprKind::EnumDef {
-                type_params,
-                variants,
-            } = &decl.value.kind
+            if let Some(value) = &decl.value
+                && let ast::ExprKind::EnumDef {
+                    type_params,
+                    variants,
+                } = &value.kind
             {
                 if self.enums.contains_key(&decl.name)
                     || self.enum_templates.contains_key(&decl.name)
@@ -226,7 +227,9 @@ impl Lower {
                 }
                 continue;
             }
-            if let ast::ExprKind::StructDef { type_params, .. } = &decl.value.kind {
+            if let Some(value) = &decl.value
+                && let ast::ExprKind::StructDef { type_params, .. } = &value.kind
+            {
                 if self.structs.contains_key(&decl.name)
                     || self.struct_templates.contains_key(&decl.name)
                     || self.enums.contains_key(&decl.name)
@@ -270,10 +273,11 @@ impl Lower {
         // lower fields. Field types may contain TypeVars and stay as
         // templates until a concrete use site triggers specialization.
         for decl in &p.declarations {
-            if let ast::ExprKind::StructDef {
-                type_params,
-                fields,
-            } = &decl.value.kind
+            if let Some(value) = &decl.value
+                && let ast::ExprKind::StructDef {
+                    type_params,
+                    fields,
+                } = &value.kind
             {
                 if type_params.is_empty() {
                     let mut lowered_fields = Vec::with_capacity(fields.len());
@@ -339,10 +343,11 @@ impl Lower {
 
         // Pass 2b: lower enum variant payload types (mirrors struct bodies).
         for decl in &p.declarations {
-            if let ast::ExprKind::EnumDef {
-                type_params,
-                variants,
-            } = &decl.value.kind
+            if let Some(value) = &decl.value
+                && let ast::ExprKind::EnumDef {
+                    type_params,
+                    variants,
+                } = &value.kind
             {
                 if type_params.is_empty() {
                     let mut lowered_variants = Vec::with_capacity(variants.len());
@@ -410,8 +415,8 @@ impl Lower {
         let mut decls = Vec::new();
         for decl in p.declarations {
             if matches!(
-                decl.value.kind,
-                ast::ExprKind::StructDef { .. } | ast::ExprKind::EnumDef { .. }
+                decl.value.as_ref().map(|v| &v.kind),
+                Some(ast::ExprKind::StructDef { .. } | ast::ExprKind::EnumDef { .. })
             ) {
                 continue;
             }
@@ -482,12 +487,15 @@ impl Lower {
     }
 
     fn pre_register_top_level(&mut self, d: &ast::Declaration) -> Result<(), Error> {
+        let Some(value) = &d.value else {
+            return Ok(());
+        };
         let ast::ExprKind::Function {
             type_params,
             params,
             return_ty,
             ..
-        } = &d.value.kind
+        } = &value.kind
         else {
             return Ok(());
         };
@@ -539,7 +547,10 @@ impl Lower {
     fn lower_declaration(&mut self, d: ast::Declaration) -> Result<Option<Declaration>, Error> {
         // Top-level functions were pre-registered (by node id, so overloaded
         // names still find the right id). Everything else is a fresh binding.
-        let pre_registered_id = if matches!(d.value.kind, ast::ExprKind::Function { .. }) {
+        let pre_registered_id = if matches!(
+            d.value.as_ref().map(|v| &v.kind),
+            Some(ast::ExprKind::Function { .. })
+        ) {
             self.fn_id_by_node.get(&d.id).copied()
         } else {
             None
@@ -566,16 +577,16 @@ impl Lower {
                 .remove(&id)
                 .expect("pre_register_top_level must save a sig for every function");
 
-            let ast::ExprKind::Function { params, body, .. } = d.value.kind else {
+            let value_ast = d.value.expect("pre_registered guarantees a Function value");
+            let ast::ExprKind::Function { params, body, .. } = value_ast.kind else {
                 unreachable!("pre_registered guarantees Function");
             };
 
-            let value = self.lower_top_level_function_body(params, body, sig, d.value.span)?;
+            let value = self.lower_top_level_function_body(params, body, sig, value_ast.span)?;
             let ty = value.ty.clone();
             return Ok(Some(Declaration {
                 id,
                 span: d.span,
-                mutable: d.mutable,
                 name: d.name,
                 ty,
                 value,
@@ -588,7 +599,35 @@ impl Lower {
             None => None,
         };
 
-        let mut value = self.lower_expr_with_hint(d.value, expected.as_ref())?;
+        // `let x: T;` — no initializer. Synthesize a zero-pattern value of T.
+        let Some(value_ast) = d.value else {
+            let target = expected.ok_or_else(|| Error {
+                span: d.span,
+                kind: ErrorKind::MissingTypeForZeroInit,
+            })?;
+            if ty_has_typevars(&target) {
+                return Err(Error {
+                    span: d.span,
+                    kind: ErrorKind::ZeroInitOfGenericType,
+                });
+            }
+            let id = self.id_gen.fresh();
+            self.current_scope_mut().insert(d.name.clone(), id);
+            self.bindings.insert(id, target.clone());
+            return Ok(Some(Declaration {
+                id,
+                span: d.span,
+                name: d.name,
+                ty: target.clone(),
+                value: Expr {
+                    span: d.span,
+                    ty: target.clone(),
+                    kind: ExprKind::ZeroInit(target),
+                },
+            }));
+        };
+
+        let mut value = self.lower_expr_with_hint(value_ast, expected.as_ref())?;
         if let Some(target) = &expected {
             value = coerce_through_tails(value, target)?;
             if value.ty != *target {
@@ -622,7 +661,6 @@ impl Lower {
         Ok(Some(Declaration {
             id,
             span: d.span,
-            mutable: d.mutable,
             name: d.name,
             ty,
             value,
@@ -1821,7 +1859,6 @@ impl Lower {
             self.pending_specializations.push(Declaration {
                 id: synth_id,
                 span,
-                mutable: false,
                 name: synth_name,
                 ty: fn_ty.clone(),
                 value: Expr {
@@ -3193,7 +3230,6 @@ impl Lower {
         let decl = Declaration {
             id: new_id,
             span: template_span,
-            mutable: false,
             name: mangled,
             ty: new_fn_ty,
             value,
@@ -3458,6 +3494,9 @@ impl Lower {
                     }
                     self.substitute_expr(&mut arm.body, subst, local_map)?;
                 }
+            }
+            ExprKind::ZeroInit(ty) => {
+                *ty = self.substitute_ty(ty, subst);
             }
         }
         if let Some(ty) = updated_call_ty {

@@ -53,12 +53,13 @@ pub struct ImportDecl {
 pub struct Declaration {
     pub id: NodeId,
     pub span: Span,
-    pub mutable: bool,
     pub comptime: bool,
     pub name: String,
     /// Optional `: T` annotation. Int literals coerce to a numeric `T`.
+    /// Required when `value` is `None` (zero-init).
     pub ty: Option<TypeExpr>,
-    pub value: Expr,
+    /// `None` for `let x: T;` — value is the zero pattern of `T`.
+    pub value: Option<Expr>,
 }
 
 pub struct TypeExpr {
@@ -355,7 +356,6 @@ impl fmt::Debug for Program {
 impl fmt::Debug for Declaration {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Declaration")
-            .field("mutable", &self.mutable)
             .field("comptime", &self.comptime)
             .field("name", &self.name)
             .field("ty", &self.ty)

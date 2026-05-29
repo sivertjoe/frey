@@ -6,8 +6,8 @@ let Vec = struct<$T> {
     cap: Int,
 };
 
-let vec_new = <$T>() -> Vec<T> {
-    Vec<T> { data: alloc<T>(2), len: 0, cap: 2 }
+let init = <$T>(vec: *Vec<T>) {
+    *vec = Vec<T> { data: alloc<T>(2), len: 0, cap: 2 }
 };
 
 let add = (v: *Vec<$T>, x: T) {
@@ -24,6 +24,6 @@ let get = <$T>(v: *Vec<T>, i: Int) -> T {
     v.data[i]
 };
 
-let vec_destroy = (v: *Vec<$T>) {
+let destroy = (v: *Vec<$T>) {
     free(v.data);
 };

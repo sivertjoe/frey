@@ -55,22 +55,20 @@
           }
         },
         {
-          "comment": "Function definition: `let [mut] name = (` or `let name = <..>(`",
-          "match": "\\b(let)\\b\\s+(?:(mut)\\s+)?([A-Za-z_]\\w*)\\s*(=)\\s*(?=(?:<[^>;{}]*>\\s*)?\\()",
+          "comment": "Function definition: `let name = (` or `let name = <..>(`",
+          "match": "\\b(let)\\b\\s+([A-Za-z_]\\w*)\\s*(=)\\s*(?=(?:<[^>;{}]*>\\s*)?\\()",
           "captures": {
             "1": { "name": "keyword.other.let.frey" },
-            "2": { "name": "keyword.other.mut.frey" },
-            "3": { "name": "entity.name.function.frey" },
-            "4": { "name": "keyword.operator.assignment.frey" }
+            "2": { "name": "entity.name.function.frey" },
+            "3": { "name": "keyword.operator.assignment.frey" }
           }
         },
         {
-          "comment": "Variable binding with optional type annotation: `let [mut] name[: T]`",
-          "match": "\\b(let)\\b\\s+(?:(mut)\\s+)?([A-Za-z_]\\w*)",
+          "comment": "Variable binding with optional type annotation: `let name[: T]`",
+          "match": "\\b(let)\\b\\s+([A-Za-z_]\\w*)",
           "captures": {
             "1": { "name": "keyword.other.let.frey" },
-            "2": { "name": "keyword.other.mut.frey" },
-            "3": { "name": "variable.other.frey" }
+            "2": { "name": "variable.other.frey" }
           }
         }
       ]
@@ -81,7 +79,7 @@
           "name": "keyword.control.frey",
           "match": "\\b(if|else|while|return|break|defer|match)\\b"
         },
-        { "name": "keyword.other.frey", "match": "\\b(let|mut|struct|enum|as|import)\\b" }
+        { "name": "keyword.other.frey", "match": "\\b(let|struct|enum|as|import)\\b" }
       ]
     },
     "types": {

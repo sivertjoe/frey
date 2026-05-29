@@ -1,16 +1,8 @@
-use std::collections::HashMap;
-
 use crate::hir::types::{
-    BinaryOperator, Block, BlockItem, Declaration, Expr, ExprKind, Function, FunctionCall, LocalId,
+    BinaryOperator, Block, BlockItem, Declaration, Expr, ExprKind, Function, FunctionCall,
     Program, Statement, StatementKind, Ty, UnaryOperator,
 };
 use crate::semantics::error::{Error, ErrorKind};
-
-#[derive(Clone)]
-struct BindingInfo {
-    name: String,
-    mutable: bool,
-}
 
 pub fn type_check(program: &Program) -> Result<(), Error> {
     Typechecker::new().check_program(program)
@@ -18,7 +10,6 @@ pub fn type_check(program: &Program) -> Result<(), Error> {
 
 struct Typechecker {
     expected_return: Vec<Ty>,
-    bindings: HashMap<LocalId, BindingInfo>,
     loop_depth: u32,
 }
 
@@ -26,23 +17,11 @@ impl Typechecker {
     fn new() -> Self {
         Self {
             expected_return: Vec::new(),
-            bindings: HashMap::new(),
             loop_depth: 0,
         }
     }
 
     fn check_program(&mut self, p: &Program) -> Result<(), Error> {
-        // Pre-register top-level bindings so nested function bodies that
-        // assign to outer mutable bindings can resolve them.
-        for decl in &p.declarations {
-            self.bindings.insert(
-                decl.id,
-                BindingInfo {
-                    name: decl.name.clone(),
-                    mutable: decl.mutable,
-                },
-            );
-        }
         for decl in &p.declarations {
             self.check_declaration(decl)?;
         }
@@ -50,16 +29,6 @@ impl Typechecker {
     }
 
     fn check_declaration(&mut self, d: &Declaration) -> Result<(), Error> {
-        // Top-level decls were registered in check_program; for nested decls
-        // (block items), this insert is what makes them visible to later
-        // assignments in the same block.
-        self.bindings.insert(
-            d.id,
-            BindingInfo {
-                name: d.name.clone(),
-                mutable: d.mutable,
-            },
-        );
         self.check_expr(&d.value)
     }
 
@@ -128,23 +97,6 @@ impl Typechecker {
             ExprKind::Assign { target, value } => {
                 self.check_expr(target)?;
                 self.check_expr(value)?;
-                // For chains rooted in a local (a, a[i], a[i][j]), require the
-                // local to be mut. For chains rooted in a deref (*p, (*p)[i]),
-                // the pointer itself is the gate — writing through a pointer
-                // doesn't require its binding to be mut.
-                if let Some(root_id) = assignment_local_root(target) {
-                    let binding = self
-                        .bindings
-                        .get(&root_id)
-                        .expect("resolved LocalId must be in the bindings table")
-                        .clone();
-                    if !binding.mutable {
-                        return Err(Error {
-                            span: e.span,
-                            kind: ErrorKind::AssignToImmutable { name: binding.name },
-                        });
-                    }
-                }
                 if value.ty != target.ty {
                     return Err(Error {
                         span: value.span,
@@ -295,21 +247,11 @@ impl Typechecker {
             ExprKind::Match { scrutinee, arms } => {
                 self.check_expr(scrutinee)?;
                 for arm in arms {
-                    if let crate::hir::types::HirPattern::Variant { bindings, .. } = &arm.pattern {
-                        for (name, local_id, _ty) in bindings {
-                            self.bindings.insert(
-                                *local_id,
-                                BindingInfo {
-                                    name: name.clone(),
-                                    mutable: false,
-                                },
-                            );
-                        }
-                    }
                     self.check_expr(&arm.body)?;
                 }
                 Ok(())
             }
+            ExprKind::ZeroInit(_) => Ok(()),
         }
     }
 
@@ -335,17 +277,6 @@ impl Typechecker {
 
     fn check_function(&mut self, f: &Function) -> Result<(), Error> {
         self.expected_return.push(f.return_ty.clone());
-        // Register params in the bindings table. Params are always immutable
-        // and passed by value — there's no syntactic way to mark them `mut`.
-        for p in &f.params {
-            self.bindings.insert(
-                p.id,
-                BindingInfo {
-                    name: p.name.clone(),
-                    mutable: false,
-                },
-            );
-        }
         self.check_body(&f.body, &f.return_ty)?;
         self.expected_return.pop();
         Ok(())
@@ -542,25 +473,3 @@ fn is_addressable(e: &Expr) -> bool {
     )
 }
 
-/// Walks through a place expression chain to find the local whose mutability
-/// gates the assignment. Returns None when the chain is rooted in a deref —
-/// `*p = v` doesn't need `p` to be mut, only the pointer's pointee to be
-/// writable, which the type system doesn't currently distinguish.
-fn assignment_local_root(target: &Expr) -> Option<LocalId> {
-    match &target.kind {
-        ExprKind::Local(id) => Some(*id),
-        ExprKind::Subscript { expr, .. } => {
-            // Indexing through a pointer writes to the pointee, so — like a
-            // deref — it doesn't require the pointer binding itself to be mut.
-            if matches!(expr.ty, Ty::Ptr(_)) {
-                None
-            } else {
-                assignment_local_root(expr)
-            }
-        }
-        ExprKind::Field { target, .. } => assignment_local_root(target),
-        ExprKind::TupleField { target, .. } => assignment_local_root(target),
-        ExprKind::Deref(_) => None,
-        _ => unreachable!("assignment target must be a place expression"),
-    }
-}

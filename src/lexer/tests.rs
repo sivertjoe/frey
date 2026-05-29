@@ -1017,6 +1017,15 @@ mod tests {
     }
 
     #[test]
+    fn mut_is_no_longer_a_keyword() {
+        // After mut was removed, `mut` is just an identifier.
+        assert_eq!(
+            kinds("mut"),
+            vec![TokenKind::Identifier("mut".to_string()), TokenKind::Eof]
+        );
+    }
+
+    #[test]
     fn tokenizes_enum_and_match_keywords() {
         assert_eq!(
             kinds("enum match"),

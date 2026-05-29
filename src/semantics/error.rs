@@ -26,9 +26,6 @@ pub enum ErrorKind {
     IllegalCast {
         ty: Ty,
     },
-    AssignToImmutable {
-        name: String,
-    },
     NotAddressable,
     BreakOutsideLoop,
 }
@@ -63,9 +60,6 @@ impl fmt::Display for ErrorKind {
                     f,
                     "function body does not return a value; expected {expected:?}"
                 )
-            }
-            ErrorKind::AssignToImmutable { name } => {
-                write!(f, "cannot assign to immutable binding `{name}`")
             }
             ErrorKind::NotAddressable => {
                 write!(f, "cannot take the address of this expression")
