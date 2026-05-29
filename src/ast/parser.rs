@@ -712,6 +712,24 @@ impl Parser {
                 // `callee<T, U>(args)` — explicit type arguments on a call.
                 let type_args = self.parse_type_args()?;
                 e = self.parse_call_suffix(e, type_args)?;
+            } else if self.check(TokenKind::LessThan)
+                && self.generic_function_ref_ahead()
+                && matches!(e.kind, ExprKind::Identifier(_))
+            {
+                // `f<T, U>` in value position — a typed function reference.
+                let name = match e.kind {
+                    ExprKind::Identifier(n) => n,
+                    _ => unreachable!(),
+                };
+                let type_args = self.parse_type_args()?;
+                let span = e
+                    .span
+                    .join(type_args.last().map(|t| t.span).unwrap_or(e.span));
+                e = Expr {
+                    id: self.id_gen.fresh(),
+                    span,
+                    kind: ExprKind::TypedFunctionRef { name, type_args },
+                };
             } else if self.check(TokenKind::LeftBracket) {
                 e = self.parse_subscript_suffix(e)?;
             } else if self.check(TokenKind::Dot) {
@@ -1488,6 +1506,26 @@ impl Parser {
             ),
             None => false,
         }
+    }
+
+    /// True when the upcoming `<...>` is a typed function reference (i.e. the
+    /// matching `>` is followed by a token that ends or continues a value
+    /// position — `;`, `,`, `)`, `}`, `]`). Distinguishes `hash<K>` (a
+    /// function value) from `a < b > c` (a chained comparison).
+    fn generic_function_ref_ahead(&self) -> bool {
+        let Some(after) = self.type_arg_list_end(0) else {
+            return false;
+        };
+        matches!(
+            self.iter.peek_nth(after).map(|t| &t.kind),
+            Some(
+                TokenKind::Semicolon
+                    | TokenKind::Comma
+                    | TokenKind::RightParen
+                    | TokenKind::RightBrace
+                    | TokenKind::RightBracket
+            )
+        )
     }
 
     fn parse_subscript_suffix(&mut self, target: Expr) -> Result<Expr, Error> {

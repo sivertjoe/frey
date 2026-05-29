@@ -521,6 +521,9 @@ impl<'ctx> Codegen<'ctx> {
             ExprKind::ExternFunction { .. } => {
                 unreachable!("extern function declarations are top-level, not expressions")
             }
+            ExprKind::DeferredFunctionRef { .. } => unreachable!(
+                "deferred function references are resolved during specialization"
+            ),
             ExprKind::TypeValue(_) | ExprKind::CompError(_) => {
                 unreachable!("comptime-only nodes are eliminated during specialization")
             }

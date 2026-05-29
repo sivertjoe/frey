@@ -266,6 +266,13 @@ pub enum ExprKind {
         return_ty: Ty,
         varargs: bool,
     },
+    /// `f<T, U>` in value position with type args that still contain
+    /// TypeVars. `substitute_expr` resolves it by re-specializing once the
+    /// type args become concrete; codegen never sees this variant.
+    DeferredFunctionRef {
+        template_id: LocalId,
+        type_args: Vec<Ty>,
+    },
     /// `Some(x)`, `None`, ... — `enum_name` is the specialized name.
     EnumConstruct {
         enum_name: String,
@@ -548,6 +555,10 @@ impl fmt::Debug for ExprKind {
             } => write!(f, "{kind:?}<{elem_ty:?}>{args:?}"),
             ExprKind::ZeroInit(ty) => write!(f, "ZeroInit<{ty:?}>"),
             ExprKind::ExternFunction { c_name, .. } => write!(f, "ExternFunction({c_name})"),
+            ExprKind::DeferredFunctionRef {
+                template_id,
+                type_args,
+            } => write!(f, "DeferredFunctionRef({:?}, {:?})", template_id, type_args),
             ExprKind::EnumConstruct {
                 enum_name,
                 variant_index,

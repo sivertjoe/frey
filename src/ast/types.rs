@@ -166,6 +166,14 @@ pub enum ExprKind {
     /// Errors if used without an expected pointer type (similar to bare
     /// nullary variants).
     Null,
+    /// `name<T1, T2, ...>` in value position — a typed function reference.
+    /// Specializes the template `name` for the given type args and produces
+    /// a function pointer. Inside a generic body where the type args
+    /// themselves contain TypeVars, resolution defers to substitute_expr.
+    TypedFunctionRef {
+        name: String,
+        type_args: Vec<TypeExpr>,
+    },
     Array(Vec<Expr>),
     Cast {
         expr: Box<Expr>,

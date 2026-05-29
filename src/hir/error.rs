@@ -153,6 +153,11 @@ pub enum ErrorKind {
     /// known. Add an annotation (`let x: *FILE = null;`) or compare against
     /// a typed value (`if fp == null { ... }` works when `fp` is `*FILE`).
     CannotInferNullType,
+    /// `name<T, U>` used in value position where `name` doesn't resolve to a
+    /// generic function template.
+    NotAGenericFunction {
+        name: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -368,6 +373,12 @@ impl fmt::Display for ErrorKind {
                 write!(
                     f,
                     "cannot infer the pointer type of `null` from context; add a `: *T` annotation"
+                )
+            }
+            ErrorKind::NotAGenericFunction { name } => {
+                write!(
+                    f,
+                    "`{name}<...>` requires `{name}` to be a generic function"
                 )
             }
         }

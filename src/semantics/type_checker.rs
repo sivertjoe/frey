@@ -253,6 +253,7 @@ impl Typechecker {
             }
             ExprKind::ZeroInit(_) => Ok(()),
             ExprKind::ExternFunction { .. } => Ok(()),
+            ExprKind::DeferredFunctionRef { .. } => Ok(()),
         }
     }
 

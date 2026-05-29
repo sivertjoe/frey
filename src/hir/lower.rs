@@ -18,6 +18,9 @@ use crate::{
 
 struct PendingFnSig {
     scope: HashMap<String, TypeVarId>,
+    /// Type-var ids in declaration order. Mirrors what the eventual
+    /// `GenericTemplate.type_var_ids` will hold once the body is lowered.
+    type_var_ids: Vec<TypeVarId>,
     param_tys: Vec<Ty>,
     return_ty: Ty,
 }
@@ -518,6 +521,12 @@ impl Lower {
         })();
         let scope = self.pop_type_var_scope();
         let (param_tys, return_ty) = lowered_sig?;
+        // Save type-var ids in declaration order so a later TypedFunctionRef
+        // can know the template's arity before its body has been lowered.
+        let type_var_ids: Vec<TypeVarId> = type_params
+            .iter()
+            .filter_map(|n| scope.get(n).copied())
+            .collect();
 
         let ty = Ty::Function {
             params: param_tys.clone(),
@@ -537,6 +546,7 @@ impl Lower {
             id,
             PendingFnSig {
                 scope,
+                type_var_ids,
                 param_tys,
                 return_ty,
             },
@@ -918,6 +928,90 @@ impl Lower {
                     span: e.span,
                     ty: ty.clone(),
                     kind: ExprKind::ZeroInit(ty),
+                })
+            }
+            ast::ExprKind::TypedFunctionRef { name, type_args } => {
+                let template_id = self.resolve(&name).ok_or_else(|| Error {
+                    span: e.span,
+                    kind: ErrorKind::NameNotFound { name: name.clone() },
+                })?;
+                let lowered_args: Vec<Ty> = type_args
+                    .iter()
+                    .map(|t| self.lower_type(t))
+                    .collect::<Result<_, _>>()?;
+
+                // The template may already be fully lowered (in self.templates)
+                // or may only have its signature registered (in pending_fn_sigs)
+                // if its body hasn't been lowered yet. Either source gives us
+                // the arity + signature info we need.
+                let (template_name, type_var_ids, param_tys, return_ty) =
+                    if let Some(t) = self.templates.get(&template_id) {
+                        (
+                            t.name.clone(),
+                            t.type_var_ids.clone(),
+                            t.params.iter().map(|p| p.ty.clone()).collect::<Vec<_>>(),
+                            t.return_ty.clone(),
+                        )
+                    } else if let Some(sig) = self.pending_fn_sigs.get(&template_id) {
+                        (
+                            name.clone(),
+                            sig.type_var_ids.clone(),
+                            sig.param_tys.clone(),
+                            sig.return_ty.clone(),
+                        )
+                    } else {
+                        return Err(Error {
+                            span: e.span,
+                            kind: ErrorKind::NotAGenericFunction { name },
+                        });
+                    };
+                if lowered_args.len() != type_var_ids.len() {
+                    return Err(Error {
+                        span: e.span,
+                        kind: ErrorKind::TypeArgArityMismatch {
+                            name: template_name,
+                            expected: type_var_ids.len(),
+                            found: lowered_args.len(),
+                        },
+                    });
+                }
+                // Build the function type with the type args substituted in,
+                // so the resulting expression's type is correct even in the
+                // deferred case.
+                let mut subst = HashMap::new();
+                for (tv, t) in type_var_ids.iter().zip(lowered_args.iter()) {
+                    subst.insert(*tv, t.clone());
+                }
+                let result_param_tys: Vec<Ty> =
+                    param_tys.iter().map(|p| self.substitute_ty(p, &subst)).collect();
+                let result_return_ty = self.substitute_ty(&return_ty, &subst);
+                let fn_ty = Ty::Function {
+                    params: result_param_tys,
+                    return_ty: Box::new(result_return_ty),
+                    varargs: false,
+                };
+                // Specialize now only when both (a) the args are concrete and
+                // (b) the template's body is available. Otherwise emit a
+                // DeferredFunctionRef the substitution pass will resolve.
+                let deferable = lowered_args.iter().any(ty_has_typevars)
+                    || !self.templates.contains_key(&template_id);
+                if deferable {
+                    return Ok(Expr {
+                        span: e.span,
+                        ty: fn_ty,
+                        kind: ExprKind::DeferredFunctionRef {
+                            template_id,
+                            type_args: lowered_args,
+                        },
+                    });
+                }
+                let specialized =
+                    self.specialize_call(template_id, &[], &lowered_args, e.span)?;
+                let final_ty = self.bindings[&specialized].clone();
+                Ok(Expr {
+                    span: e.span,
+                    ty: final_ty,
+                    kind: ExprKind::Local(specialized),
                 })
             }
             ast::ExprKind::Call {
@@ -3261,32 +3355,39 @@ impl Lower {
             }
         }
 
-        if template.params.len() != arg_tys.len() {
-            return Err(Error {
-                span: call_span,
-                kind: ErrorKind::TypeMismatch {
-                    expected: Ty::Function {
-                        params: template.params.iter().map(|p| p.ty.clone()).collect(),
-                        return_ty: Box::new(template.return_ty.clone()),
-                        varargs: false,
+        // For a call site we unify each arg against the corresponding param to
+        // extend the substitution. For a function-reference specialization
+        // there are no args — the explicit type args alone must cover all
+        // type vars, and the check below catches it. So skip arg-unification
+        // entirely when arg_tys is empty.
+        if !arg_tys.is_empty() {
+            if template.params.len() != arg_tys.len() {
+                return Err(Error {
+                    span: call_span,
+                    kind: ErrorKind::TypeMismatch {
+                        expected: Ty::Function {
+                            params: template.params.iter().map(|p| p.ty.clone()).collect(),
+                            return_ty: Box::new(template.return_ty.clone()),
+                            varargs: false,
+                        },
+                        found: Ty::Function {
+                            params: arg_tys.to_vec(),
+                            return_ty: Box::new(Ty::Unit),
+                            varargs: false,
+                        },
                     },
-                    found: Ty::Function {
-                        params: arg_tys.to_vec(),
-                        return_ty: Box::new(Ty::Unit),
-                        varargs: false,
-                    },
-                },
-            });
-        }
-        for (param, arg_ty) in template.params.iter().zip(arg_tys.iter()) {
-            unify(
-                &param.ty,
-                arg_ty,
-                call_span,
-                &mut subst,
-                &self.struct_template_origin,
-                &self.enum_template_origin,
-            )?;
+                });
+            }
+            for (param, arg_ty) in template.params.iter().zip(arg_tys.iter()) {
+                unify(
+                    &param.ty,
+                    arg_ty,
+                    call_span,
+                    &mut subst,
+                    &self.struct_template_origin,
+                    &self.enum_template_origin,
+                )?;
+            }
         }
 
         // Make sure every type var declared by the template is bound.
@@ -3647,6 +3748,29 @@ impl Lower {
                 // Extern decls never appear inside a generic body — they're
                 // always top-level — so substitution can't reach them.
                 unreachable!("ExternFunction never substitutes");
+            }
+            ExprKind::DeferredFunctionRef {
+                template_id,
+                type_args,
+            } => {
+                let substituted: Vec<Ty> = type_args
+                    .iter()
+                    .map(|t| self.substitute_ty(t, subst))
+                    .collect();
+                if substituted.iter().any(ty_has_typevars) {
+                    *type_args = substituted;
+                } else {
+                    let span = e.span;
+                    let specialized = self.specialize_call(
+                        *template_id,
+                        &[],
+                        &substituted,
+                        span,
+                    )?;
+                    let fn_ty = self.bindings[&specialized].clone();
+                    e.kind = ExprKind::Local(specialized);
+                    e.ty = fn_ty;
+                }
             }
         }
         if let Some(ty) = updated_call_ty {

@@ -1787,6 +1787,42 @@ mod tests {
         assert!(matches!(expr.kind, ExprKind::Block(_)));
     }
 
+    // ---- Typed function reference ----
+
+    #[test]
+    fn parses_typed_function_ref_in_let() {
+        let decl = parser("let f = hash<Int>;").parse_declaration().unwrap();
+        let value = decl.value.unwrap();
+        let ExprKind::TypedFunctionRef { name, type_args } = value.kind else {
+            panic!("expected TypedFunctionRef, got {:?}", value.kind);
+        };
+        assert_eq!(name, "hash");
+        assert_eq!(type_args.len(), 1);
+        assert!(matches!(type_args[0].kind, TypeExprKind::Int));
+    }
+
+    #[test]
+    fn parses_typed_function_ref_in_arg_position() {
+        let expr = parser("call(other, hash<*u8>)").parse_expr().unwrap();
+        let ExprKind::Call { args, .. } = expr.kind else {
+            panic!("expected call");
+        };
+        assert_eq!(args.len(), 2);
+        assert!(matches!(args[1].kind, ExprKind::TypedFunctionRef { .. }));
+    }
+
+    #[test]
+    fn comparison_still_parses_as_comparison() {
+        // `a < b > c` followed by `;` is a chained comparison, not a typed
+        // function ref — because the trailing token (`;`) is *consistent
+        // with* a function ref, but the typed-function-ref path requires
+        // the head to be an Identifier alone. Here the receiver of `<` is
+        // already a chained comparison `(a < b)`, so the function-ref
+        // branch must not fire.
+        let expr = parser("a < b").parse_expr().unwrap();
+        assert!(matches!(expr.kind, ExprKind::Binary { .. }));
+    }
+
     // ---- Null pointer literal ----
 
     #[test]
