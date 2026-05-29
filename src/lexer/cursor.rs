@@ -270,6 +270,107 @@ impl<'a> Cursor<'a> {
         }
     }
 
+    /// `'A'`, `'\n'`, `'\0'`, etc. — a single byte. Bytes outside ASCII
+    /// (e.g. `'é'` which is two UTF-8 bytes) are rejected.
+    pub fn char_literal(&mut self) -> Result<Token, Error> {
+        let start = self.position();
+        self.bump(); // opening '
+
+        let byte: u8 = match self.peek() {
+            None | Some('\n') => {
+                return Err(Error {
+                    kind: ErrorKind::UnterminatedChar,
+                    span: Span {
+                        start,
+                        end: self.position(),
+                    },
+                });
+            }
+            Some('\'') => {
+                self.bump();
+                return Err(Error {
+                    kind: ErrorKind::EmptyChar,
+                    span: Span {
+                        start,
+                        end: self.position(),
+                    },
+                });
+            }
+            Some('\\') => {
+                self.bump();
+                let esc_start = self.position();
+                let b = match self.peek() {
+                    Some('n') => b'\n',
+                    Some('t') => b'\t',
+                    Some('r') => b'\r',
+                    Some('0') => 0u8,
+                    Some('\\') => b'\\',
+                    Some('\'') => b'\'',
+                    Some('"') => b'"',
+                    Some(other) => {
+                        self.bump();
+                        return Err(Error {
+                            kind: ErrorKind::InvalidEscape(other),
+                            span: Span {
+                                start: esc_start,
+                                end: self.position(),
+                            },
+                        });
+                    }
+                    None => {
+                        return Err(Error {
+                            kind: ErrorKind::UnterminatedChar,
+                            span: Span {
+                                start,
+                                end: self.position(),
+                            },
+                        });
+                    }
+                };
+                self.bump();
+                b
+            }
+            Some(ch) => {
+                let mut buf = [0u8; 4];
+                let encoded = ch.encode_utf8(&mut buf);
+                if encoded.len() != 1 {
+                    let bad_start = self.position();
+                    self.bump();
+                    return Err(Error {
+                        kind: ErrorKind::NonAsciiChar(ch),
+                        span: Span {
+                            start: bad_start,
+                            end: self.position(),
+                        },
+                    });
+                }
+                self.bump();
+                buf[0]
+            }
+        };
+
+        match self.peek() {
+            Some('\'') => self.bump(),
+            _ => {
+                return Err(Error {
+                    kind: ErrorKind::UnterminatedChar,
+                    span: Span {
+                        start,
+                        end: self.position(),
+                    },
+                });
+            }
+        };
+
+        Ok(Token {
+            kind: TokenKind::Literal(Literal::Char(byte)),
+            span: Span {
+                start,
+                end: self.position(),
+            },
+        })
+    }
+
     pub fn string(&mut self) -> Result<Token, Error> {
         let start = self.position();
         self.bump(); // opening "

@@ -1017,6 +1017,45 @@ mod tests {
     }
 
     #[test]
+    fn tokenizes_char_literal() {
+        assert_eq!(
+            kinds("'A'"),
+            vec![TokenKind::Literal(Literal::Char(b'A')), TokenKind::Eof]
+        );
+    }
+
+    #[test]
+    fn tokenizes_char_escape() {
+        assert_eq!(
+            kinds(r"'\n'"),
+            vec![TokenKind::Literal(Literal::Char(b'\n')), TokenKind::Eof]
+        );
+        assert_eq!(
+            kinds(r"'\0'"),
+            vec![TokenKind::Literal(Literal::Char(0)), TokenKind::Eof]
+        );
+        assert_eq!(
+            kinds(r"'\''"),
+            vec![TokenKind::Literal(Literal::Char(b'\'')), TokenKind::Eof]
+        );
+    }
+
+    #[test]
+    fn empty_char_is_an_error() {
+        assert!(tokenize("''").is_err());
+    }
+
+    #[test]
+    fn non_ascii_char_is_an_error() {
+        assert!(tokenize("'é'").is_err());
+    }
+
+    #[test]
+    fn unterminated_char_is_an_error() {
+        assert!(tokenize("'A").is_err());
+    }
+
+    #[test]
     fn tokenizes_extern_and_ellipsis() {
         assert_eq!(
             kinds("extern ..."),

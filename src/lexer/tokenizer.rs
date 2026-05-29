@@ -110,6 +110,10 @@ pub fn tokenize_at(src: &str, base: usize) -> Result<Vec<Token>, Error> {
                 let tok = cursor.string()?;
                 tokens.push(tok);
             }
+            '\'' => {
+                let tok = cursor.char_literal()?;
+                tokens.push(tok);
+            }
             'a'..='z' | 'A'..='Z' | '_' => {
                 tokens.push(cursor.identifier_or_keyword());
             }

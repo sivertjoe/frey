@@ -97,11 +97,23 @@
       "match": "\\$[A-Za-z_]\\w*"
     },
     "strings": {
-      "name": "string.quoted.double.frey",
-      "begin": "\"",
-      "end": "\"",
       "patterns": [
-        { "name": "constant.character.escape.frey", "match": "\\\\." }
+        {
+          "name": "string.quoted.double.frey",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            { "name": "constant.character.escape.frey", "match": "\\\\." }
+          ]
+        },
+        {
+          "name": "string.quoted.single.frey",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            { "name": "constant.character.escape.frey", "match": "\\\\." }
+          ]
+        }
       ]
     },
     "numbers": {

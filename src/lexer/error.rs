@@ -15,6 +15,10 @@ pub enum ErrorKind {
     UnterminatedString,
     InvalidEscape(char),
     UnterminatedComment,
+    UnterminatedChar,
+    EmptyChar,
+    /// `'é'` — character literal contained a non-ASCII (multi-byte) char.
+    NonAsciiChar(char),
 }
 
 impl fmt::Display for Error {
@@ -46,6 +50,18 @@ impl fmt::Display for ErrorKind {
             }
             ErrorKind::UnterminatedComment => {
                 write!(f, "unterminated block comment")
+            }
+            ErrorKind::UnterminatedChar => {
+                write!(f, "unterminated character literal")
+            }
+            ErrorKind::EmptyChar => {
+                write!(f, "empty character literal — use `'\\0'` for a null byte")
+            }
+            ErrorKind::NonAsciiChar(ch) => {
+                write!(
+                    f,
+                    "character `{ch}` is not ASCII; character literals are single bytes only"
+                )
             }
         }
     }

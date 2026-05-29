@@ -346,6 +346,7 @@ pub enum Const {
     Int(i32),
     Float(f32),
     Str(String),
+    Char(u8),
     Unit,
 }
 
@@ -573,6 +574,7 @@ impl fmt::Debug for Const {
             Const::Int(n) => write!(f, "Int({n})"),
             Const::Float(n) => write!(f, "Float({n})"),
             Const::Str(s) => write!(f, "Str({s:?})"),
+            Const::Char(b) => write!(f, "Char({b})"),
             Const::Unit => write!(f, "Unit"),
         }
     }

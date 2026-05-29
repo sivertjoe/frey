@@ -25,6 +25,9 @@ impl<'ctx> Codegen<'ctx> {
                 Ok(f32_ty.const_float(f as f64).into())
             }
             ExprKind::Const(Const::Str(s)) => Ok(self.string_global_for(&s).into()),
+            ExprKind::Const(Const::Char(b)) => {
+                Ok(self.context.i8_type().const_int(b as u64, false).into())
+            }
             ExprKind::Const(Const::Unit) => Ok(self.context.bool_type().const_zero().into()),
             ExprKind::Local(id) => {
                 if let Some(func) = self.functions.get(&id) {
@@ -374,17 +377,40 @@ impl<'ctx> Codegen<'ctx> {
                 let mut arg_vals: Vec<BasicValueEnum<'ctx>> = Vec::with_capacity(args.len());
                 for (i, a) in args.into_iter().enumerate() {
                     let in_vararg_slot = is_vararg && i >= fixed_arity;
-                    let promote_f32 = in_vararg_slot
-                        && matches!(a.ty, Ty::Float | Ty::F32);
+                    // C's default argument promotions for `...`: any integer
+                    // narrower than `int` is widened to i32 (signed-extended
+                    // for signed types, zero-extended for unsigned); `float`
+                    // is widened to `double`.
+                    let arg_ty = a.ty.clone();
                     let v = self.lower_expr(a)?;
-                    let v = if promote_f32 {
-                        self.builder
-                            .build_float_ext(
-                                v.into_float_value(),
-                                self.context.f64_type(),
-                                "",
-                            )?
-                            .into()
+                    let v = if in_vararg_slot {
+                        match arg_ty {
+                            Ty::Float | Ty::F32 => self
+                                .builder
+                                .build_float_ext(
+                                    v.into_float_value(),
+                                    self.context.f64_type(),
+                                    "",
+                                )?
+                                .into(),
+                            Ty::I8 => self
+                                .builder
+                                .build_int_s_extend(
+                                    v.into_int_value(),
+                                    self.context.i32_type(),
+                                    "",
+                                )?
+                                .into(),
+                            Ty::U8 => self
+                                .builder
+                                .build_int_z_extend(
+                                    v.into_int_value(),
+                                    self.context.i32_type(),
+                                    "",
+                                )?
+                                .into(),
+                            _ => v,
+                        }
                     } else {
                         v
                     };

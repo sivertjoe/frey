@@ -1,0 +1,78 @@
+let strlen = extern (s: *u8) -> Int;
+
+let String = struct {
+    data: *u8,
+    len: Int,
+    cap: Int,
+};
+
+// Internal: ensure capacity for at least `needed` bytes (including the null
+// slot the caller will write into).
+let reserve = (s: *String, needed: Int) {
+    if s.cap < needed {
+        let nc = s.cap * 2;
+        if nc < needed { nc = needed; }
+        if nc < 8 { nc = 8; }
+        s.data = realloc<u8>(s.data, nc);
+        s.cap = nc;
+    }
+};
+
+let str_new = () -> String {
+    let buf = alloc<u8>(1);
+    buf[0] = '\0';
+    String { data: buf, len: 0, cap: 1 }
+};
+
+let str_from_cstr = (c: *u8) -> String {
+    let n = strlen(c);
+    let buf = alloc<u8>(n + 1);
+    let i = 0;
+    while i < n {
+        buf[i] = c[i];
+        i = i + 1;
+    }
+    buf[n] = '\0';
+    String { data: buf, len: n, cap: n + 1 }
+};
+
+let destroy = (s: *String) {
+    free(s.data);
+};
+
+let len = (s: *String) -> Int { s.len };
+
+let byte_at = (s: *String, i: Int) -> u8 { s.data[i] };
+
+// Returns a null-terminated pointer suitable for passing to libc. The
+// pointer is invalidated by any subsequent mutation of `s`.
+let as_cstr = (s: *String) -> *u8 { s.data };
+
+let push_byte = (s: *String, b: u8) {
+    s.reserve(s.len + 2);
+    s.data[s.len] = b;
+    s.len = s.len + 1;
+    s.data[s.len] = '\0';
+};
+
+let push_cstr = (s: *String, c: *u8) {
+    let n = strlen(c);
+    s.reserve(s.len + n + 1);
+    let i = 0;
+    while i < n {
+        s.data[s.len + i] = c[i];
+        i = i + 1;
+    }
+    s.len = s.len + n;
+    s.data[s.len] = '\0';
+};
+
+let eq = (a: *String, b: *String) -> Int {
+    if a.len != b.len { return 0; }
+    let i = 0;
+    while i < a.len {
+        if a.data[i] != b.data[i] { return 0; }
+        i = i + 1;
+    }
+    1
+};

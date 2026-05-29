@@ -54,6 +54,9 @@ impl<'ctx> Codegen<'ctx> {
                 let s = s.clone();
                 Some(self.string_global_for(&s).into())
             }
+            ExprKind::Const(Const::Char(b)) => {
+                Some(self.context.i8_type().const_int(*b as u64, false).into())
+            }
             ExprKind::Array(items) => {
                 // An array literal whose every element is itself a constant
                 // can become a constant LLVM aggregate.

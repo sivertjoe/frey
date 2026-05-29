@@ -328,6 +328,8 @@ pub enum Const {
     Int(i32),
     Float(f32),
     Str(String),
+    /// Single-byte character literal (`'A'`, `'\n'`, ...). Lowers as a `u8`.
+    Char(u8),
 }
 
 #[derive(Debug, Clone, Copy)]

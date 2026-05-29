@@ -1,30 +1,132 @@
-// Printing primitives, layered on libc's `printf`.
+// Format strings use `%` as a universal placeholder. The right libc
+// specifier (`%d`, `%f`, `%s`, `%c`, `%lld`) is chosen at comptime based
+// on each argument's type.
 //
-// Each `print` overload is picked by argument count. The format string uses
-// printf's own specifiers (`%d`, `%f`, `%s`, ...), so the caller is
-// responsible for matching them to the argument types. The varargs ABI
-// promotion (`Float` -> `Double` for `%f`) is handled by codegen.
+// `format` is the underlying primitive — it builds a String. `print` is
+// `format` then write-to-stdout.
+
+import "string";
 
 let printf = extern (fmt: *u8, ...) -> Int;
+let snprintf = extern (buf: *u8, n: Int, fmt: *u8, ...) -> Int;
+
+// Per-type append into a `*String`, comptime-dispatched on T.
+#comptime
+let append_value = <$T>(out: *String, x: T) {
+    if T == Int {
+        let buf_i = alloc<u8>(16);
+        snprintf(buf_i, 16, "%d", x);
+        out.push_cstr(buf_i);
+        free(buf_i);
+    } else if T == i64 {
+        let buf_l = alloc<u8>(32);
+        snprintf(buf_l, 32, "%lld", x);
+        out.push_cstr(buf_l);
+        free(buf_l);
+    } else if T == Float {
+        let buf_f = alloc<u8>(64);
+        snprintf(buf_f, 64, "%f", x);
+        out.push_cstr(buf_f);
+        free(buf_f);
+    } else if T == *u8 {
+        out.push_cstr(x);
+    } else if T == u8 {
+        out.push_byte(x);
+    } else {
+        comperror("format: unsupported argument type");
+    }
+};
+
+// Copy bytes from `fmt[from..]` into `out` until a `%`. Returns the offset
+// AFTER the `%`, or the end of the string if none.
+let append_chunk = (out: *String, fmt: *u8, from: Int) -> Int {
+    let i = from;
+    while fmt[i] != '\0' {
+        if fmt[i] == '%' { return i + 1; }
+        out.push_byte(fmt[i]);
+        i = i + 1;
+    }
+    i
+};
+
+let append_tail = (out: *String, fmt: *u8, from: Int) {
+    let i = from;
+    while fmt[i] != '\0' {
+        out.push_byte(fmt[i]);
+        i = i + 1;
+    }
+};
+
+let format = (fmt: *u8) -> String {
+    let out = str_new();
+    out.append_tail(fmt, 0);
+    out
+};
+let format = <$A1>(fmt: *u8, a1: A1) -> String {
+    let out = str_new();
+    let i = out.append_chunk(fmt, 0);
+    out.append_value(a1);
+    out.append_tail(fmt, i);
+    out
+};
+let format = <$A1, $A2>(fmt: *u8, a1: A1, a2: A2) -> String {
+    let out = str_new();
+    let i = out.append_chunk(fmt, 0);
+    out.append_value(a1);
+    let j = out.append_chunk(fmt, i);
+    out.append_value(a2);
+    out.append_tail(fmt, j);
+    out
+};
+let format = <$A1, $A2, $A3>(fmt: *u8, a1: A1, a2: A2, a3: A3) -> String {
+    let out = str_new();
+    let i = out.append_chunk(fmt, 0);
+    out.append_value(a1);
+    let j = out.append_chunk(fmt, i);
+    out.append_value(a2);
+    let k = out.append_chunk(fmt, j);
+    out.append_value(a3);
+    out.append_tail(fmt, k);
+    out
+};
+let format = <$A1, $A2, $A3, $A4>(fmt: *u8, a1: A1, a2: A2, a3: A3, a4: A4) -> String {
+    let out = str_new();
+    let i = out.append_chunk(fmt, 0);
+    out.append_value(a1);
+    let j = out.append_chunk(fmt, i);
+    out.append_value(a2);
+    let k = out.append_chunk(fmt, j);
+    out.append_value(a3);
+    let l = out.append_chunk(fmt, k);
+    out.append_value(a4);
+    out.append_tail(fmt, l);
+    out
+};
+
+// `print` is `format` to a String, then write to stdout. The no-arg case
+// skips the allocation: there are no `%`s to substitute, so the format
+// string can go straight to printf.
 
 let print = (fmt: *u8) {
-    printf(fmt);
+    printf("%s", fmt);
 };
 let print = <$A1>(fmt: *u8, a1: A1) {
-    printf(fmt, a1);
+    let s = format(fmt, a1);
+    printf("%s", s.as_cstr());
+    s.destroy();
 };
 let print = <$A1, $A2>(fmt: *u8, a1: A1, a2: A2) {
-    printf(fmt, a1, a2);
+    let s = format(fmt, a1, a2);
+    printf("%s", s.as_cstr());
+    s.destroy();
 };
 let print = <$A1, $A2, $A3>(fmt: *u8, a1: A1, a2: A2, a3: A3) {
-    printf(fmt, a1, a2, a3);
+    let s = format(fmt, a1, a2, a3);
+    printf("%s", s.as_cstr());
+    s.destroy();
 };
 let print = <$A1, $A2, $A3, $A4>(fmt: *u8, a1: A1, a2: A2, a3: A3, a4: A4) {
-    printf(fmt, a1, a2, a3, a4);
-};
-let print = <$A1, $A2, $A3, $A4, $A5>(fmt: *u8, a1: A1, a2: A2, a3: A3, a4: A4, a5: A5) {
-    printf(fmt, a1, a2, a3, a4, a5);
-};
-let print = <$A1, $A2, $A3, $A4, $A5, $A6>(fmt: *u8, a1: A1, a2: A2, a3: A3, a4: A4, a5: A5, a6: A6) {
-    printf(fmt, a1, a2, a3, a4, a5, a6);
+    let s = format(fmt, a1, a2, a3, a4);
+    printf("%s", s.as_cstr());
+    s.destroy();
 };

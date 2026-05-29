@@ -1180,6 +1180,16 @@ impl Parser {
                     kind: ExprKind::Const(Const::Str(value)),
                 })
             }
+            TokenKind::Literal(Literal::Char(b)) => {
+                let value = *b;
+                let span = tok.span;
+                self.iter.consume();
+                Ok(Expr {
+                    id: self.id_gen.fresh(),
+                    span,
+                    kind: ExprKind::Const(Const::Char(value)),
+                })
+            }
             TokenKind::Identifier(_) => {
                 if self.looks_like_struct_literal() {
                     return self.parse_struct_literal();

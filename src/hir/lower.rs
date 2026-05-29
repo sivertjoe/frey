@@ -815,6 +815,11 @@ impl Lower {
                 ty: Ty::Ptr(Box::new(Ty::U8)),
                 kind: ExprKind::Const(Const::Str(s)),
             }),
+            ast::ExprKind::Const(ast::Const::Char(b)) => Ok(Expr {
+                span: e.span,
+                ty: Ty::U8,
+                kind: ExprKind::Const(Const::Char(b)),
+            }),
             ast::ExprKind::Identifier(name) => {
                 // Inside a `#comptime` body, a bare type-variable name used in
                 // expression position (e.g. `T` in `T == Int`) denotes a
@@ -1179,6 +1184,16 @@ impl Lower {
             }
             ast::ExprKind::Deref(target) => {
                 let target = self.lower_expr(*target)?;
+                // `*u8` in a `#comptime` body — the unary `*` parses as Deref
+                // but semantically wraps the inner type. Rewrite to a TypeValue
+                // so `T == *u8` works.
+                if let ExprKind::TypeValue(inner_ty) = target.kind {
+                    return Ok(Expr {
+                        span: e.span,
+                        ty: Ty::Unit,
+                        kind: ExprKind::TypeValue(Ty::Ptr(Box::new(inner_ty))),
+                    });
+                }
                 let ty = match &target.ty {
                     Ty::Ptr(inner) => (**inner).clone(),
                     other => {
@@ -1497,8 +1512,13 @@ impl Lower {
             .map(|t| self.lower_type(t))
             .collect::<Result<_, _>>()?;
 
-        if let Some((index, field_ty)) = self.resolve_field(&recv.ty, &name) {
-            // `recv.field(args)` — the field holds the callable value.
+        // `recv.field(args)` — only when the field actually holds a function
+        // value. A non-callable field (e.g. `s.len` is an `Int`) falls
+        // through to UFCS instead, so `s.len()` can call a top-level `len`
+        // that takes `s` as its receiver.
+        if let Some((index, field_ty)) = self.resolve_field(&recv.ty, &name)
+            && matches!(field_ty, Ty::Function { .. })
+        {
             let target = self.autoderef_to_struct(recv);
             let callee = Expr {
                 span: target.span,
@@ -1613,9 +1633,18 @@ impl Lower {
         }
         let mut subst = HashMap::new();
         for (p, a) in params.iter().zip(arg_tys.iter()) {
+            // `unify(param, arg)` binds TypeVars on the param side. Inside a
+            // generic function body the arg's *own* TypeVars also need to be
+            // allowed to "match anything" — swap so unify always sees the
+            // typevar-bearing side on the left.
+            let (lhs, rhs) = if !ty_has_typevars(p) && ty_has_typevars(a) {
+                (a, p)
+            } else {
+                (p, a)
+            };
             if unify(
-                p,
-                a,
+                lhs,
+                rhs,
                 Span::default(),
                 &mut subst,
                 &self.struct_template_origin,

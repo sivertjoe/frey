@@ -1787,6 +1787,20 @@ mod tests {
         assert!(matches!(expr.kind, ExprKind::Block(_)));
     }
 
+    // ---- Character literals ----
+
+    #[test]
+    fn parses_char_literal() {
+        let expr = parser("'A'").parse_expr().unwrap();
+        assert!(matches!(expr.kind, ExprKind::Const(Const::Char(65))));
+    }
+
+    #[test]
+    fn parses_char_escape() {
+        let expr = parser(r"'\n'").parse_expr().unwrap();
+        assert!(matches!(expr.kind, ExprKind::Const(Const::Char(10))));
+    }
+
     // ---- Extern (C FFI) ----
 
     #[test]

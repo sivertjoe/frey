@@ -103,6 +103,8 @@ pub enum Literal {
     Int(i32),
     Float(f32),
     Str(String),
+    /// Single-byte character literal: `'A'` = 65, `'\n'` = 10, etc.
+    Char(u8),
 }
 
 impl std::fmt::Display for TokenKind {
@@ -180,6 +182,7 @@ impl std::fmt::Display for Literal {
             Literal::Int(n) => write!(f, "`{n}`"),
             Literal::Float(fl) => write!(f, "`{fl}`"),
             Literal::Str(_) => write!(f, "string literal"),
+            Literal::Char(b) => write!(f, "`'\\x{b:02x}'`"),
         }
     }
 }

@@ -147,6 +147,7 @@ module.exports = grammar({
         $.integer_literal,
         $.float_literal,
         $.string_literal,
+        $.char_literal,
         $.type_value,
         $.function_literal,
         $.extern_function,
@@ -389,6 +390,8 @@ module.exports = grammar({
     float_literal: (_) => /\d+\.\d+([eE][+-]?\d+)?|\d+[eE][+-]?\d+/,
     string_literal: ($) =>
       seq('"', repeat(choice($.escape_sequence, /[^"\\]/)), '"'),
+    char_literal: ($) =>
+      seq("'", choice($.escape_sequence, /[^'\\\n]/), "'"),
     escape_sequence: (_) => /\\./,
   },
 });

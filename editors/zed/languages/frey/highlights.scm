@@ -87,6 +87,7 @@
 (integer_literal) @number
 (float_literal) @number
 (string_literal) @string
+(char_literal) @string
 (escape_sequence) @string.escape
 
 ; Operators
