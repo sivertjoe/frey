@@ -83,6 +83,8 @@
   "defer"
 ] @keyword
 
+(null_literal) @constant.builtin
+
 ; Literals
 (integer_literal) @number
 (float_literal) @number

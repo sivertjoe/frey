@@ -162,6 +162,10 @@ pub enum ExprKind {
         params: Vec<String>,
         body: Box<Expr>,
     },
+    /// `null` — the null pointer of whatever pointer type context demands.
+    /// Errors if used without an expected pointer type (similar to bare
+    /// nullary variants).
+    Null,
     Array(Vec<Expr>),
     Cast {
         expr: Box<Expr>,

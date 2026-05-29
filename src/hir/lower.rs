@@ -904,6 +904,22 @@ impl Lower {
                 span: e.span,
                 kind: ErrorKind::ExternMustBeTopLevel,
             }),
+            ast::ExprKind::Null => {
+                let ty = match hint {
+                    Some(t @ Ty::Ptr(_)) => t.clone(),
+                    _ => {
+                        return Err(Error {
+                            span: e.span,
+                            kind: ErrorKind::CannotInferNullType,
+                        });
+                    }
+                };
+                Ok(Expr {
+                    span: e.span,
+                    ty: ty.clone(),
+                    kind: ExprKind::ZeroInit(ty),
+                })
+            }
             ast::ExprKind::Call {
                 callee,
                 type_args,
@@ -1001,8 +1017,12 @@ impl Lower {
             }
             ast::ExprKind::Unary { op, expr } => {
                 let operand = self.lower_expr(*expr)?;
-                let ty = operand.ty.clone();
                 let op = self.lower_unary(op);
+                // `!x` always yields an Int (0/1). `-x` preserves the operand type.
+                let ty = match op {
+                    UnaryOperator::Not => Ty::Int,
+                    UnaryOperator::Minus => operand.ty.clone(),
+                };
                 Ok(Expr {
                     span: e.span,
                     ty,
@@ -1014,8 +1034,13 @@ impl Lower {
             }
             ast::ExprKind::Binary { op, lhs, rhs } => {
                 use crate::ast::BinaryOperator as B;
+                // For `==`/`!=`, lower LHS first; if it's a pointer, push its
+                // type to the RHS as a hint so `null` picks up the right
+                // pointer type.
                 let lhs = self.lower_expr(*lhs)?;
-                let rhs = self.lower_expr(*rhs)?;
+                let rhs_hint =
+                    matches!(op, B::Eq | B::Ne).then(|| lhs.ty.clone());
+                let rhs = self.lower_expr_with_hint(*rhs, rhs_hint.as_ref())?;
                 let (lhs, rhs) = if lhs.ty != rhs.ty {
                     if rhs.ty.is_number() && rhs.ty != Ty::Int {
                         let target = rhs.ty.clone();

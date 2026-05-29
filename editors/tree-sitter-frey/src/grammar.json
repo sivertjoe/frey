@@ -613,6 +613,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "null_literal"
+        },
+        {
+          "type": "SYMBOL",
           "name": "type_value"
         },
         {
@@ -2819,6 +2823,10 @@
           "value": "'"
         }
       ]
+    },
+    "null_literal": {
+      "type": "STRING",
+      "value": "null"
     },
     "escape_sequence": {
       "type": "PATTERN",

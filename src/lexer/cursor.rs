@@ -109,6 +109,7 @@ impl<'a> Cursor<'a> {
         let kind = match raw {
             "let" => TokenKind::Let,
             "extern" => TokenKind::Extern,
+            "null" => TokenKind::Null,
             "Int" => TokenKind::Int,
             "UInt" => TokenKind::UInt,
             "Float" => TokenKind::Float,

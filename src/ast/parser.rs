@@ -1206,6 +1206,15 @@ impl Parser {
             TokenKind::Enum => return self.parse_enum_def(),
             TokenKind::Match => return self.parse_match(),
             TokenKind::Extern => return self.parse_extern_function(),
+            TokenKind::Null => {
+                let span = tok.span;
+                self.iter.consume();
+                return Ok(Expr {
+                    id: self.id_gen.fresh(),
+                    span,
+                    kind: ExprKind::Null,
+                });
+            }
             // A leading generic parameter list introduces a generic function
             // literal: `<$K, $V>(params) -> ret { body }`.
             TokenKind::LessThan => {

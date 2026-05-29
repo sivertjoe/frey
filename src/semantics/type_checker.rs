@@ -53,9 +53,9 @@ impl Typechecker {
                             });
                         }
                     }
-                    // `!x` is "is zero"; meaningful on any integer (Int or UInt).
+                    // `!x` is "is zero" on integers, "is null" on pointers.
                     UnaryOperator::Not => {
-                        if !operand.ty.is_integer() {
+                        if !operand.ty.is_integer() && !matches!(operand.ty, Ty::Ptr(_)) {
                             return Err(Error {
                                 span: operand.span,
                                 kind: ErrorKind::TypeMismatch {
@@ -114,7 +114,7 @@ impl Typechecker {
                 else_branch,
             } => {
                 self.check_expr(condition)?;
-                if !condition.ty.is_integer() {
+                if !condition.ty.is_integer() && !matches!(condition.ty, Ty::Ptr(_)) {
                     return Err(Error {
                         span: condition.span,
                         kind: ErrorKind::TypeMismatch {
@@ -205,7 +205,7 @@ impl Typechecker {
             }
             ExprKind::While { condition, body } => {
                 self.check_expr(condition)?;
-                if !condition.ty.is_integer() {
+                if !condition.ty.is_integer() && !matches!(condition.ty, Ty::Ptr(_)) {
                     return Err(Error {
                         span: condition.span,
                         kind: ErrorKind::TypeMismatch {
@@ -351,9 +351,16 @@ impl Typechecker {
                 self.require_number(lhs)?;
                 self.require_matching(lhs, rhs)?;
             }
-            // Comparisons: same numeric type. Result is Int (0/1).
-            B::Lt | B::Le | B::Gt | B::Ge | B::Eq | B::Ne => {
+            // Ordered comparisons require numeric operands.
+            B::Lt | B::Le | B::Gt | B::Ge => {
                 self.require_number(lhs)?;
+                self.require_matching(lhs, rhs)?;
+            }
+            // `==` and `!=` work on numbers OR on identical pointer types.
+            B::Eq | B::Ne => {
+                if !matches!(lhs.ty, Ty::Ptr(_)) {
+                    self.require_number(lhs)?;
+                }
                 self.require_matching(lhs, rhs)?;
             }
             // Shifts: both integer (signed or unsigned), same type.

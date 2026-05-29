@@ -149,6 +149,10 @@ pub enum ErrorKind {
     ZeroInitOfGenericType,
     /// `extern (...)` was used outside a top-level `let name = extern (...);`.
     ExternMustBeTopLevel,
+    /// `null` was used in a position where the expected pointer type isn't
+    /// known. Add an annotation (`let x: *FILE = null;`) or compare against
+    /// a typed value (`if fp == null { ... }` works when `fp` is `*FILE`).
+    CannotInferNullType,
 }
 
 impl fmt::Display for Error {
@@ -358,6 +362,12 @@ impl fmt::Display for ErrorKind {
                 write!(
                     f,
                     "`extern (...)` is only allowed at top level, in `let name = extern (...);`"
+                )
+            }
+            ErrorKind::CannotInferNullType => {
+                write!(
+                    f,
+                    "cannot infer the pointer type of `null` from context; add a `: *T` annotation"
                 )
             }
         }

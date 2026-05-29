@@ -1787,6 +1787,14 @@ mod tests {
         assert!(matches!(expr.kind, ExprKind::Block(_)));
     }
 
+    // ---- Null pointer literal ----
+
+    #[test]
+    fn parses_null_keyword() {
+        let expr = parser("null").parse_expr().unwrap();
+        assert!(matches!(expr.kind, ExprKind::Null));
+    }
+
     // ---- Character literals ----
 
     #[test]

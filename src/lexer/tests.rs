@@ -1017,6 +1017,14 @@ mod tests {
     }
 
     #[test]
+    fn tokenizes_null_keyword() {
+        assert_eq!(
+            kinds("null"),
+            vec![TokenKind::Null, TokenKind::Eof]
+        );
+    }
+
+    #[test]
     fn tokenizes_char_literal() {
         assert_eq!(
             kinds("'A'"),

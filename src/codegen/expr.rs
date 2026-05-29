@@ -43,6 +43,7 @@ impl<'ctx> Codegen<'ctx> {
                 )
             }
             ExprKind::Unary { operand, op } => {
+                let operand_is_ptr = matches!(operand.ty, Ty::Ptr(_));
                 let value = self.lower_expr(*operand)?;
                 match op {
                     UnaryOperator::Minus => {
@@ -56,15 +57,27 @@ impl<'ctx> Codegen<'ctx> {
                         }
                     }
                     UnaryOperator::Not => {
-                        // Typechecker guarantees Int.
-                        let v = value.into_int_value();
-                        let zero = self.context.i32_type().const_zero();
-                        let is_zero = self.builder.build_int_compare(
-                            inkwell::IntPredicate::EQ,
-                            v,
-                            zero,
-                            "",
-                        )?;
+                        // `!ptr` → "is null", `!int` → "is zero". Both produce
+                        // a 0/1 i32.
+                        let is_zero = if operand_is_ptr {
+                            let p = value.into_pointer_value();
+                            let null_p = p.get_type().const_null();
+                            self.builder.build_int_compare(
+                                inkwell::IntPredicate::EQ,
+                                p,
+                                null_p,
+                                "",
+                            )?
+                        } else {
+                            let v = value.into_int_value();
+                            let zero = v.get_type().const_zero();
+                            self.builder.build_int_compare(
+                                inkwell::IntPredicate::EQ,
+                                v,
+                                zero,
+                                "",
+                            )?
+                        };
                         Ok(self
                             .builder
                             .build_int_z_extend(is_zero, self.context.i32_type(), "")?
@@ -232,7 +245,22 @@ impl<'ctx> Codegen<'ctx> {
                     | BinaryOperator::Ge
                     | BinaryOperator::Eq
                     | BinaryOperator::Ne => {
-                        let cmp = if is_float {
+                        let is_pointer = matches!(operand_ty, Ty::Ptr(_));
+                        let cmp = if is_pointer {
+                            let predicate = match op {
+                                BinaryOperator::Eq => inkwell::IntPredicate::EQ,
+                                BinaryOperator::Ne => inkwell::IntPredicate::NE,
+                                _ => unreachable!(
+                                    "type-checker only permits Eq/Ne on pointers"
+                                ),
+                            };
+                            self.builder.build_int_compare(
+                                predicate,
+                                lhs_val.into_pointer_value(),
+                                rhs_val.into_pointer_value(),
+                                "",
+                            )?
+                        } else if is_float {
                             let predicate = match op {
                                 BinaryOperator::Lt => inkwell::FloatPredicate::OLT,
                                 BinaryOperator::Le => inkwell::FloatPredicate::OLE,
@@ -979,17 +1007,39 @@ impl<'ctx> Codegen<'ctx> {
         result
     }
 
+    /// Lowers a truthy condition (integer or pointer) to an i1. Integers
+    /// are truthy if non-zero; pointers if non-null.
+    fn lower_condition(
+        &mut self,
+        condition: Expr,
+    ) -> Result<inkwell::values::IntValue<'ctx>, Error> {
+        let is_pointer = matches!(condition.ty, Ty::Ptr(_));
+        let value = self.lower_expr(condition)?;
+        if is_pointer {
+            let p = value.into_pointer_value();
+            let null_p = p.get_type().const_null();
+            Ok(self.builder.build_int_compare(
+                inkwell::IntPredicate::NE,
+                p,
+                null_p,
+                "",
+            )?)
+        } else {
+            let v = value.into_int_value();
+            let zero = v.get_type().const_zero();
+            Ok(self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::NE, v, zero, "")?)
+        }
+    }
+
     fn lower_if(
         &mut self,
         condition: Expr,
         then_branch: Expr,
         else_branch: Expr,
     ) -> Result<BasicValueEnum<'ctx>, Error> {
-        let cond_val = self.lower_expr(condition)?.into_int_value();
-        let zero = self.context.i32_type().const_zero();
-        let cond_i1 =
-            self.builder
-                .build_int_compare(inkwell::IntPredicate::NE, cond_val, zero, "")?;
+        let cond_i1 = self.lower_condition(condition)?;
 
         let function = self
             .builder
@@ -1182,11 +1232,7 @@ impl<'ctx> Codegen<'ctx> {
 
         // Header: evaluate condition, branch to body or exit.
         self.builder.position_at_end(header_bb);
-        let cond_val = self.lower_expr(condition)?.into_int_value();
-        let zero = self.context.i32_type().const_zero();
-        let cond_i1 =
-            self.builder
-                .build_int_compare(inkwell::IntPredicate::NE, cond_val, zero, "")?;
+        let cond_i1 = self.lower_condition(condition)?;
         self.builder
             .build_conditional_branch(cond_i1, body_bb, exit_bb)?;
 
