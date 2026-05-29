@@ -1,0 +1,269 @@
+import "vec";
+import "option";
+
+let Bucket = enum<$K, $V> {
+    Empty,
+    Tombstone,
+    Filled(K, V),
+};
+
+let Map = struct<$K, $V> {
+    hash_fn: (K) -> Int,
+    eq_fn: (K, K) -> Int,
+    vec: Vec<Bucket<K, V>>,
+    len: Int,
+};
+
+
+// Allocates `cap` bucket slots, each initialized to Empty.
+let with_capacity = <$K, $V>(map: *Map<K, V>, cap: Int) {
+    *map = Map<K, V> {
+        hash_fn: hash<K>,
+        eq_fn: eq<K>,
+        vec: Vec<Bucket<K, V>> { data: alloc<Bucket<K, V>>(cap), len: cap, cap: cap },
+        len: 0,
+    };
+    let i = 0;
+    while i < cap {
+        map.vec.data[i] = Empty;
+        i = i + 1;
+    }
+};
+
+let init = <$K, $V>(map: *Map<K, V>) {
+    with_capacity(map, 16);
+};
+
+let destroy = <$K, $V>(self: *Map<K, V>) {
+    free(self.vec.data);
+};
+
+
+let find_index = <$K, $V>(self: *Map<K, V>, key: K) -> Option<Int> {
+    let cap = self.vec.len;
+    let index = self.hash_fn(key) % cap;
+
+    let probe = 0;
+    while probe < cap {
+        match self.vec.get(index) {
+            Empty -> {
+                return None;
+            },
+            Tombstone -> {
+                // Continue,
+            },
+            Filled(k, v) -> {
+                if self.eq_fn(k, key) {
+                    return Some(index);
+                }
+            }
+        };
+
+        probe = probe + 1;
+        index = (index + 1) % cap;
+    }
+
+    None
+};
+
+let contains_key = <$K, $V>(self: *Map<K, V>, key: K) -> Int {
+    match self.find_index(key) {
+        Some(i) -> {
+            return 1;
+        },
+        None -> {
+            return 0;
+        }
+    };
+    0
+};
+
+let get = <$K, $V>(self: *Map<K, V>, key: K) -> Option<V> {
+    match self.find_index(key) {
+        Some(i) -> {
+            match self.vec.get(i) {
+                Filled(k, v) -> {
+                    return Some(v);
+                },
+                Empty -> {
+                    return None;
+                },
+                Tombstone -> {
+                    return None;
+                }
+            };
+        },
+        None -> {
+            return None;
+        }
+    };
+    None
+};
+
+// Inserts without checking load factor. Returns Some(old) if the key was
+// already present, None otherwise. Reuses the first Tombstone we passed over.
+let insert_no_grow = <$K, $V>(self: *Map<K, V>, key: K, value: V) -> Option<V> {
+    let cap = self.vec.len;
+    let index = self.hash_fn(key) % cap;
+    let first_deleted = -1;
+
+    let probe = 0;
+    while probe < cap {
+        match self.vec.get(index) {
+            Empty -> {
+                let target = if first_deleted == -1 { index } else { first_deleted };
+                self.vec.data[target] = Filled(key, value);
+                self.len = self.len + 1;
+                return None;
+            },
+            Tombstone -> {
+                if first_deleted == -1 {
+                    first_deleted = index;
+                }
+            },
+            Filled(k, v) -> {
+                if self.eq_fn(k, key) {
+                    self.vec.data[index] = Filled(key, value);
+                    return Some(v);
+                }
+            }
+        };
+
+        probe = probe + 1;
+        index = (index + 1) % cap;
+    }
+
+    // Table full of tombstones — only reachable if should_grow is broken.
+    if first_deleted != -1 {
+        self.vec.data[first_deleted] = Filled(key, value);
+        self.len = self.len + 1;
+    }
+    None
+};
+
+// Allocates a new bucket array of `new_cap` slots and reinserts every Filled
+// entry. Frees the old array.
+let rehash = <$K, $V>(self: *Map<K, V>, new_cap: Int) {
+    let old_data = self.vec.data;
+    let old_cap = self.vec.len;
+
+    let new_data = alloc<Bucket<K, V>>(new_cap);
+    let i = 0;
+    while i < new_cap {
+        new_data[i] = Empty;
+        i = i + 1;
+    }
+
+    self.vec.data = new_data;
+    self.vec.len = new_cap;
+    self.vec.cap = new_cap;
+    self.len = 0;
+
+    i = 0;
+    while i < old_cap {
+        match old_data[i] {
+            Filled(k, v) -> {
+                self.insert_no_grow(k, v);
+            },
+            Empty -> {
+                // skip
+            },
+            Tombstone -> {
+                // skip
+            }
+        };
+        i = i + 1;
+    }
+
+    free(old_data);
+};
+
+// Insert with automatic growth at load factor 0.7.
+let insert = <$K, $V>(self: *Map<K, V>, key: K, value: V) -> Option<V> {
+    if self.should_grow() {
+        let new_cap = self.vec.len * 2;
+        self.rehash(new_cap);
+    }
+    self.insert_no_grow(key, value)
+};
+
+// Removes the entry if present, leaving a Tombstone behind.
+let remove = <$K, $V>(self: *Map<K, V>, key: K) -> Option<V> {
+    match self.find_index(key) {
+        Some(i) -> {
+            match self.vec.get(i) {
+                Filled(k, v) -> {
+                    self.vec.data[i] = Tombstone;
+                    self.len = self.len - 1;
+                    return Some(v);
+                },
+                Empty -> {
+                    return None;
+                },
+                Tombstone -> {
+                    return None;
+                }
+            };
+        },
+        None -> {
+            return None;
+        }
+    };
+    None
+};
+
+
+let should_grow = <$K, $V>(self: *Map<K, V>) -> Int {
+    (self.len + 1) * 10 > self.vec.len * 7
+};
+
+
+// djb2 — small, fast, decent distribution for short C strings.
+let hash_cstr = (s: *u8) -> Int {
+    let h = 5381;
+    let i = 0;
+    while s[i] != '\0' {
+        h = h * 33 + (s[i] as Int);
+        i = i + 1;
+    }
+    h
+};
+
+let hash_int = (n: Int) -> Int { n };
+
+let eq_cstr = (a: *u8, b: *u8) -> Int {
+    let i = 0;
+    while a[i] != '\0' {
+        if a[i] != b[i] { return 0; }
+        i = i + 1;
+    }
+    if b[i] == '\0' { 1 } else { 0 }
+};
+
+let eq_int = (a: Int, b: Int) -> Int {
+    if a == b { 1 } else { 0 }
+};
+
+#comptime
+let hash = <$K>(k: K) -> Int {
+    if K == *u8 {
+        hash_cstr(k)
+    } else if K == Int {
+        hash_int(k)
+    } else {
+        comperror("hash: unsupported key type");
+        0
+    }
+};
+
+#comptime
+let eq = <$K>(a: K, b: K) -> Int {
+    if K == *u8 {
+        eq_cstr(a, b)
+    } else if K == Int {
+        eq_int(a, b)
+    } else {
+        comperror("eq: unsupported key type");
+        0
+    }
+};

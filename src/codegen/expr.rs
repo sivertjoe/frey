@@ -1,4 +1,4 @@
-use inkwell::types::BasicType;
+use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::{
     BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PointerValue, ValueKind,
 };
@@ -686,8 +686,11 @@ impl<'ctx> Codegen<'ctx> {
                 .builder
                 .get_insert_block()
                 .expect("arm body produced a basic block");
-            incoming.push((value, end_bb));
-            self.builder.build_unconditional_branch(exit_bb)?;
+            // Skip the implicit branch if the arm already terminated (return/break).
+            if end_bb.get_terminator().is_none() {
+                incoming.push((value, end_bb));
+                self.builder.build_unconditional_branch(exit_bb)?;
+            }
         }
 
         if let Some(arm_idx) = wildcard_arm_idx {
@@ -698,11 +701,28 @@ impl<'ctx> Codegen<'ctx> {
                 .builder
                 .get_insert_block()
                 .expect("arm body produced a basic block");
-            incoming.push((value, end_bb));
-            self.builder.build_unconditional_branch(exit_bb)?;
+            if end_bb.get_terminator().is_none() {
+                incoming.push((value, end_bb));
+                self.builder.build_unconditional_branch(exit_bb)?;
+            }
         }
 
         self.builder.position_at_end(exit_bb);
+        // If every arm terminated, exit_bb has no predecessors — emit an
+        // unreachable and synthesize a dummy value of the result type.
+        if incoming.is_empty() {
+            self.builder.build_unreachable()?;
+            let result_llvm_ty = self.lower_ty(&result_ty);
+            return Ok(match result_llvm_ty {
+                BasicTypeEnum::IntType(t) => t.const_zero().into(),
+                BasicTypeEnum::FloatType(t) => t.const_zero().into(),
+                BasicTypeEnum::PointerType(t) => t.const_null().into(),
+                BasicTypeEnum::StructType(t) => t.const_zero().into(),
+                BasicTypeEnum::ArrayType(t) => t.const_zero().into(),
+                BasicTypeEnum::VectorType(t) => t.const_zero().into(),
+                BasicTypeEnum::ScalableVectorType(t) => t.const_zero().into(),
+            });
+        }
         let result_llvm_ty = self.lower_ty(&result_ty);
         let phi = self.builder.build_phi(result_llvm_ty, "match.value")?;
         let phi_incoming: Vec<(&dyn inkwell::values::BasicValue<'ctx>, _)> = incoming

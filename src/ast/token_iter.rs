@@ -23,4 +23,8 @@ impl TokenIter {
     pub fn consume(&mut self) -> Option<Token> {
         self.tokens.pop_front()
     }
+
+    pub fn push_front(&mut self, tok: Token) {
+        self.tokens.push_front(tok);
+    }
 }

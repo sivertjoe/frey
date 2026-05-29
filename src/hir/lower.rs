@@ -44,6 +44,10 @@ pub struct Lower {
     type_vars: Vec<TypeVar>,
     type_var_scopes: Vec<HashMap<String, TypeVarId>>,
     pending_fn_sigs: HashMap<LocalId, PendingFnSig>,
+    /// Stack of "the return type of the function whose body we're lowering
+    /// right now". `return e;` reads the top to push it as a hint to `e`,
+    /// so `return None;` infers from the surrounding function's return type.
+    return_ty_stack: Vec<Ty>,
 
     pub(crate) templates: HashMap<LocalId, GenericTemplate>,
 
@@ -93,6 +97,7 @@ impl Lower {
             type_vars: Vec::default(),
             type_var_scopes: Vec::default(),
             pending_fn_sigs: HashMap::default(),
+            return_ty_stack: Vec::default(),
             templates: HashMap::default(),
             specialization_cache: HashMap::default(),
             pending_specializations: Vec::default(),
@@ -770,9 +775,12 @@ impl Lower {
             });
         }
 
-        // Return type flows into the body's tail.
-        let return_hint = (!ty_has_typevars(&sig.return_ty)).then(|| sig.return_ty.clone());
-        let body_result = self.lower_block_with_hint(body, return_hint.as_ref());
+        // Return type flows into the body's tail AND into any `return e;`.
+        // TypeVar-bearing hints are still useful for variant constructors —
+        // they record the deferred specialization until the call site picks K/V.
+        self.return_ty_stack.push(sig.return_ty.clone());
+        let body_result = self.lower_block_with_hint(body, Some(&sig.return_ty));
+        self.return_ty_stack.pop();
         self.leave_scope();
         self.pop_type_var_scope();
 
@@ -1239,7 +1247,10 @@ impl Lower {
                 // (Identifier or Subscript). Lower it like any other expr
                 // — Identifier becomes Local, Subscript becomes Subscript.
                 let target = self.lower_expr(*target)?;
-                let value = self.lower_expr(*value)?;
+                // Push the target's type as a hint into the value, so
+                // `x = Empty;` (etc.) can infer from the target.
+                let value_hint = target.ty.clone();
+                let value = self.lower_expr_with_hint(*value, Some(&value_hint))?;
                 let value = coerce_int_literal(value, &target.ty)?;
                 Ok(Expr {
                     span: e.span,
@@ -1600,7 +1611,39 @@ impl Lower {
             }
         }
 
-        let result_ty = *return_ty;
+        // Couldn't fully specialize, but if the callee is a generic template
+        // we can still unify the partial info — any TypeVars we *do* learn
+        // get substituted into the return type. Without this, the call's
+        // result type stays as the template's bare TypeVar(T), which means
+        // `match self.vec.get(i)` sees `T` instead of the actual `Bucket<K, V>`.
+        let result_ty = if let Some(callee_id) = callee_local
+            && let Some(template) = self.templates.get(&callee_id).cloned()
+            && template.params.len() == args.len()
+        {
+            let mut subst: HashMap<TypeVarId, Ty> = HashMap::new();
+            if explicit_type_args.len() == template.type_var_ids.len() {
+                for (tv, t) in template
+                    .type_var_ids
+                    .iter()
+                    .zip(explicit_type_args.iter())
+                {
+                    subst.insert(*tv, t.clone());
+                }
+            }
+            for (param, arg) in template.params.iter().zip(args.iter()) {
+                let _ = unify(
+                    &param.ty,
+                    &arg.ty,
+                    span,
+                    &mut subst,
+                    &self.struct_template_origin,
+                    &self.enum_template_origin,
+                );
+            }
+            self.substitute_ty(&template.return_ty, &subst)
+        } else {
+            *return_ty
+        };
         Ok(Expr {
             span,
             ty: result_ty,
@@ -1937,7 +1980,10 @@ impl Lower {
         }
 
         let return_hint = (!ty_has_typevars(&return_ty)).then(|| return_ty.clone());
-        let mut body = self.lower_block_with_hint(body, return_hint.as_ref())?;
+        self.return_ty_stack.push(return_ty.clone());
+        let body_result = self.lower_block_with_hint(body, return_hint.as_ref());
+        self.return_ty_stack.pop();
+        let mut body = body_result?;
         if body.tail.ty != return_ty && return_ty.is_number() && return_ty != Ty::Int {
             let tail = std::mem::replace(&mut body.tail, Box::new(unit_expr(body.span)));
             body.tail = Box::new(coerce_through_tails(*tail, &return_ty)?);
@@ -2229,7 +2275,15 @@ impl Lower {
         let kind = match s.kind {
             ast::StatementKind::Return(expr) => {
                 let expr = match expr {
-                    Some(e) => self.lower_expr(e)?,
+                    Some(e) => {
+                        // Push the current function's return type as a hint
+                        // so `return None;` and friends infer correctly. Even
+                        // a TypeVar-bearing hint (e.g. `Option<V>` inside a
+                        // generic body) is useful — variant constructors can
+                        // defer their specialization through it.
+                        let hint = self.return_ty_stack.last().cloned();
+                        self.lower_expr_with_hint(e, hint.as_ref())?
+                    }
                     None => unit_expr(end_of(s.span)),
                 };
                 StatementKind::Return(expr)

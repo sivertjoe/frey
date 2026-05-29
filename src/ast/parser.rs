@@ -101,6 +101,11 @@ use crate::{
 pub(super) struct Parser {
     iter: TokenIter,
     id_gen: NodeIdGen,
+    /// Suppresses struct-literal recognition. Set while parsing the
+    /// condition of an `if`/`while` so `while x < cap { ... }` doesn't read
+    /// `cap { ... }` as an empty struct literal. Parens reset it, so users
+    /// can write `if (Foo { x: 1 }) { ... }` if they really want one.
+    no_struct_literal: bool,
 }
 
 impl Parser {
@@ -109,6 +114,7 @@ impl Parser {
         Self {
             iter: TokenIter::new(tokens),
             id_gen: NodeIdGen::new(),
+            no_struct_literal: false,
         }
     }
 
@@ -118,6 +124,7 @@ impl Parser {
         Self {
             iter: TokenIter::new(tokens),
             id_gen: NodeIdGen::with_next(node_base),
+            no_struct_literal: false,
         }
     }
 
@@ -272,16 +279,16 @@ impl Parser {
         let start = self.iter.consume().unwrap().span; // consume the Identifier
         self.expect(TokenKind::LessThan)?;
         let mut args = Vec::new();
-        while !self.check(TokenKind::GreaterThan) {
+        while !self.check_close_gt() {
             if !args.is_empty() {
                 self.expect(TokenKind::Comma)?;
-                if self.check(TokenKind::GreaterThan) {
+                if self.check_close_gt() {
                     break;
                 }
             }
             args.push(self.parse_type()?);
         }
-        let end = self.expect(TokenKind::GreaterThan)?.span;
+        let end = self.consume_close_gt()?.span;
         Ok(TypeExpr {
             id: self.id_gen.fresh(),
             span: start.join(end),
@@ -770,6 +777,9 @@ impl Parser {
     /// struct literal from an identifier followed by a block. Also handles an
     /// explicit type-argument list: `Identifier<...> { ... }`.
     fn looks_like_struct_literal(&self) -> bool {
+        if self.no_struct_literal {
+            return false;
+        }
         // Find where the `{` would be: right after the name, or after a
         // `<...>` type-argument list if one is present.
         let brace_at = if matches!(
@@ -1322,7 +1332,9 @@ impl Parser {
             TokenKind::If => {
                 let start = self.expect(TokenKind::If)?.span;
 
+                let prev = std::mem::replace(&mut self.no_struct_literal, true);
                 let condition = self.parse_expr()?;
+                self.no_struct_literal = prev;
                 let then_branch = self.parse_block()?;
 
                 let else_branch = if self.check(TokenKind::Else) {
@@ -1350,7 +1362,9 @@ impl Parser {
             }
             TokenKind::While => {
                 let start = self.expect(TokenKind::While)?.span;
+                let prev = std::mem::replace(&mut self.no_struct_literal, true);
                 let condition = self.parse_expr()?;
+                self.no_struct_literal = prev;
                 let body = self.parse_block()?;
                 let span = start.join(body.span);
                 Ok(Expr {
@@ -1392,6 +1406,10 @@ impl Parser {
     fn parse_call_suffix(&mut self, callee: Expr, type_args: Vec<TypeExpr>) -> Result<Expr, Error> {
         self.expect(TokenKind::LeftParen)?;
 
+        // Inside call args, struct literals are unambiguous (each arg is
+        // delimited by `,` and `)`), so re-allow them even when the
+        // surrounding context is an `if`/`while` condition.
+        let prev = std::mem::replace(&mut self.no_struct_literal, false);
         let mut args = Vec::new();
         while !self.check(TokenKind::RightParen) {
             if !args.is_empty() {
@@ -1399,6 +1417,7 @@ impl Parser {
             }
             args.push(self.parse_expr()?);
         }
+        self.no_struct_literal = prev;
 
         let end = self.expect(TokenKind::RightParen)?.span;
         let span = callee.span.join(end);
@@ -1417,17 +1436,48 @@ impl Parser {
     fn parse_type_args(&mut self) -> Result<Vec<TypeExpr>, Error> {
         self.expect(TokenKind::LessThan)?;
         let mut args = Vec::new();
-        while !self.check(TokenKind::GreaterThan) {
+        while !self.check_close_gt() {
             if !args.is_empty() {
                 self.expect(TokenKind::Comma)?;
-                if self.check(TokenKind::GreaterThan) {
+                if self.check_close_gt() {
                     break;
                 }
             }
             args.push(self.parse_type()?);
         }
-        self.expect(TokenKind::GreaterThan)?;
+        self.consume_close_gt()?;
         Ok(args)
+    }
+
+    /// Lookahead for the closing `>` of a type-arg list. A leading `>>`
+    /// counts as a `>` — it'll be split when actually consumed.
+    fn check_close_gt(&self) -> bool {
+        matches!(
+            self.iter.peek().map(|t| &t.kind),
+            Some(TokenKind::GreaterThan | TokenKind::ShiftRight)
+        )
+    }
+
+    /// Consumes the closing `>` of a type-arg list. If the token is `>>`
+    /// (which happens at the end of nested generics like `Vec<Bucket<V>>`),
+    /// splits it: one `>` is consumed here, the other is pushed back for
+    /// the outer parse to pick up.
+    fn consume_close_gt(&mut self) -> Result<Token, Error> {
+        match self.iter.peek().map(|t| &t.kind) {
+            Some(TokenKind::ShiftRight) => {
+                let tok = self.iter.consume().expect("checked");
+                let span = tok.span;
+                self.iter.push_front(Token {
+                    kind: TokenKind::GreaterThan,
+                    span,
+                });
+                Ok(Token {
+                    kind: TokenKind::GreaterThan,
+                    span,
+                })
+            }
+            _ => self.expect(TokenKind::GreaterThan),
+        }
     }
 
     /// Non-consuming lookahead to resolve the `<` ambiguity: starting at the

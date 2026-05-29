@@ -1787,6 +1787,58 @@ mod tests {
         assert!(matches!(expr.kind, ExprKind::Block(_)));
     }
 
+    // ---- Nested generics: closing `>>` ----
+
+    #[test]
+    fn parses_nested_generic_type() {
+        // `Vec<Bucket<V>>` — the lexer produces a single `>>` token but the
+        // parser must close both type-arg lists.
+        let ty = parser("Vec<Bucket<V>>").parse_type().unwrap();
+        let TypeExprKind::NamedGeneric { name, args } = ty.kind else {
+            panic!("expected outer NamedGeneric");
+        };
+        assert_eq!(name, "Vec");
+        assert_eq!(args.len(), 1);
+        let TypeExprKind::NamedGeneric {
+            name: inner_name, ..
+        } = &args[0].kind
+        else {
+            panic!("expected inner NamedGeneric");
+        };
+        assert_eq!(inner_name, "Bucket");
+    }
+
+    // ---- Struct-literal-in-condition ambiguity ----
+
+    #[test]
+    fn while_condition_doesnt_treat_ident_brace_as_struct_literal() {
+        // `while x < cap { ... }` — `cap {` would otherwise read as an empty
+        // struct literal. The condition parses as a comparison; the `{ ... }`
+        // is the while body.
+        let expr = parser("while x < cap { }").parse_expr().unwrap();
+        let ExprKind::While { condition, .. } = expr.kind else {
+            panic!("expected while");
+        };
+        assert!(matches!(condition.kind, ExprKind::Binary { .. }));
+    }
+
+    #[test]
+    fn struct_literal_in_call_arg_inside_condition_still_works() {
+        // `if foo(Bar { x: 1 }) { ... }` — struct literal as a call arg is
+        // syntactically delimited by `(...)`, so it stays allowed even
+        // though we're in an if condition.
+        let expr = parser("if foo(Bar { x: 1 }) { 0 } else { 1 }")
+            .parse_expr()
+            .unwrap();
+        let ExprKind::If { condition, .. } = expr.kind else {
+            panic!("expected if");
+        };
+        let ExprKind::Call { args, .. } = condition.kind else {
+            panic!("expected call as condition");
+        };
+        assert!(matches!(args[0].kind, ExprKind::StructLiteral { .. }));
+    }
+
     // ---- Typed function reference ----
 
     #[test]
