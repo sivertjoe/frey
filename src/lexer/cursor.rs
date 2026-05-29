@@ -42,6 +42,10 @@ impl<'a> Cursor<'a> {
         chars.next()
     }
 
+    pub fn peek_nth(&self, n: usize) -> Option<char> {
+        self.src[self.offset..].chars().nth(n)
+    }
+
     pub fn bump(&mut self) -> Option<char> {
         let ch = self.peek()?;
 
@@ -104,6 +108,7 @@ impl<'a> Cursor<'a> {
 
         let kind = match raw {
             "let" => TokenKind::Let,
+            "extern" => TokenKind::Extern,
             "Int" => TokenKind::Int,
             "UInt" => TokenKind::UInt,
             "Float" => TokenKind::Float,

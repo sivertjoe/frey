@@ -8,13 +8,27 @@ impl<'ctx> Codegen<'ctx> {
     pub fn declare_top_level(&mut self, decl: &Declaration) {
         match &decl.value.kind {
             ExprKind::Function(func) => {
-                let fn_type = self.lower_fn_type(&func.params, &func.return_ty);
+                let fn_type = self.lower_fn_type(&func.params, &func.return_ty, false);
                 let llvm_fn = self.module.add_function(&decl.name, fn_type, None);
                 self.functions.insert(decl.id, llvm_fn);
             }
+            // `let printf = extern (...);` — register an external symbol.
+            // The Frey-side name (decl.name) and the C-side symbol (c_name)
+            // can differ if the user wrote `extern "actual_c_name" (...)`.
+            ExprKind::ExternFunction {
+                c_name,
+                params,
+                return_ty,
+                varargs,
+            } => {
+                let fn_type = self.lower_fn_type(params, return_ty, *varargs);
+                let llvm_fn = self.module.get_function(c_name).unwrap_or_else(|| {
+                    self.module
+                        .add_function(c_name, fn_type, Some(inkwell::module::Linkage::External))
+                });
+                self.functions.insert(decl.id, llvm_fn);
+            }
             // Top-level non-function declarations become LLVM globals.
-            // The initializer must be a constant literal — complex expressions
-            // would need a static-init function (LLVM `@llvm.global_ctors`).
             _ => {
                 let llvm_ty = self.lower_ty(&decl.ty);
                 let global = self.module.add_global(llvm_ty, None, &decl.name);

@@ -146,6 +146,15 @@ pub enum ExprKind {
         return_ty: Option<TypeExpr>,
         body: Block,
     },
+    /// `extern (params...) -> Ret` or `extern "c_name" (params...) -> Ret` —
+    /// declares a function backed by an external C symbol. `varargs` is true
+    /// when the parameter list ended with `...`.
+    ExternFunction {
+        c_name: Option<String>,
+        params: Vec<Param>,
+        varargs: bool,
+        return_ty: Option<TypeExpr>,
+    },
     /// `{x : expr}` / `{x, y : expr}` — anonymous function literal. Param
     /// and return types come from the expected-type hint at the call site;
     /// captures aren't supported (the body lowers in a globals-only scope).

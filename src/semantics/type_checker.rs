@@ -252,6 +252,7 @@ impl Typechecker {
                 Ok(())
             }
             ExprKind::ZeroInit(_) => Ok(()),
+            ExprKind::ExternFunction { .. } => Ok(()),
         }
     }
 
@@ -433,11 +434,18 @@ impl Typechecker {
             self.check_expr(arg)?;
         }
 
-        let Ty::Function { params, .. } = &call.callee.ty else {
+        let Ty::Function {
+            params, varargs, ..
+        } = &call.callee.ty
+        else {
             unreachable!("lowering ensures the callee has a function type");
         };
 
-        if call.args.len() != params.len() {
+        // Variadic (extern) calls require at least the fixed params; extras
+        // are accepted unchecked. Non-varargs calls require an exact match.
+        let too_few = call.args.len() < params.len();
+        let too_many = !*varargs && call.args.len() > params.len();
+        if too_few || too_many {
             return Err(Error {
                 span: call_expr.span,
                 kind: ErrorKind::ArityMismatch {

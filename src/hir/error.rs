@@ -147,6 +147,8 @@ pub enum ErrorKind {
     /// `let x: T;` where `T` still contains a TypeVar (zero pattern needs a
     /// concrete layout).
     ZeroInitOfGenericType,
+    /// `extern (...)` was used outside a top-level `let name = extern (...);`.
+    ExternMustBeTopLevel,
 }
 
 impl fmt::Display for Error {
@@ -350,6 +352,12 @@ impl fmt::Display for ErrorKind {
                 write!(
                     f,
                     "cannot zero-initialize a generic type; provide a concrete `T` in the annotation"
+                )
+            }
+            ErrorKind::ExternMustBeTopLevel => {
+                write!(
+                    f,
+                    "`extern (...)` is only allowed at top level, in `let name = extern (...);`"
                 )
             }
         }

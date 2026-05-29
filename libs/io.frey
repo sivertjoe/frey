@@ -1,0 +1,30 @@
+// Printing primitives, layered on libc's `printf`.
+//
+// Each `print` overload is picked by argument count. The format string uses
+// printf's own specifiers (`%d`, `%f`, `%s`, ...), so the caller is
+// responsible for matching them to the argument types. The varargs ABI
+// promotion (`Float` -> `Double` for `%f`) is handled by codegen.
+
+let printf = extern (fmt: *u8, ...) -> Int;
+
+let print = (fmt: *u8) {
+    printf(fmt);
+};
+let print = <$A1>(fmt: *u8, a1: A1) {
+    printf(fmt, a1);
+};
+let print = <$A1, $A2>(fmt: *u8, a1: A1, a2: A2) {
+    printf(fmt, a1, a2);
+};
+let print = <$A1, $A2, $A3>(fmt: *u8, a1: A1, a2: A2, a3: A3) {
+    printf(fmt, a1, a2, a3);
+};
+let print = <$A1, $A2, $A3, $A4>(fmt: *u8, a1: A1, a2: A2, a3: A3, a4: A4) {
+    printf(fmt, a1, a2, a3, a4);
+};
+let print = <$A1, $A2, $A3, $A4, $A5>(fmt: *u8, a1: A1, a2: A2, a3: A3, a4: A4, a5: A5) {
+    printf(fmt, a1, a2, a3, a4, a5);
+};
+let print = <$A1, $A2, $A3, $A4, $A5, $A6>(fmt: *u8, a1: A1, a2: A2, a3: A3, a4: A4, a5: A5, a6: A6) {
+    printf(fmt, a1, a2, a3, a4, a5, a6);
+};

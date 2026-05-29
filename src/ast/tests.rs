@@ -1787,6 +1787,71 @@ mod tests {
         assert!(matches!(expr.kind, ExprKind::Block(_)));
     }
 
+    // ---- Extern (C FFI) ----
+
+    #[test]
+    fn parses_extern_no_args() {
+        let decl = parser("let getpid = extern () -> Int;")
+            .parse_declaration()
+            .unwrap();
+        let value = decl.value.unwrap();
+        let ExprKind::ExternFunction {
+            c_name,
+            params,
+            varargs,
+            return_ty,
+        } = value.kind
+        else {
+            panic!("expected extern function");
+        };
+        assert!(c_name.is_none());
+        assert!(params.is_empty());
+        assert!(!varargs);
+        assert!(matches!(return_ty.expect("return ty").kind, TypeExprKind::Int));
+    }
+
+    #[test]
+    fn parses_extern_with_varargs() {
+        let decl = parser("let printf = extern (fmt: *u8, ...) -> Int;")
+            .parse_declaration()
+            .unwrap();
+        let value = decl.value.unwrap();
+        let ExprKind::ExternFunction {
+            params, varargs, ..
+        } = value.kind
+        else {
+            panic!("expected extern function");
+        };
+        assert_eq!(params.len(), 1);
+        assert!(varargs);
+    }
+
+    #[test]
+    fn parses_extern_with_c_name() {
+        let decl = parser("let print_int = extern \"printf\" (fmt: *u8, x: Int) -> Int;")
+            .parse_declaration()
+            .unwrap();
+        let value = decl.value.unwrap();
+        let ExprKind::ExternFunction {
+            c_name, params, ..
+        } = value.kind
+        else {
+            panic!("expected extern function");
+        };
+        assert_eq!(c_name, Some("printf".to_string()));
+        assert_eq!(params.len(), 2);
+    }
+
+    #[test]
+    fn extern_varargs_only_at_end() {
+        // Two `...` is an error.
+        assert!(
+            parser("let bad = extern (..., ...) -> Int;")
+                .parse_declaration()
+                .is_err()
+        );
+    }
+
     #[test]
     fn parses_call_with_tuple_type_arg() {
         // `Vec<(Int, Int)>()` — the type-args list scanner has to accept

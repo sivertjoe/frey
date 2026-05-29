@@ -54,7 +54,13 @@ pub enum Ty {
     U64,
     F32,
     F64,
-    Function { params: Vec<Ty>, return_ty: Box<Ty> },
+    Function {
+        params: Vec<Ty>,
+        return_ty: Box<Ty>,
+        /// True when the function was declared `extern (..., ...)` — call
+        /// sites may pass extra args after the fixed params.
+        varargs: bool,
+    },
     Array { element: Box<Ty>, count: usize },
     Ptr(Box<Ty>),
     Struct(String),
@@ -252,6 +258,14 @@ pub enum ExprKind {
     /// `let x: T;` — zero-pattern initializer for `T` (every byte zero).
     /// Synthesized by HIR lowering when a declaration has no `= value`.
     ZeroInit(Ty),
+    /// `extern ["c_name"] (params) -> Ret` — declares an external symbol;
+    /// codegen registers it with External linkage and no body.
+    ExternFunction {
+        c_name: String,
+        params: Vec<Param>,
+        return_ty: Ty,
+        varargs: bool,
+    },
     /// `Some(x)`, `None`, ... — `enum_name` is the specialized name.
     EnumConstruct {
         enum_name: String,
@@ -394,13 +408,23 @@ impl fmt::Debug for Ty {
             Ty::U64 => write!(f, "u64"),
             Ty::F32 => write!(f, "f32"),
             Ty::F64 => write!(f, "f64"),
-            Ty::Function { params, return_ty } => {
+            Ty::Function {
+                params,
+                return_ty,
+                varargs,
+            } => {
                 write!(f, "(")?;
                 for (i, p) in params.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
                     write!(f, "{p:?}")?;
+                }
+                if *varargs {
+                    if !params.is_empty() {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "...")?;
                 }
                 write!(f, ") -> {return_ty:?}")
             }
@@ -522,6 +546,7 @@ impl fmt::Debug for ExprKind {
                 args,
             } => write!(f, "{kind:?}<{elem_ty:?}>{args:?}"),
             ExprKind::ZeroInit(ty) => write!(f, "ZeroInit<{ty:?}>"),
+            ExprKind::ExternFunction { c_name, .. } => write!(f, "ExternFunction({c_name})"),
             ExprKind::EnumConstruct {
                 enum_name,
                 variant_index,

@@ -79,7 +79,7 @@
           "name": "keyword.control.frey",
           "match": "\\b(if|else|while|return|break|defer|match)\\b"
         },
-        { "name": "keyword.other.frey", "match": "\\b(let|struct|enum|as|import)\\b" }
+        { "name": "keyword.other.frey", "match": "\\b(let|struct|enum|extern|as|import)\\b" }
       ]
     },
     "types": {

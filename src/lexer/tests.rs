@@ -1017,6 +1017,25 @@ mod tests {
     }
 
     #[test]
+    fn tokenizes_extern_and_ellipsis() {
+        assert_eq!(
+            kinds("extern ..."),
+            vec![TokenKind::Extern, TokenKind::Ellipsis, TokenKind::Eof]
+        );
+    }
+
+    #[test]
+    fn two_dots_lexes_as_two_dots_not_ellipsis() {
+        // Defensive: `..` is two `.` tokens, not anything special. There's no
+        // place in Frey today that uses `..`, but if a future range syntax
+        // appears it must be a distinct multi-char token.
+        assert_eq!(
+            kinds(".."),
+            vec![TokenKind::Dot, TokenKind::Dot, TokenKind::Eof]
+        );
+    }
+
+    #[test]
     fn mut_is_no_longer_a_keyword() {
         // After mut was removed, `mut` is just an identifier.
         assert_eq!(

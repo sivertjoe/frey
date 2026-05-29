@@ -134,7 +134,22 @@ pub fn tokenize_at(src: &str, base: usize) -> Result<Vec<Token>, Error> {
                 tokens.push(tok);
             }
             '.' => {
-                tokens.push(cursor.single(TokenKind::Dot));
+                // `...` (variadic marker — only meaningful in `extern` params).
+                if cursor.peek_second() == Some('.')
+                    && cursor.peek_nth(2) == Some('.')
+                {
+                    let start = cursor.position();
+                    cursor.bump();
+                    cursor.bump();
+                    cursor.bump();
+                    let end = cursor.position();
+                    tokens.push(Token {
+                        kind: TokenKind::Ellipsis,
+                        span: Span { start, end },
+                    });
+                } else {
+                    tokens.push(cursor.single(TokenKind::Dot));
+                }
             }
             _ => {
                 let start = cursor.position();

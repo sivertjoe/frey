@@ -72,6 +72,7 @@
   "struct"
   "enum"
   "match"
+  "extern"
   "as"
   "import"
   "if"

@@ -358,10 +358,38 @@ impl<'ctx> Codegen<'ctx> {
                 }
             }
             ExprKind::Call(FunctionCall { callee, args }) => {
-                let arg_vals: Vec<BasicValueEnum<'ctx>> = args
-                    .into_iter()
-                    .map(|a| self.lower_expr(a))
-                    .collect::<Result<_, _>>()?;
+                // For varargs (extern C) calls, args past the fixed param
+                // count must obey the C default argument promotions: f32 → f64.
+                // (i32 stays i32; i8/i16 → i32 would apply if Frey had those
+                // smaller types — it doesn't widen i8 today.)
+                let (fixed_arity, is_vararg) = if let Ty::Function {
+                    params, varargs, ..
+                } = &callee.ty
+                {
+                    (params.len(), *varargs)
+                } else {
+                    (args.len(), false)
+                };
+
+                let mut arg_vals: Vec<BasicValueEnum<'ctx>> = Vec::with_capacity(args.len());
+                for (i, a) in args.into_iter().enumerate() {
+                    let in_vararg_slot = is_vararg && i >= fixed_arity;
+                    let promote_f32 = in_vararg_slot
+                        && matches!(a.ty, Ty::Float | Ty::F32);
+                    let v = self.lower_expr(a)?;
+                    let v = if promote_f32 {
+                        self.builder
+                            .build_float_ext(
+                                v.into_float_value(),
+                                self.context.f64_type(),
+                                "",
+                            )?
+                            .into()
+                    } else {
+                        v
+                    };
+                    arg_vals.push(v);
+                }
 
                 let arg_metadata: Vec<BasicMetadataValueEnum<'ctx>> =
                     arg_vals.iter().map(|v| (*v).into()).collect();
@@ -436,6 +464,9 @@ impl<'ctx> Codegen<'ctx> {
             } => self.lower_enum_construct(&enum_name, variant_index, args),
             ExprKind::Match { scrutinee, arms } => self.lower_match(*scrutinee, arms, expr.ty),
             ExprKind::ZeroInit(ty) => Ok(zero_value(self.lower_ty(&ty))),
+            ExprKind::ExternFunction { .. } => {
+                unreachable!("extern function declarations are top-level, not expressions")
+            }
             ExprKind::TypeValue(_) | ExprKind::CompError(_) => {
                 unreachable!("comptime-only nodes are eliminated during specialization")
             }

@@ -522,6 +522,7 @@ impl Lower {
         let ty = Ty::Function {
             params: param_tys.clone(),
             return_ty: Box::new(return_ty.clone()),
+            varargs: false,
         };
 
         let id = self.id_gen.fresh();
@@ -561,6 +562,73 @@ impl Lower {
                 span: d.span,
                 kind: ErrorKind::AlreadyDefined { name: d.name },
             });
+        }
+
+        // `let name = extern (...);` — only allowed at top level. Builds a
+        // function-typed binding whose value is an ExternFunction marker;
+        // codegen registers the corresponding LLVM symbol with External
+        // linkage and no body.
+        if let Some(value_ast) = &d.value
+            && matches!(value_ast.kind, ast::ExprKind::ExternFunction { .. })
+        {
+            if self.scopes.len() > 1 {
+                return Err(Error {
+                    span: d.span,
+                    kind: ErrorKind::ExternMustBeTopLevel,
+                });
+            }
+            let value_ast = d.value.unwrap();
+            let span = value_ast.span;
+            let ast::ExprKind::ExternFunction {
+                c_name,
+                params: ast_params,
+                varargs,
+                return_ty,
+            } = value_ast.kind
+            else {
+                unreachable!();
+            };
+            let mut hir_params = Vec::with_capacity(ast_params.len());
+            for p in ast_params {
+                let ty = self.lower_type(&p.ty)?;
+                let id = self.id_gen.fresh();
+                hir_params.push(Param {
+                    id,
+                    span: p.span,
+                    name: p.name,
+                    ty,
+                });
+            }
+            let ret_ty = match return_ty {
+                Some(t) => self.lower_type(&t)?,
+                None => Ty::Unit,
+            };
+            let fn_ty = Ty::Function {
+                params: hir_params.iter().map(|p| p.ty.clone()).collect(),
+                return_ty: Box::new(ret_ty.clone()),
+                varargs,
+            };
+            let id = self.id_gen.fresh();
+            self.current_scope_mut().insert(d.name.clone(), id);
+            self.bindings.insert(id, fn_ty.clone());
+            self.overloads.entry(d.name.clone()).or_default().push(id);
+            let c_name = c_name.unwrap_or_else(|| d.name.clone());
+            return Ok(Some(Declaration {
+                id,
+                span: d.span,
+                name: d.name,
+                ty: fn_ty.clone(),
+                value: Expr {
+                    span,
+                    ty: fn_ty,
+                    kind: ExprKind::ExternFunction {
+                        c_name,
+                        params: hir_params,
+                        return_ty: ret_ty,
+                        varargs,
+                    },
+                },
+            }));
         }
 
         // Pre-registered top-level functions: lower the body using the
@@ -707,6 +775,7 @@ impl Lower {
         let fn_ty = Ty::Function {
             params: hir_params.iter().map(|p| p.ty.clone()).collect(),
             return_ty: Box::new(sig.return_ty.clone()),
+            varargs: false,
         };
         Ok(Expr {
             span,
@@ -826,6 +895,10 @@ impl Lower {
             ast::ExprKind::Closure { params, body } => {
                 self.lower_closure(params, *body, hint, e.span)
             }
+            ast::ExprKind::ExternFunction { .. } => Err(Error {
+                span: e.span,
+                kind: ErrorKind::ExternMustBeTopLevel,
+            }),
             ast::ExprKind::Call {
                 callee,
                 type_args,
@@ -1335,7 +1408,7 @@ impl Lower {
         explicit_type_args: Vec<Ty>,
         span: Span,
     ) -> Result<Expr, Error> {
-        let Ty::Function { params, return_ty } = callee.ty.clone() else {
+        let Ty::Function { params, return_ty, .. } = callee.ty.clone() else {
             return Err(Error {
                 span: callee.span,
                 kind: ErrorKind::NotCallable {
@@ -1727,6 +1800,7 @@ impl Lower {
         let ty = Ty::Function {
             params: param_tys,
             return_ty: Box::new(return_ty.clone()),
+            varargs: false,
         };
 
         let func = Function {
@@ -1889,6 +1963,7 @@ impl Lower {
         let Some(Ty::Function {
             params: hint_params,
             return_ty: hint_return,
+            ..
         }) = hint
         else {
             return Err(Error {
@@ -1951,6 +2026,7 @@ impl Lower {
         let fn_ty = Ty::Function {
             params: hir_params.iter().map(|p| p.ty.clone()).collect(),
             return_ty: Box::new(return_ty.clone()),
+            varargs: false,
         };
         let func = Function {
             params: hir_params,
@@ -2096,7 +2172,11 @@ impl Lower {
                     .map(|p| self.lower_type(p))
                     .collect::<Result<Vec<_>, _>>()?;
                 let return_ty = Box::new(self.lower_type(return_ty)?);
-                Ok(Ty::Function { params, return_ty })
+                Ok(Ty::Function {
+                    params,
+                    return_ty,
+                    varargs: false,
+                })
             }
             ast::TypeExprKind::Ptr(target) => {
                 let target = Box::new(self.lower_type(target)?);
@@ -3016,13 +3096,21 @@ impl Lower {
                 element: Box::new(self.substitute_ty(element, subst)),
                 count: *count,
             },
-            Ty::Function { params, return_ty } => {
+            Ty::Function {
+                params,
+                return_ty,
+                varargs,
+            } => {
                 let params: Vec<Ty> = params
                     .iter()
                     .map(|p| self.substitute_ty(p, subst))
                     .collect();
                 let return_ty = Box::new(self.substitute_ty(return_ty, subst));
-                Ty::Function { params, return_ty }
+                Ty::Function {
+                    params,
+                    return_ty,
+                    varargs: *varargs,
+                }
             }
             Ty::GenericStruct { name, args } => {
                 let new_args: Vec<Ty> = args.iter().map(|a| self.substitute_ty(a, subst)).collect();
@@ -3126,10 +3214,12 @@ impl Lower {
                     expected: Ty::Function {
                         params: template.params.iter().map(|p| p.ty.clone()).collect(),
                         return_ty: Box::new(template.return_ty.clone()),
+                        varargs: false,
                     },
                     found: Ty::Function {
                         params: arg_tys.to_vec(),
                         return_ty: Box::new(Ty::Unit),
+                        varargs: false,
                     },
                 },
             });
@@ -3192,6 +3282,7 @@ impl Lower {
         let new_fn_ty = Ty::Function {
             params: new_params.iter().map(|p| p.ty.clone()).collect(),
             return_ty: Box::new(new_return_ty.clone()),
+            varargs: false,
         };
         self.bindings.insert(new_id, new_fn_ty.clone());
 
@@ -3497,6 +3588,11 @@ impl Lower {
             }
             ExprKind::ZeroInit(ty) => {
                 *ty = self.substitute_ty(ty, subst);
+            }
+            ExprKind::ExternFunction { .. } => {
+                // Extern decls never appear inside a generic body — they're
+                // always top-level — so substitution can't reach them.
+                unreachable!("ExternFunction never substitutes");
             }
         }
         if let Some(ty) = updated_call_ty {

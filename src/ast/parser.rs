@@ -825,6 +825,81 @@ impl Parser {
         })
     }
 
+    /// `extern ["c_name"] (params [, ...]) [-> Ret]` — a function value backed
+    /// by an external C symbol. `...` is allowed only here.
+    fn parse_extern_function(&mut self) -> Result<Expr, Error> {
+        let start = self.expect(TokenKind::Extern)?.span;
+
+        let c_name = match self.iter.peek().map(|t| &t.kind) {
+            Some(TokenKind::Literal(Literal::Str(_))) => {
+                let tok = self.iter.consume().expect("checked");
+                let TokenKind::Literal(Literal::Str(s)) = tok.kind else {
+                    unreachable!();
+                };
+                Some(s)
+            }
+            _ => None,
+        };
+
+        self.expect(TokenKind::LeftParen)?;
+        let mut params = Vec::new();
+        let mut varargs = false;
+        while !self.check(TokenKind::RightParen) {
+            if !params.is_empty() || varargs {
+                self.expect(TokenKind::Comma)?;
+                if self.check(TokenKind::RightParen) {
+                    break;
+                }
+            }
+            if self.check(TokenKind::Ellipsis) {
+                let ell = self.expect(TokenKind::Ellipsis)?;
+                if varargs {
+                    return Err(Error::unexpected(
+                        &Token {
+                            kind: TokenKind::Ellipsis,
+                            span: ell.span,
+                        },
+                        "only one `...` allowed",
+                    ));
+                }
+                varargs = true;
+                continue;
+            }
+            let p_start = self.iter.peek().expect("lexer emits eof").span;
+            let name = self.ident()?;
+            self.expect(TokenKind::Colon)?;
+            let ty = self.parse_type()?;
+            params.push(Param {
+                id: self.id_gen.fresh(),
+                span: p_start.join(ty.span),
+                name,
+                ty,
+            });
+        }
+        let mut end = self.expect(TokenKind::RightParen)?.span;
+
+        let return_ty = if self.check(TokenKind::Minus) {
+            self.expect(TokenKind::Minus)?;
+            self.expect(TokenKind::GreaterThan)?;
+            let ty = self.parse_type()?;
+            end = ty.span;
+            Some(ty)
+        } else {
+            None
+        };
+
+        Ok(Expr {
+            id: self.id_gen.fresh(),
+            span: start.join(end),
+            kind: ExprKind::ExternFunction {
+                c_name,
+                params,
+                varargs,
+                return_ty,
+            },
+        })
+    }
+
     fn parse_struct_def(&mut self) -> Result<Expr, Error> {
         let start = self.expect(TokenKind::Struct)?.span;
 
@@ -1120,6 +1195,7 @@ impl Parser {
             TokenKind::Struct => return self.parse_struct_def(),
             TokenKind::Enum => return self.parse_enum_def(),
             TokenKind::Match => return self.parse_match(),
+            TokenKind::Extern => return self.parse_extern_function(),
             // A leading generic parameter list introduces a generic function
             // literal: `<$K, $V>(params) -> ret { body }`.
             TokenKind::LessThan => {

@@ -79,46 +79,57 @@ impl<'ctx> Codegen<'ctx> {
         self.context.struct_type(&field_types, false)
     }
 
-    pub fn lower_fn_type(&self, params: &[Param], return_ty: &Ty) -> FunctionType<'ctx> {
+    pub fn lower_fn_type(
+        &self,
+        params: &[Param],
+        return_ty: &Ty,
+        varargs: bool,
+    ) -> FunctionType<'ctx> {
         let param_types: Vec<BasicMetadataTypeEnum<'ctx>> =
             params.iter().map(|p| self.lower_ty(&p.ty).into()).collect();
-        self.fn_type_with_return(&param_types, return_ty)
+        self.fn_type_with_return(&param_types, return_ty, varargs)
     }
 
     pub fn fn_type_for_function_ty(&self, fn_ty: &Ty) -> FunctionType<'ctx> {
-        let Ty::Function { params, return_ty } = fn_ty else {
+        let Ty::Function {
+            params,
+            return_ty,
+            varargs,
+        } = fn_ty
+        else {
             panic!("expected function type, got {fn_ty:?}");
         };
         let param_types: Vec<BasicMetadataTypeEnum<'ctx>> =
             params.iter().map(|p| self.lower_ty(p).into()).collect();
-        self.fn_type_with_return(&param_types, return_ty)
+        self.fn_type_with_return(&param_types, return_ty, *varargs)
     }
 
     fn fn_type_with_return(
         &self,
         param_types: &[BasicMetadataTypeEnum<'ctx>],
         return_ty: &Ty,
+        varargs: bool,
     ) -> FunctionType<'ctx> {
         match return_ty {
-            Ty::Unit => self.context.bool_type().fn_type(param_types, false),
-            Ty::I8 | Ty::U8 => self.context.i8_type().fn_type(param_types, false),
+            Ty::Unit => self.context.bool_type().fn_type(param_types, varargs),
+            Ty::I8 | Ty::U8 => self.context.i8_type().fn_type(param_types, varargs),
             Ty::Int | Ty::UInt | Ty::I32 | Ty::U32 => {
-                self.context.i32_type().fn_type(param_types, false)
+                self.context.i32_type().fn_type(param_types, varargs)
             }
-            Ty::I64 | Ty::U64 => self.context.i64_type().fn_type(param_types, false),
-            Ty::Float | Ty::F32 => self.context.f32_type().fn_type(param_types, false),
-            Ty::F64 => self.context.f64_type().fn_type(param_types, false),
+            Ty::I64 | Ty::U64 => self.context.i64_type().fn_type(param_types, varargs),
+            Ty::Float | Ty::F32 => self.context.f32_type().fn_type(param_types, varargs),
+            Ty::F64 => self.context.f64_type().fn_type(param_types, varargs),
             Ty::Function { .. } | Ty::Ptr(_) => self
                 .context
                 .ptr_type(AddressSpace::default())
-                .fn_type(param_types, false),
+                .fn_type(param_types, varargs),
             Ty::Array { element, count } => self
                 .lower_ty(element)
                 .array_type(*count as u32)
-                .fn_type(param_types, false),
-            Ty::Struct(name) => self.struct_llvm[name].fn_type(param_types, false),
-            Ty::Tuple(elems) => self.tuple_llvm_type(elems).fn_type(param_types, false),
-            Ty::Enum(name) => self.enum_llvm[name].fn_type(param_types, false),
+                .fn_type(param_types, varargs),
+            Ty::Struct(name) => self.struct_llvm[name].fn_type(param_types, varargs),
+            Ty::Tuple(elems) => self.tuple_llvm_type(elems).fn_type(param_types, varargs),
+            Ty::Enum(name) => self.enum_llvm[name].fn_type(param_types, varargs),
             Ty::TypeVar(_) | Ty::GenericStruct { .. } | Ty::GenericEnum { .. } => {
                 unreachable!(
                     "specialization should have eliminated TypeVars, GenericStructs, and GenericEnums"

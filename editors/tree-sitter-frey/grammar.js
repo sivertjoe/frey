@@ -149,6 +149,7 @@ module.exports = grammar({
         $.string_literal,
         $.type_value,
         $.function_literal,
+        $.extern_function,
         $.struct_definition,
         $.enum_definition,
         $.struct_literal,
@@ -184,6 +185,18 @@ module.exports = grammar({
         optional(seq("->", field("return_type", $._type))),
         field("body", $.block),
       ),
+
+    extern_function: ($) =>
+      seq(
+        "extern",
+        optional(field("c_name", $.string_literal)),
+        $.extern_param_list,
+        optional(seq("->", field("return_type", $._type))),
+      ),
+
+    extern_param_list: ($) =>
+      seq("(", sepBy(",", choice($.parameter, $.ellipsis)), ")"),
+    ellipsis: (_) => "...",
 
     parameter_list: ($) => seq("(", sepBy(",", $.parameter), ")"),
     parameter: ($) =>

@@ -40,6 +40,10 @@
           "named": true
         },
         {
+          "type": "extern_function",
+          "named": true
+        },
+        {
           "type": "field_expression",
           "named": true
         },
@@ -156,6 +160,10 @@
         },
         {
           "type": "enum_definition",
+          "named": true
+        },
+        {
+          "type": "extern_function",
           "named": true
         },
         {
@@ -325,6 +333,10 @@
             "named": true
           },
           {
+            "type": "extern_function",
+            "named": true
+          },
+          {
             "type": "field_expression",
             "named": true
           },
@@ -436,6 +448,10 @@
           },
           {
             "type": "enum_definition",
+            "named": true
+          },
+          {
+            "type": "extern_function",
             "named": true
           },
           {
@@ -556,6 +572,10 @@
           },
           {
             "type": "enum_definition",
+            "named": true
+          },
+          {
+            "type": "extern_function",
             "named": true
           },
           {
@@ -751,6 +771,10 @@
             "named": true
           },
           {
+            "type": "extern_function",
+            "named": true
+          },
+          {
             "type": "field_expression",
             "named": true
           },
@@ -902,6 +926,10 @@
           "named": true
         },
         {
+          "type": "extern_function",
+          "named": true
+        },
+        {
           "type": "field_expression",
           "named": true
         },
@@ -1027,6 +1055,10 @@
           },
           {
             "type": "enum_definition",
+            "named": true
+          },
+          {
+            "type": "extern_function",
             "named": true
           },
           {
@@ -1203,6 +1235,10 @@
           "named": true
         },
         {
+          "type": "extern_function",
+          "named": true
+        },
+        {
           "type": "field_expression",
           "named": true
         },
@@ -1375,6 +1411,10 @@
             "named": true
           },
           {
+            "type": "extern_function",
+            "named": true
+          },
+          {
             "type": "field_expression",
             "named": true
           },
@@ -1505,6 +1545,10 @@
           "named": true
         },
         {
+          "type": "extern_function",
+          "named": true
+        },
+        {
           "type": "field_expression",
           "named": true
         },
@@ -1621,6 +1665,10 @@
         },
         {
           "type": "enum_definition",
+          "named": true
+        },
+        {
+          "type": "extern_function",
           "named": true
         },
         {
@@ -1816,6 +1864,10 @@
           "named": true
         },
         {
+          "type": "extern_function",
+          "named": true
+        },
+        {
           "type": "field_expression",
           "named": true
         },
@@ -1895,6 +1947,89 @@
     }
   },
   {
+    "type": "extern_function",
+    "named": true,
+    "fields": {
+      "c_name": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "string_literal",
+            "named": true
+          }
+        ]
+      },
+      "return_type": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "array_type",
+            "named": true
+          },
+          {
+            "type": "function_type",
+            "named": true
+          },
+          {
+            "type": "generic_application",
+            "named": true
+          },
+          {
+            "type": "generic_type",
+            "named": true
+          },
+          {
+            "type": "pointer_type",
+            "named": true
+          },
+          {
+            "type": "primitive_type",
+            "named": true
+          },
+          {
+            "type": "tuple_type",
+            "named": true
+          },
+          {
+            "type": "type_identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "extern_param_list",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "extern_param_list",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "ellipsis",
+          "named": true
+        },
+        {
+          "type": "parameter",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "field_expression",
     "named": true,
     "fields": {
@@ -1943,6 +2078,10 @@
         },
         {
           "type": "enum_definition",
+          "named": true
+        },
+        {
+          "type": "extern_function",
           "named": true
         },
         {
@@ -2072,6 +2211,10 @@
           },
           {
             "type": "enum_definition",
+            "named": true
+          },
+          {
+            "type": "extern_function",
             "named": true
           },
           {
@@ -2347,6 +2490,10 @@
             "named": true
           },
           {
+            "type": "extern_function",
+            "named": true
+          },
+          {
             "type": "field_expression",
             "named": true
           },
@@ -2458,6 +2605,10 @@
           },
           {
             "type": "enum_definition",
+            "named": true
+          },
+          {
+            "type": "extern_function",
             "named": true
           },
           {
@@ -2607,6 +2758,10 @@
             "named": true
           },
           {
+            "type": "extern_function",
+            "named": true
+          },
+          {
             "type": "field_expression",
             "named": true
           },
@@ -2742,6 +2897,10 @@
           },
           {
             "type": "enum_definition",
+            "named": true
+          },
+          {
+            "type": "extern_function",
             "named": true
           },
           {
@@ -2944,6 +3103,10 @@
           "named": true
         },
         {
+          "type": "extern_function",
+          "named": true
+        },
+        {
           "type": "field_expression",
           "named": true
         },
@@ -3060,6 +3223,10 @@
         },
         {
           "type": "enum_definition",
+          "named": true
+        },
+        {
+          "type": "extern_function",
           "named": true
         },
         {
@@ -3230,6 +3397,10 @@
           "named": true
         },
         {
+          "type": "extern_function",
+          "named": true
+        },
+        {
           "type": "field_expression",
           "named": true
         },
@@ -3346,6 +3517,10 @@
         },
         {
           "type": "enum_definition",
+          "named": true
+        },
+        {
+          "type": "extern_function",
           "named": true
         },
         {
@@ -3606,6 +3781,10 @@
           "named": true
         },
         {
+          "type": "extern_function",
+          "named": true
+        },
+        {
           "type": "field_expression",
           "named": true
         },
@@ -3722,6 +3901,10 @@
         },
         {
           "type": "enum_definition",
+          "named": true
+        },
+        {
+          "type": "extern_function",
           "named": true
         },
         {
@@ -3852,6 +4035,10 @@
         },
         {
           "type": "enum_definition",
+          "named": true
+        },
+        {
+          "type": "extern_function",
           "named": true
         },
         {
@@ -4100,6 +4287,10 @@
           "named": true
         },
         {
+          "type": "extern_function",
+          "named": true
+        },
+        {
           "type": "field_expression",
           "named": true
         },
@@ -4252,6 +4443,10 @@
           },
           {
             "type": "enum_definition",
+            "named": true
+          },
+          {
+            "type": "extern_function",
             "named": true
           },
           {
@@ -4488,6 +4683,10 @@
     "named": false
   },
   {
+    "type": "ellipsis",
+    "named": true
+  },
+  {
     "type": "else",
     "named": false
   },
@@ -4498,6 +4697,10 @@
   {
     "type": "escape_sequence",
     "named": true
+  },
+  {
+    "type": "extern",
+    "named": false
   },
   {
     "type": "f32",
