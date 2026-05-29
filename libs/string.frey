@@ -42,7 +42,7 @@ let destroy = (s: *String) {
 
 let len = (s: *String) -> Int { s.len };
 
-let byte_at = (s: *String, i: Int) -> u8 { s.data[i] };
+let get = (s: *String, i: Int) -> u8 { s.data[i] };
 
 // Returns a null-terminated pointer suitable for passing to libc. The
 // pointer is invalidated by any subsequent mutation of `s`.

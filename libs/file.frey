@@ -1,0 +1,44 @@
+
+import "vec";
+import "string";
+import "result";
+
+let FILE = struct {};
+let fopen  = extern (path: *u8, mode: *u8) -> *FILE;
+let fclose = extern (fp: *FILE) -> Int;
+let fgetc  = extern (fp: *FILE) -> Int;       // returns -1 on EOF, else 0..255
+
+let FileError = enum {
+    NotFound,
+    ReadError,
+};
+
+let read_lines = (path: *u8) -> Result<Vec<String>, FileError> {
+    let fp = fopen(path, "r");
+    if fp == null {
+        Err(NotFound)
+    } else {
+        let lines: Vec<String>;
+        lines.init();
+
+        let cur = str_new();
+        let c = fgetc(fp);
+        while c != -1 {
+            if c == '\n' as Int {
+                lines.add(cur);
+                cur = str_new();
+            } else {
+                cur.push_byte(c as u8);
+            }
+            c = fgetc(fp);
+        }
+        if cur.len > 0 {
+            lines.add(cur);
+        } else {
+            cur.destroy();
+        }
+
+        fclose(fp);
+        Ok(lines)
+    }
+};
