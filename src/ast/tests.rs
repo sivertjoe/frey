@@ -1335,63 +1335,82 @@ mod tests {
 
     // ---- Pipe operator ----
 
+    /// Asserts the call has a method-call shape: `recv.name(args)`, i.e.
+    /// the callee is a `Field { target: recv, name }`. Returns the receiver
+    /// and the trailing (non-receiver) args.
+    fn unwrap_method_call<'a>(
+        callee: &'a Expr,
+        args: &'a [Expr],
+        name: &str,
+    ) -> (&'a Expr, &'a [Expr]) {
+        let ExprKind::Field {
+            target,
+            name: field_name,
+        } = &callee.kind
+        else {
+            panic!("expected Field callee, got {:?}", callee.kind);
+        };
+        assert_eq!(field_name, name);
+        (target, args)
+    }
+
     #[test]
     fn pipe_no_arg_call() {
-        // `5 |> foo()` desugars to `foo(5)`.
+        // `5 |> foo()` desugars to a UFCS-style method call: `5.foo()`.
         let expr = parser("5 |> foo()").parse_expr().unwrap();
         let ExprKind::Call { callee, args, .. } = expr.kind else {
             panic!("expected call, got {:?}", expr.kind);
         };
-        assert_callee_named(&callee, "foo");
-        assert_eq!(args.len(), 1);
-        assert!(matches!(args[0].kind, ExprKind::Const(Const::Int(5))));
+        let (recv, rest) = unwrap_method_call(&callee, &args, "foo");
+        assert!(matches!(recv.kind, ExprKind::Const(Const::Int(5))));
+        assert!(rest.is_empty());
     }
 
     #[test]
     fn pipe_with_existing_args() {
-        // `5 |> add(3)` desugars to `add(5, 3)`.
+        // `5 |> add(3)` desugars to `5.add(3)`.
         let expr = parser("5 |> add(3)").parse_expr().unwrap();
         let ExprKind::Call { callee, args, .. } = expr.kind else {
             panic!("expected call");
         };
-        assert_callee_named(&callee, "add");
-        assert_eq!(args.len(), 2);
-        assert!(matches!(args[0].kind, ExprKind::Const(Const::Int(5))));
-        assert!(matches!(args[1].kind, ExprKind::Const(Const::Int(3))));
+        let (recv, rest) = unwrap_method_call(&callee, &args, "add");
+        assert!(matches!(recv.kind, ExprKind::Const(Const::Int(5))));
+        assert_eq!(rest.len(), 1);
+        assert!(matches!(rest[0].kind, ExprKind::Const(Const::Int(3))));
     }
 
     #[test]
     fn pipe_chains_left_associative() {
-        // `5 |> f() |> g()` desugars to `g(f(5))`.
+        // `5 |> f() |> g()` desugars to `(5.f()).g()`.
         let expr = parser("5 |> f() |> g()").parse_expr().unwrap();
         let ExprKind::Call { callee, args, .. } = expr.kind else {
             panic!("expected outer call");
         };
-        assert_callee_named(&callee, "g");
-        assert_eq!(args.len(), 1);
+        let (outer_recv, outer_rest) = unwrap_method_call(&callee, &args, "g");
+        assert!(outer_rest.is_empty());
         let ExprKind::Call {
             callee: inner_callee,
             args: inner_args,
             ..
-        } = &args[0].kind
+        } = &outer_recv.kind
         else {
-            panic!("expected inner call");
+            panic!("expected inner call as receiver of g");
         };
-        assert_callee_named(inner_callee, "f");
-        assert_eq!(inner_args.len(), 1);
-        assert!(matches!(inner_args[0].kind, ExprKind::Const(Const::Int(5))));
+        let (inner_recv, inner_rest) = unwrap_method_call(inner_callee, inner_args, "f");
+        assert!(matches!(inner_recv.kind, ExprKind::Const(Const::Int(5))));
+        assert!(inner_rest.is_empty());
     }
 
     #[test]
     fn pipe_lhs_takes_full_arithmetic() {
-        // `2 + 3 |> f()` desugars to `f(2 + 3)`, not `2 + f(3)`.
+        // `2 + 3 |> f()` desugars to `(2 + 3).f()`, not `2 + f(3)`.
         let expr = parser("2 + 3 |> f()").parse_expr().unwrap();
         let ExprKind::Call { callee, args, .. } = expr.kind else {
             panic!("expected call");
         };
-        assert_callee_named(&callee, "f");
-        assert_eq!(args.len(), 1);
-        assert!(matches!(args[0].kind, ExprKind::Binary { .. }));
+        let (recv, rest) = unwrap_method_call(&callee, &args, "f");
+        assert!(matches!(recv.kind, ExprKind::Binary { .. }));
+        assert!(rest.is_empty());
     }
 
     #[test]

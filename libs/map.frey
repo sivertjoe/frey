@@ -1,5 +1,6 @@
 import "vec";
 import "option";
+import "iter";
 
 let Bucket = enum<$K, $V> {
     Empty,
@@ -266,4 +267,42 @@ let eq = <$K>(a: K, b: K) -> Int {
         comperror("eq: unsupported key type");
         0
     }
+};
+
+
+// --- iter adaptor ----------------------------------------------------------
+// Walks the bucket array, yielding `(K, V)` for each Filled slot and
+// skipping Empty / Tombstone. The state borrows the map — the caller must
+// keep it alive until the iterator is exhausted.
+
+let MapIterState = struct<$K, $V> {
+    map: *Map<K, V>,
+    i: Int,
+};
+
+let _map_iter_step = <$K, $V>(state: *u8) -> Option<(K, V)> {
+    let s = state as *MapIterState<K, V>;
+    let cap = s.map.vec.len;
+    while s.i < cap {
+        let idx = s.i;
+        s.i = s.i + 1;
+        match s.map.vec.get(idx) {
+            Filled(k, v) -> {
+                return Some((k, v));
+            },
+            Empty -> {
+                // skip
+            },
+            Tombstone -> {
+                // skip
+            }
+        };
+    }
+    None
+};
+
+let iter = <$K, $V>(m: *Map<K, V>) -> Iter<(K, V)> {
+    let st = alloc<MapIterState<K, V>>(1);
+    st[0] = MapIterState<K, V> { map: m, i: 0 };
+    Iter<(K, V)> { state: st as *u8, next_fn: _map_iter_step<K, V> }
 };

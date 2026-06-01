@@ -1,5 +1,8 @@
 // A growable array, allocated on the heap.
 
+import "iter";
+import "option";
+
 let Vec = struct<$T> {
     data: *T,
     len: Int,
@@ -26,4 +29,28 @@ let get = <$T>(v: *Vec<T>, i: Int) -> T {
 
 let destroy = (v: *Vec<$T>) {
     free(v.data);
+};
+
+
+// --- iter adaptor ----------------------------------------------------------
+// Yields each element by value. The state borrows the vec — the caller must
+// keep it alive until the iterator is exhausted.
+
+let VecIterState = struct<$T> {
+    vec: *Vec<T>,
+    i: Int,
+};
+
+let _vec_iter_step = <$T>(state: *u8) -> Option<T> {
+    let s = state as *VecIterState<T>;
+    if s.i >= s.vec.len { return None; }
+    let v = s.vec.data[s.i];
+    s.i = s.i + 1;
+    Some(v)
+};
+
+let iter = <$T>(v: *Vec<T>) -> Iter<T> {
+    let st = alloc<VecIterState<T>>(1);
+    st[0] = VecIterState<T> { vec: v, i: 0 };
+    Iter<T> { state: st as *u8, next_fn: _vec_iter_step<T> }
 };

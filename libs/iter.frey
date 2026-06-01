@@ -1,0 +1,192 @@
+// Lazy iterators via type-erased state + a `next` function pointer.
+//
+// `Iter<T>` is a tiny vtable: an opaque `*u8` pointing at a per-iterator
+// state struct, plus the `next` function that knows how to interpret it.
+// Adding a new source = write one adaptor: `to_iter(*MyCollection<T>) -> Iter<T>`
+// that allocates a state struct and wires up its `next`. The combinators
+// (`map`, `filter`, `take`, …) are written once and work with any source.
+//
+// Lazy: nothing happens until you call `.next()` (or a terminal sink like
+// `count`/`sum`/`for_each`). Each `next` call advances exactly one step
+// through whatever chain you built.
+
+import "option";
+
+let Iter = struct<$T> {
+    state: *u8,
+    next_fn: (*u8) -> Option<T>,
+};
+
+let next = <$T>(it: *Iter<T>) -> Option<T> {
+    (it.next_fn)(it.state)
+};
+
+// `destroy` frees the chain's heap-allocated state. Calls every adaptor's
+// drop_fn by walking the chain.
+let destroy = <$T>(it: *Iter<T>) {
+    free(it.state);
+};
+
+
+// ===========================================================================
+// Adaptors
+// ===========================================================================
+
+// ---- map -------------------------------------------------------------------
+
+let MapState = struct<$T, $U> {
+    inner: Iter<T>,
+    f: (T) -> U,
+};
+
+let _iter_map_step = <$T, $U>(state: *u8) -> Option<U> {
+    let s = state as *MapState<T, U>;
+    match next(&s.inner) {
+        Some(v) -> Some(s.f(v)),
+        None -> None
+    }
+};
+
+let map = <$T, $U>(inner: Iter<T>, f: (T) -> U) -> Iter<U> {
+    let st = alloc<MapState<T, U>>(1);
+    st[0] = MapState<T, U> { inner: inner, f: f };
+    Iter<U> { state: st as *u8, next_fn: _iter_map_step<T, U> }
+};
+
+
+// ---- filter ----------------------------------------------------------------
+
+let FilterState = struct<$T> {
+    inner: Iter<T>,
+    pred: (T) -> Int,
+};
+
+let filter_next = <$T>(state: *u8) -> Option<T> {
+    let s = state as *FilterState<T>;
+    let done = 0;
+    let result: Option<T> = None;
+    while done == 0 {
+        match next(&s.inner) {
+            Some(v) -> {
+                if s.pred(v) {
+                    result = Some(v);
+                    done = 1;
+                }
+            },
+            None -> {
+                done = 1;
+            }
+        };
+    }
+    result
+};
+
+let filter = <$T>(inner: Iter<T>, pred: (T) -> Int) -> Iter<T> {
+    let st = alloc<FilterState<T>>(1);
+    st[0] = FilterState<T> { inner: inner, pred: pred };
+    Iter<T> { state: st as *u8, next_fn: filter_next<T> }
+};
+
+
+// ---- take ------------------------------------------------------------------
+
+let TakeState = struct<$T> {
+    inner: Iter<T>,
+    remaining: Int,
+};
+
+let take_next = <$T>(state: *u8) -> Option<T> {
+    let s = state as *TakeState<T>;
+    if s.remaining <= 0 { return None; }
+    s.remaining = s.remaining - 1;
+    next(&s.inner)
+};
+
+let take = <$T>(inner: Iter<T>, n: Int) -> Iter<T> {
+    let st = alloc<TakeState<T>>(1);
+    st[0] = TakeState<T> { inner: inner, remaining: n };
+    Iter<T> { state: st as *u8, next_fn: take_next<T> }
+};
+
+
+// ===========================================================================
+// Sources
+// ===========================================================================
+
+// ---- range(lo, hi) — half-open --------------------------------------------
+
+let RangeState = struct {
+    cur: Int,
+    hi:  Int,
+};
+
+let range_next = (state: *u8) -> Option<Int> {
+    let s = state as *RangeState;
+    if s.cur >= s.hi { return None; }
+    let v = s.cur;
+    s.cur = s.cur + 1;
+    Some(v)
+};
+
+let range = (lo: Int, hi: Int) -> Iter<Int> {
+    let st = alloc<RangeState>(1);
+    st[0] = RangeState { cur: lo, hi: hi };
+    Iter<Int> { state: st as *u8, next_fn: range_next }
+};
+
+
+// ===========================================================================
+// Sinks (terminal operations — these consume the iterator)
+// ===========================================================================
+
+// `f` returns an Int (discarded). Frey doesn't have an explicit `Unit`
+// in function-pointer types yet, so callers should write `(x) -> Int { ...; 0 }`.
+let for_each = <$T>(it: Iter<T>, f: (T) -> Int) {
+    let cur = it;
+    let done = 0;
+    while done == 0 {
+        match next(&cur) {
+            Some(v) -> { f(v); },
+            None    -> { done = 1; }
+        };
+    }
+};
+
+let count = <$T>(it: Iter<T>) -> Int {
+    let cur = it;
+    let n = 0;
+    let done = 0;
+    while done == 0 {
+        match next(&cur) {
+            Some(_) -> { n = n + 1; },
+            None    -> { done = 1; }
+        };
+    }
+    n
+};
+
+let sum = (it: Iter<Int>) -> Int {
+    let cur = it;
+    let total = 0;
+    let done = 0;
+    while done == 0 {
+        match next(&cur) {
+            Some(v) -> { total = total + v; },
+            None    -> { done = 1; }
+        };
+    }
+    total
+};
+
+let fold = <$T, $A>(it: Iter<T>, init: A, f: (A, T) -> A) -> A {
+    let cur = it;
+    let acc = init;
+    let done = 0;
+    while done == 0 {
+        match next(&cur) {
+            Some(v) -> { acc = f(acc, v); },
+            None    -> { done = 1; }
+        };
+    }
+    acc
+};

@@ -70,7 +70,13 @@ impl Typechecker {
             }
             ExprKind::Cast { target, expr } => {
                 self.check_expr(expr)?;
-                if !expr.ty.is_number() || !target.is_number() {
+                // Allow: number ↔ number, pointer ↔ pointer.
+                // Pointer ↔ pointer is a no-op bitcast (LLVM uses opaque
+                // pointers), enabling type-erased state and `void*`-style
+                // tricks like iterator vtables.
+                let ok = (expr.ty.is_number() && target.is_number())
+                    || (matches!(expr.ty, Ty::Ptr(_)) && matches!(target, Ty::Ptr(_)));
+                if !ok {
                     return Err(Error {
                         span: expr.span,
                         kind: ErrorKind::IllegalCast { ty: target.clone() },

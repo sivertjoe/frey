@@ -7,6 +7,7 @@ import "libs/option";
 import "libs/result";
 import "libs/string";
 import "libs/map";
+import "libs/iter";
 
 // ---------------------------------------------------------------------------
 // Extern functions (C FFI). Both styles: bare name, and ptr-to-empty-struct
@@ -389,6 +390,59 @@ let section_misc = () {
 };
 
 // ---------------------------------------------------------------------------
+// Iterator section — combinator callbacks written inline as `{x : ...}`
+// closure literals. Each closure's parameter type is inferred from the
+// surrounding call's signature (here `map`, `filter`, `for_each`, `fold`).
+// ---------------------------------------------------------------------------
+
+let section_iter = () {
+    print("=== lazy iterators ===\n");
+
+    // Source + adaptor + sink: range |> map |> sum.
+    let s = range(0, 10) |> map({ x : x * x }) |> sum();
+    print("  sum of 0..10 squares = % (expected 285)\n", s);
+
+    // filter + take, terminated by for_each. Each callback is inline.
+    // (Closure bodies are a single expression; wrap multi-step bodies in a
+    // block expression `{ ...; tail }`.)
+    print("  evens in 0..20, first 5:\n");
+    range(0, 20)
+        |> filter({ x : x % 2 == 0  })
+        |> take(5)
+        |> for_each({ x : { print("    %\n", x); 0 } });
+
+    // Vec.iter — auto-refs `v` via the `|>`-as-method-call rewrite.
+    let v: Vec<Int>;
+    v.init();
+    v.add(1); v.add(2); v.add(3); v.add(4); v.add(5);
+    let doubled_sum = v |> iter() |> map({ x : x * 2 }) |> sum();
+    print("  doubled sum of [1..5] = % (expected 30)\n", doubled_sum);
+    v.destroy();
+
+    // Map.iter yields (K, V) tuples; closure unpacks via `.0` / `.1`.
+    let m: Map<*u8, Int>;
+    m.init();
+    m.insert("alpha", 1); m.insert("beta", 2);
+    m.insert("gamma", 3); m.insert("delta", 4);
+    print("  Map entries:\n");
+    m |> iter() |> for_each({ kv : { print("    % -> %\n", kv.0, kv.1); 0 } });
+    let value_sum = m |> iter() |> map({ kv : kv.1 }) |> sum();
+    print("  sum of map values = % (expected 10)\n", value_sum);
+    m.destroy();
+
+    // Two-arg closure for `fold`'s reducer.
+    let product = range(1, 6) |> fold(1, { a, b : a * b });
+    print("  5! = % (expected 120)\n", product);
+
+    // Long chain, all closures inline.
+    let n = range(0, 100)
+        |> map({ x : x * x })
+        |> filter({ x :  x > 10  })
+        |> count();
+    print("  squares > 10 in 0..100 = % (expected 96)\n", n);
+};
+
+// ---------------------------------------------------------------------------
 // Driver.
 // ---------------------------------------------------------------------------
 
@@ -410,6 +464,7 @@ let main = () -> Int {
     section_map();              flush();
     section_heap();             flush();
     section_extern_io();        flush();
+    section_iter();             flush();
     section_misc();             flush();
     print("=== all sections finished ===\n");
     flush();

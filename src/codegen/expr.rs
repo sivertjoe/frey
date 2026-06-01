@@ -18,6 +18,11 @@ impl<'ctx> Codegen<'ctx> {
                 let source_ty = expr.ty.clone();
                 let target_ty = target;
                 let source_val = self.lower_expr(*expr)?;
+                // Pointer → pointer is a no-op under opaque-pointer LLVM —
+                // the value is already a `ptr`, so we just forward it.
+                if matches!(source_ty, Ty::Ptr(_)) && matches!(target_ty, Ty::Ptr(_)) {
+                    return Ok(source_val);
+                }
                 self.lower_numeric_cast(source_val, &source_ty, &target_ty)
             }
             ExprKind::Const(Const::Float(f)) => {

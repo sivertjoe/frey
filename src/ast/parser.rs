@@ -646,6 +646,33 @@ impl Parser {
                 type_args,
                 mut args,
             } => {
+                // `x |> f(args)` rewrites to `x.f(args)` when the callee is a
+                // bare identifier — same shape as a method call, so the HIR
+                // routes it through UFCS lowering with the same auto-ref
+                // treatment of the receiver. For non-identifier callees
+                // (e.g. `x |> obj.f(args)`), keep the legacy splice — `x`
+                // becomes the first arg of `obj.f`.
+                if let ExprKind::Identifier(name) = callee.kind {
+                    let callee_span = callee.span;
+                    let lhs_span = lhs.span;
+                    let field = Expr {
+                        id: self.id_gen.fresh(),
+                        span: lhs_span.join(callee_span),
+                        kind: ExprKind::Field {
+                            target: Box::new(lhs),
+                            name,
+                        },
+                    };
+                    return Ok(Expr {
+                        id: self.id_gen.fresh(),
+                        span,
+                        kind: ExprKind::Call {
+                            callee: Box::new(field),
+                            type_args,
+                            args,
+                        },
+                    });
+                }
                 args.insert(0, lhs);
                 Ok(Expr {
                     id: self.id_gen.fresh(),

@@ -16,6 +16,7 @@ use crate::{
     lexer::types::Span,
 };
 
+#[derive(Clone)]
 struct PendingFnSig {
     scope: HashMap<String, TypeVarId>,
     /// Type-var ids in declaration order. Mirrors what the eventual
@@ -44,6 +45,12 @@ pub struct Lower {
     type_vars: Vec<TypeVar>,
     type_var_scopes: Vec<HashMap<String, TypeVarId>>,
     pending_fn_sigs: HashMap<LocalId, PendingFnSig>,
+    /// Declaration-order type-var ids per function, captured during
+    /// pre-registration. Outlives `pending_fn_sigs` (which is consumed when
+    /// the body lowers) so `register_if_generic_template` can still see the
+    /// original arity for `<$T, $U>` even when the signature mentions only
+    /// some of them — the rest may still appear in the body.
+    fn_decl_type_var_ids: HashMap<LocalId, Vec<TypeVarId>>,
     /// Stack of "the return type of the function whose body we're lowering
     /// right now". `return e;` reads the top to push it as a hint to `e`,
     /// so `return None;` infers from the surrounding function's return type.
@@ -97,6 +104,7 @@ impl Lower {
             type_vars: Vec::default(),
             type_var_scopes: Vec::default(),
             pending_fn_sigs: HashMap::default(),
+            fn_decl_type_var_ids: HashMap::default(),
             return_ty_stack: Vec::default(),
             templates: HashMap::default(),
             specialization_cache: HashMap::default(),
@@ -474,18 +482,27 @@ impl Lower {
         if !is_generic {
             return false;
         }
-        // Collect TypeVarIds in declaration order.
-        let mut seen = Vec::new();
+        // Start with declaration-order type-var ids captured at pre-registration
+        // (preserves `<$T, $U>` arity even when only some appear in the
+        // signature). Then append any TypeVarIds the signature mentions but
+        // declaration didn't — for anonymous generics like `(v: *Vec<$T>, ...)`
+        // the original `type_params` list is empty, and the `$T` only shows
+        // up by walking the signature.
+        let mut type_var_ids = self
+            .fn_decl_type_var_ids
+            .get(&decl.id)
+            .cloned()
+            .unwrap_or_default();
         for p in &func.params {
-            collect_typevars(&p.ty, &mut seen);
+            collect_typevars(&p.ty, &mut type_var_ids);
         }
-        collect_typevars(&func.return_ty, &mut seen);
+        collect_typevars(&func.return_ty, &mut type_var_ids);
         self.templates.insert(
             decl.id,
             GenericTemplate {
                 name: decl.name.clone(),
                 span: decl.span,
-                type_var_ids: seen,
+                type_var_ids,
                 params: func.params.clone(),
                 return_ty: func.return_ty.clone(),
                 body: func.body.clone(),
@@ -547,6 +564,7 @@ impl Lower {
         self.overloads.entry(d.name.clone()).or_default().push(id);
         self.fn_id_by_node.insert(d.id, id);
         self.bindings.insert(id, ty);
+        self.fn_decl_type_var_ids.insert(id, type_var_ids.clone());
         self.pending_fn_sigs.insert(
             id,
             PendingFnSig {
@@ -1084,10 +1102,16 @@ impl Lower {
                     && self.overloads.get(name).is_some_and(|c| c.len() > 1)
                 {
                     let name = name.clone();
-                    let lowered_args: Vec<Expr> = args
-                        .into_iter()
-                        .map(|a| self.lower_expr(a))
-                        .collect::<Result<_, _>>()?;
+                    let has_closures = args
+                        .iter()
+                        .any(|a| matches!(a.kind, ast::ExprKind::Closure { .. }));
+                    let lowered_args: Vec<Expr> = if has_closures {
+                        self.lower_overloaded_call_args_with_closures(&name, args)?
+                    } else {
+                        args.into_iter()
+                            .map(|a| self.lower_expr(a))
+                            .collect::<Result<_, _>>()?
+                    };
                     let arg_tys: Vec<Ty> = lowered_args.iter().map(|a| a.ty.clone()).collect();
                     let explicit_type_args: Vec<Ty> = type_args
                         .iter()
@@ -1696,11 +1720,19 @@ impl Lower {
         }
 
         // UFCS: resolve `name` (possibly overloaded) against the receiver and
-        // arguments, then call it as `name(recv, args)`.
-        let lowered_args: Vec<Expr> = args
-            .into_iter()
-            .map(|a| self.lower_expr(a))
-            .collect::<Result<_, _>>()?;
+        // arguments, then call it as `name(recv, args)`. When an arg is a
+        // closure literal, route through the two-pass helper so it can pick
+        // up its parameter types from the narrowed signature.
+        let has_closures = args
+            .iter()
+            .any(|a| matches!(a.kind, ast::ExprKind::Closure { .. }));
+        let lowered_args: Vec<Expr> = if has_closures {
+            self.lower_method_call_args_with_closures(&name, &recv, args)?
+        } else {
+            args.into_iter()
+                .map(|a| self.lower_expr(a))
+                .collect::<Result<_, _>>()?
+        };
         let other_arg_tys: Vec<Ty> = lowered_args.iter().map(|a| a.ty.clone()).collect();
         let (fn_id, recv) = self.resolve_method(&name, recv, &other_arg_tys, span)?;
         let callee = Expr {
@@ -1787,6 +1819,74 @@ impl Lower {
         }
     }
 
+    /// Method-call analogue: receiver-aware version of the closure two-pass.
+    fn lower_method_call_args_with_closures(
+        &mut self,
+        name: &str,
+        recv: &Expr,
+        args: Vec<ast::Expr>,
+    ) -> Result<Vec<Expr>, Error> {
+        let n = args.len();
+        let is_closure: Vec<bool> = args
+            .iter()
+            .map(|a| matches!(a.kind, ast::ExprKind::Closure { .. }))
+            .collect();
+        let mut slots: Vec<Option<Expr>> = (0..n).map(|_| None).collect();
+        let mut pending: Vec<(usize, ast::Expr)> = Vec::new();
+        for (i, a) in args.into_iter().enumerate() {
+            if is_closure[i] {
+                pending.push((i, a));
+            } else {
+                slots[i] = Some(self.lower_expr(a)?);
+            }
+        }
+        let known: Vec<Option<Ty>> = slots
+            .iter()
+            .map(|s| s.as_ref().map(|e| e.ty.clone()))
+            .collect();
+        let hints = self.arg_hints_from_receiver(name, recv, &known);
+        for (i, a) in pending {
+            let hint = hints.as_ref().and_then(|h| h.get(i));
+            slots[i] = Some(self.lower_expr_with_hint(a, hint)?);
+        }
+        Ok(slots.into_iter().map(|s| s.expect("filled")).collect())
+    }
+
+    /// Two-pass lowering of arguments for an overloaded direct call when some
+    /// of them are closure literals: lower the non-closure args first, narrow
+    /// candidates from their types via `arg_hints_from_args`, then lower
+    /// the closures with the resulting per-position hints.
+    fn lower_overloaded_call_args_with_closures(
+        &mut self,
+        name: &str,
+        args: Vec<ast::Expr>,
+    ) -> Result<Vec<Expr>, Error> {
+        let n = args.len();
+        let is_closure: Vec<bool> = args
+            .iter()
+            .map(|a| matches!(a.kind, ast::ExprKind::Closure { .. }))
+            .collect();
+        let mut slots: Vec<Option<Expr>> = (0..n).map(|_| None).collect();
+        let mut pending: Vec<(usize, ast::Expr)> = Vec::new();
+        for (i, a) in args.into_iter().enumerate() {
+            if is_closure[i] {
+                pending.push((i, a));
+            } else {
+                slots[i] = Some(self.lower_expr(a)?);
+            }
+        }
+        let known: Vec<Option<Ty>> = slots
+            .iter()
+            .map(|s| s.as_ref().map(|e| e.ty.clone()))
+            .collect();
+        let hints = self.arg_hints_from_args(name, &known);
+        for (i, a) in pending {
+            let hint = hints.as_ref().and_then(|h| h.get(i));
+            slots[i] = Some(self.lower_expr_with_hint(a, hint)?);
+        }
+        Ok(slots.into_iter().map(|s| s.expect("filled")).collect())
+    }
+
     /// Whether `params` accept `arg_tys`: arity matches and each pair unifies,
     /// treating the parameters' type vars as inference holes.
     fn overload_matches(&self, params: &[Ty], arg_tys: &[Ty]) -> bool {
@@ -1818,6 +1918,123 @@ impl Lower {
             }
         }
         true
+    }
+
+    /// Like `arg_hints_from_receiver` but without a receiver — pre-narrows
+    /// overloads from already-lowered arg types alone. `None` entries mark
+    /// not-yet-lowered positions (closures) and skip unification there.
+    fn arg_hints_from_args(
+        &mut self,
+        name: &str,
+        known_arg_tys: &[Option<Ty>],
+    ) -> Option<Vec<Ty>> {
+        let candidates = self.overloads.get(name).cloned().unwrap_or_default();
+        if candidates.is_empty() {
+            return None;
+        }
+        let n_args = known_arg_tys.len();
+        let mut matched: Vec<(Vec<Ty>, HashMap<TypeVarId, Ty>)> = Vec::new();
+        for id in &candidates {
+            let params = self.fn_params(*id);
+            if params.len() != n_args {
+                continue;
+            }
+            let mut subst = HashMap::new();
+            let mut ok = true;
+            for (param, known) in params.iter().zip(known_arg_tys.iter()) {
+                let Some(arg_ty) = known else { continue };
+                if !try_unify_one(
+                    arg_ty,
+                    param,
+                    &mut subst,
+                    &self.struct_template_origin,
+                    &self.enum_template_origin,
+                ) {
+                    ok = false;
+                    break;
+                }
+            }
+            if ok {
+                matched.push((params.clone(), subst));
+            }
+        }
+        if matched.len() != 1 {
+            return None;
+        }
+        let (params, subst) = matched.into_iter().next().unwrap();
+        Some(
+            params
+                .iter()
+                .map(|p| self.substitute_ty(p, &subst))
+                .collect(),
+        )
+    }
+
+    /// Pre-narrows overloads of `name` using the receiver and (optionally)
+    /// already-lowered other args. If exactly one candidate matches, returns
+    /// its non-receiver param types (positions 1..N) with all derived
+    /// TypeVars substituted. Holes in `known_other_arg_tys` (None) skip that
+    /// position for unification — used for args not yet lowered, e.g. closures.
+    fn arg_hints_from_receiver(
+        &mut self,
+        name: &str,
+        recv: &Expr,
+        known_other_arg_tys: &[Option<Ty>],
+    ) -> Option<Vec<Ty>> {
+        let candidates = self.overloads.get(name).cloned().unwrap_or_default();
+        if candidates.is_empty() {
+            return None;
+        }
+        let forms = self.receiver_forms(recv);
+        let n_args = known_other_arg_tys.len();
+        let mut matched: Vec<(Vec<Ty>, HashMap<TypeVarId, Ty>)> = Vec::new();
+        for id in &candidates {
+            let params = self.fn_params(*id);
+            if params.len() != n_args + 1 {
+                continue;
+            }
+            for (form_ty, _adjust) in &forms {
+                let mut subst = HashMap::new();
+                if !try_unify_one(
+                    form_ty,
+                    &params[0],
+                    &mut subst,
+                    &self.struct_template_origin,
+                    &self.enum_template_origin,
+                ) {
+                    continue;
+                }
+                let mut ok = true;
+                for (param, known) in params.iter().skip(1).zip(known_other_arg_tys.iter()) {
+                    let Some(arg_ty) = known else { continue };
+                    if !try_unify_one(
+                        arg_ty,
+                        param,
+                        &mut subst,
+                        &self.struct_template_origin,
+                        &self.enum_template_origin,
+                    ) {
+                        ok = false;
+                        break;
+                    }
+                }
+                if ok {
+                    matched.push((params.clone(), subst));
+                    break;
+                }
+            }
+        }
+        if matched.len() != 1 {
+            return None;
+        }
+        let (params, subst) = matched.into_iter().next().unwrap();
+        Some(
+            params
+                .iter()
+                .skip(1)
+                .map(|p| self.substitute_ty(p, &subst))
+                .collect(),
+        )
     }
 
     /// Picks the unique overload of `name` whose parameters accept `arg_tys`.
@@ -3844,6 +4061,32 @@ enum RecvAdjust {
     AsIs,
     Ref,
     Deref,
+}
+
+/// Unifies `arg_ty` against `param_ty`, growing `subst` in place. Same
+/// orientation-swap trick as `overload_matches`: whichever side has TypeVars
+/// is treated as the inference side.
+fn try_unify_one(
+    arg_ty: &Ty,
+    param_ty: &Ty,
+    subst: &mut HashMap<TypeVarId, Ty>,
+    struct_template_origin: &HashMap<String, (String, Vec<Ty>)>,
+    enum_template_origin: &HashMap<String, (String, Vec<Ty>)>,
+) -> bool {
+    let (lhs, rhs) = if !ty_has_typevars(param_ty) && ty_has_typevars(arg_ty) {
+        (arg_ty, param_ty)
+    } else {
+        (param_ty, arg_ty)
+    };
+    unify(
+        lhs,
+        rhs,
+        Span::default(),
+        subst,
+        struct_template_origin,
+        enum_template_origin,
+    )
+    .is_ok()
 }
 
 /// Whether an expression denotes an addressable place (so `&expr` is valid).
