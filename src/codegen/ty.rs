@@ -30,8 +30,36 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
 
-    /// Conservative byte-size upper bound (no alignment padding), used only
-    /// to size the enum payload buffer.
+    /// Natural alignment of a type, matching LLVM's default layout rules.
+    pub fn align_bytes(&self, ty: &Ty) -> usize {
+        match ty {
+            Ty::Unit => 1,
+            Ty::I8 | Ty::U8 => 1,
+            Ty::Int | Ty::UInt | Ty::I32 | Ty::U32 | Ty::Float | Ty::F32 => 4,
+            Ty::I64 | Ty::U64 | Ty::F64 => 8,
+            Ty::Ptr(_) | Ty::Function { .. } => 8,
+            Ty::Array { element, .. } => self.align_bytes(element),
+            Ty::Tuple(elems) => elems.iter().map(|e| self.align_bytes(e)).max().unwrap_or(1),
+            Ty::Struct(name) => {
+                let def = self
+                    .struct_defs
+                    .get(name)
+                    .expect("struct def registered before sizing");
+                def.fields
+                    .iter()
+                    .map(|(_, t)| self.align_bytes(t))
+                    .max()
+                    .unwrap_or(1)
+            }
+            Ty::Enum(_) => 4,
+            Ty::TypeVar(_) | Ty::GenericStruct { .. } | Ty::GenericEnum { .. } => {
+                unreachable!("align_bytes called on unspecialized type")
+            }
+        }
+    }
+
+    /// Aligned byte size including trailing padding, matching LLVM's default
+    /// struct layout. Used to size the enum payload buffer correctly.
     pub fn approx_size_bytes(&self, ty: &Ty) -> usize {
         match ty {
             Ty::Unit => 1,
@@ -40,17 +68,14 @@ impl<'ctx> Codegen<'ctx> {
             Ty::I64 | Ty::U64 | Ty::F64 => 8,
             Ty::Ptr(_) | Ty::Function { .. } => 8,
             Ty::Array { element, count } => self.approx_size_bytes(element) * count,
-            Ty::Tuple(elems) => elems.iter().map(|e| self.approx_size_bytes(e)).sum(),
+            Ty::Tuple(elems) => self.aligned_fields_size(elems),
             Ty::Struct(name) => {
                 let def = self
                     .struct_defs
                     .get(name)
                     .expect("struct def registered before sizing");
-                def.fields
-                    .iter()
-                    .map(|(_, t)| self.approx_size_bytes(t))
-                    .sum::<usize>()
-                    .max(1)
+                let field_tys: Vec<Ty> = def.fields.iter().map(|(_, t)| t.clone()).collect();
+                self.aligned_fields_size(&field_tys).max(1)
             }
             Ty::Enum(name) => {
                 let def = self
@@ -60,15 +85,44 @@ impl<'ctx> Codegen<'ctx> {
                 let payload = def
                     .variants
                     .iter()
-                    .map(|v| v.fields.iter().map(|t| self.approx_size_bytes(t)).sum())
+                    .map(|v| self.aligned_fields_size(&v.fields))
                     .max()
                     .unwrap_or(0);
-                4 + payload
+                // Tag (i32) + 4 bytes padding for 8-aligned payloads + payload.
+                // Padding doesn't matter for the buffer size — we just need the
+                // payload array large enough that storing the variant struct
+                // doesn't overrun.
+                payload + 4
             }
             Ty::TypeVar(_) | Ty::GenericStruct { .. } | Ty::GenericEnum { .. } => {
                 unreachable!("approx_size_bytes called on unspecialized type")
             }
         }
+    }
+
+    /// Lays out a sequence of fields with natural alignment, returning the
+    /// final aligned size (including trailing padding to struct alignment).
+    pub fn aligned_fields_size_pub(&self, fields: &[Ty]) -> usize {
+        self.aligned_fields_size(fields)
+    }
+
+    fn aligned_fields_size(&self, fields: &[Ty]) -> usize {
+        let mut offset: usize = 0;
+        let mut max_align: usize = 1;
+        for t in fields {
+            let a = self.align_bytes(t);
+            max_align = max_align.max(a);
+            // pad offset up to a
+            if a > 0 {
+                offset = (offset + a - 1) / a * a;
+            }
+            offset += self.approx_size_bytes(t);
+        }
+        // pad final offset to struct alignment
+        if max_align > 0 {
+            offset = (offset + max_align - 1) / max_align * max_align;
+        }
+        offset
     }
 
     /// Structural LLVM type for a Frey tuple — same element types share

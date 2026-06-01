@@ -86,7 +86,7 @@ impl<'ctx> Codegen<'ctx> {
             let payload_bytes = def
                 .variants
                 .iter()
-                .map(|v| v.fields.iter().map(|t| self.approx_size_bytes(t)).sum())
+                .map(|v| self.aligned_fields_size_pub(&v.fields))
                 .max()
                 .unwrap_or(0)
                 .max(1);

@@ -1,0 +1,417 @@
+// Integration test: exercise every Frey feature that currently compiles.
+// Each section is a helper function so locals stay scoped per section.
+
+import "libs/io";
+import "libs/vec";
+import "libs/option";
+import "libs/result";
+import "libs/string";
+import "libs/map";
+
+// ---------------------------------------------------------------------------
+// Extern functions (C FFI). Both styles: bare name, and ptr-to-empty-struct
+// as an opaque handle.
+// ---------------------------------------------------------------------------
+
+let putchar = extern (c: Int) -> Int;
+let abs     = extern (x: Int) -> Int;
+let fflush  = extern (stream: *u8) -> Int;        // pass null to flush all
+
+let FILE = struct {};
+let fopen  = extern (path: *u8, mode: *u8) -> *FILE;
+let fclose = extern (fp: *FILE) -> Int;
+
+// ---------------------------------------------------------------------------
+// Type declarations.
+// ---------------------------------------------------------------------------
+
+let Point = struct {
+    x: Int,
+    y: Int,
+};
+
+let Pair = struct<$A, $B> {
+    first: A,
+    second: B,
+};
+
+let Shape = enum {
+    Circle(Int),               // radius
+    Rectangle(Int, Int),       // width, height
+    Nothing,
+};
+
+let Tree = enum<$T> {
+    Leaf,
+    Node(T, *Tree<T>, *Tree<T>),
+};
+
+// ---------------------------------------------------------------------------
+// Functions: plain, generic, recursive, and overloaded by arity.
+// ---------------------------------------------------------------------------
+
+let square = (x: Int) -> Int { x * x };
+
+let identity = <$T>(x: T) -> T { x };
+
+let factorial = (n: Int) -> Int {
+    if n <= 1 { 1 } else { n * factorial(n - 1) }
+};
+
+let describe = (n: Int) -> Int { n };
+let describe = (n: Int, m: Int) -> Int { n + m };
+let describe = (n: Int, m: Int, k: Int) -> Int { n + m + k };
+
+// ---------------------------------------------------------------------------
+// Comptime: K == Type dispatch with #comptime.
+// ---------------------------------------------------------------------------
+
+#comptime
+let type_name = <$T>(x: T) -> *u8 {
+    if T == Int {
+        "Int"
+    } else if T == *u8 {
+        "cstring"
+    } else if T == u8 {
+        "byte"
+    } else {
+        "other"
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Tree helpers.
+// ---------------------------------------------------------------------------
+
+let leaf_box = <$T>() -> *Tree<T> {
+    let p = alloc<Tree<T>>(1);
+    p[0] = Leaf;
+    p
+};
+
+let node_box = <$T>(v: T, l: *Tree<T>, r: *Tree<T>) -> *Tree<T> {
+    let p = alloc<Tree<T>>(1);
+    p[0] = Node(v, l, r);
+    p
+};
+
+let tree_sum = (t: *Tree<Int>) -> Int {
+    match t[0] {
+        Leaf -> 0,
+        Node(v, l, r) -> v + tree_sum(l) + tree_sum(r)
+    }
+};
+
+let tree_free = <$T>(t: *Tree<T>) {
+    match t[0] {
+        Leaf -> {
+            // nothing to free under a leaf
+        },
+        Node(v, l, r) -> {
+            tree_free(l);
+            tree_free(r);
+        }
+    };
+    free(t);
+};
+
+let area = (s: Shape) -> Int {
+    match s {
+        Circle(r) -> 3 * r * r,
+        Rectangle(w, h) -> w * h,
+        Nothing -> 0
+    }
+};
+
+let describe_result = (r: Result<Int, *u8>) -> *u8 {
+    match r {
+        Ok(v) -> "ok",
+        Err(e) -> e
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Defer + early return: defers run LIFO whether you return early or fall off.
+// ---------------------------------------------------------------------------
+
+let defer_demo = (early: Int) -> Int {
+    defer print("    defer #1 (registered first, runs last)\n");
+    defer print("    defer #2 (registered second, runs middle)\n");
+    if early != 0 {
+        defer print("    defer #3 (only registered if early)\n");
+        return 42;
+    }
+    99
+};
+
+// ---------------------------------------------------------------------------
+// Section helpers — each owns its own `let` scope.
+// ---------------------------------------------------------------------------
+
+let section_literals = () {
+    print("=== literals & operators ===\n");
+    let i: Int = 42;
+    let b: u8 = 'A';
+    let s: *u8 = "hello, world";
+    let p: *Int = null;
+
+    let arith = (1 + 2 * 3 - 4) / 1 % 7;        // = 3
+    let cmp = if 3 < 5 && 5 != 4 { 1 } else { 0 };
+    let neg = -10;
+    let abs_neg = abs(neg);
+    print("  i=%, b=%, arith=%\n", i, b, arith);
+    print("  cmp=%, abs(-10)=%\n", cmp, abs_neg);
+
+    if p == null { print("  null pointer detected\n"); }
+
+    let c_as_int = b as Int;                    // 'A' = 65
+    let n: Int = 200;
+    let n_byte: u8 = n as u8;
+    print("  'A' as Int = %, 200 as u8 = %\n", c_as_int, n_byte);
+
+    // Escape sequences in strings.
+    print("  escapes: tab[\t]end | quote[\"] | bs[\\]\n");
+};
+
+let section_struct = () {
+    print("=== plain struct ===\n");
+    let pt = Point { x: 3, y: 4 };
+    let d2 = pt.x * pt.x + pt.y * pt.y;
+    print("  Point(%, %), |P|^2 = %\n", pt.x, pt.y, d2);
+
+    pt.x = 10;
+    print("  after pt.x = 10: pt.x = %\n", pt.x);
+
+    let pp = &pt;
+    pp.y = 20;
+    print("  via pointer (pp.y = 20): pt.y = %\n", pt.y);
+};
+
+let section_generic_struct = () {
+    print("=== generic struct ===\n");
+    let pair: Pair<Int, *u8> = Pair<Int, *u8> { first: 7, second: "seven" };
+    print("  Pair { first=%, second=% }\n", pair.first, pair.second);
+};
+
+let section_enum_match = () {
+    print("=== generic enum + match (statement & expression) ===\n");
+    let opt: Option<Int> = Some(99);
+    match opt {
+        Some(v) -> { print("  Some(%)\n", v); },
+        None -> { print("  None\n"); }
+    };
+
+    let unwrapped = match opt {
+        Some(v) -> v,
+        None -> -1
+    };
+    print("  unwrapped = %\n", unwrapped);
+
+    let s1: Shape = Circle(5);
+    let s2: Shape = Rectangle(3, 4);
+    let s3: Shape = Nothing;
+    print("  area(circle 5) ~ %\n", area(s1));
+    print("  area(3x4 rect) = %\n", area(s2));
+    print("  area(empty)    = %\n", area(s3));
+};
+
+let section_result = () {
+    print("=== Result<T, E> ===\n");
+    let r1: Result<Int, *u8> = Ok(10);
+    let r2: Result<Int, *u8> = Err("boom");
+    print("  %\n", describe_result(r1));
+    print("  %\n", describe_result(r2));
+};
+
+let section_tree = () {
+    print("=== generics + heap recursion (binary tree sum) ===\n");
+    // Build:    5
+    //          / \
+    //         3   7
+    //            / \
+    //           6   8     sum = 29
+    let t = node_box<Int>(5,
+        node_box<Int>(3, leaf_box<Int>(), leaf_box<Int>()),
+        node_box<Int>(7,
+            node_box<Int>(6, leaf_box<Int>(), leaf_box<Int>()),
+            node_box<Int>(8, leaf_box<Int>(), leaf_box<Int>())));
+    print("  tree_sum = % (expected 29)\n", tree_sum(t));
+    tree_free(t);
+};
+
+let section_loops = () {
+    print("=== while + break + nested loop ===\n");
+    let i = 0;
+    let found = -1;
+    while i < 100 {
+        if i * i > 50 {
+            found = i;
+            break;
+        }
+        i = i + 1;
+    }
+    print("  first i where i^2 > 50: %\n", found);
+
+    let total = 0;
+    let outer = 0;
+    while outer < 3 {
+        let inner = 0;
+        while inner < 10 {
+            if inner == 5 { break; }
+            total = total + 1;
+            inner = inner + 1;
+        }
+        outer = outer + 1;
+    }
+    print("  nested total (3 * 5) = %\n", total);
+};
+
+let section_defer = () {
+    print("=== defer (LIFO; runs on early return too) ===\n");
+    print("  call 0 (no early return):\n");
+    let r0 = defer_demo(0);
+    print("  -> returned %\n", r0);
+
+    print("  call 1 (early return):\n");
+    let r1 = defer_demo(1);
+    print("  -> returned %\n", r1);
+};
+
+let section_overload = () {
+    print("=== overloaded function (by arity) ===\n");
+    print("  describe(1)       = %\n", describe(1));
+    print("  describe(1,2)     = %\n", describe(1, 2));
+    print("  describe(1,2,3)   = %\n", describe(1, 2, 3));
+};
+
+let section_comptime = () {
+    print("=== comptime dispatch ===\n");
+    let n: Int = 0;
+    let cs: *u8 = "x";
+    let by: u8 = 0 as u8;
+    print("  type_name(Int)    = %\n", type_name(n));
+    print("  type_name(*u8)    = %\n", type_name(cs));
+    print("  type_name(u8)     = %\n", type_name(by));
+};
+
+let section_vec = () {
+    print("=== Vec<T> via UFCS ===\n");
+    let v: Vec<Int>;
+    v.init();
+    let i = 0;
+    while i < 5 {
+        v.add(i * 10);
+        i = i + 1;
+    }
+    print("  vec.len = %, vec.cap = %\n", v.len, v.cap);
+    print("  vec.get(3) = %\n", v.get(3));
+    v.destroy();
+};
+
+let section_string = () {
+    print("=== String ===\n");
+    let s = str_from_cstr("hello");
+    s.push_byte(',');
+    s.push_byte(' ');
+    s.push_cstr("world");
+    print("  built string: %\n", s.as_cstr());
+    print("  len = %\n", s.len);
+    s.destroy();
+};
+
+let section_map = () {
+    print("=== Map<K, V> with rehash ===\n");
+    let m: Map<*u8, Int>;
+    m.init();
+    defer m.destroy();
+
+    m.insert("one", 1);
+    m.insert("two", 2);
+    m.insert("three", 3);
+    print("  len = %\n", m.len);
+
+    match m.get("two") {
+        Some(v) -> { print("  get(two) = %\n", v); },
+        None    -> { print("  get(two) missing\n"); }
+    };
+    match m.get("four") {
+        Some(v) -> { print("  get(four) = %\n", v); },
+        None    -> { print("  get(four) not present\n"); }
+    };
+
+    // Overwriting the same key — counts as 1 entry, no rehash.
+    let i = 100;
+    while i < 130 {
+        m.insert("k", i);
+        i = i + 1;
+    }
+    match m.get("k") {
+        Some(v) -> { print("  get(k) after 30 overwrites = % (expected 129)\n", v); },
+        None    -> { print("  get(k) missing\n"); }
+    };
+
+    m.remove("two");
+    print("  contains_key(two) = % (expected 0)\n", m.contains_key("two"));
+    print("  contains_key(one) = % (expected 1)\n", m.contains_key("one"));
+};
+
+let section_heap = () {
+    print("=== alloc / realloc / free ===\n");
+    let buf = alloc<Int>(4);
+    buf[0] = 10; buf[1] = 20; buf[2] = 30; buf[3] = 40;
+    let sum0 = buf[0] + buf[1] + buf[2] + buf[3];
+    buf = realloc<Int>(buf, 8);
+    buf[4] = 50; buf[5] = 60; buf[6] = 70; buf[7] = 80;
+    let sum1 = buf[0] + buf[1] + buf[2] + buf[3] + buf[4] + buf[5] + buf[6] + buf[7];
+    print("  4-slot sum = %, 8-slot sum = %\n", sum0, sum1);
+    free(buf);
+};
+
+let section_extern_io = () {
+    print("=== putchar via extern (raw stdout) ===\n");
+    let msg = "  raw: ";
+    let i = 0;
+    while msg[i] != '\0' {
+        putchar(msg[i] as Int);
+        i = i + 1;
+    }
+    putchar('A' as Int);
+    putchar('B' as Int);
+    putchar('C' as Int);
+    putchar('\n' as Int);
+};
+
+let section_misc = () {
+    print("=== identity + factorial (recursion, generics) ===\n");
+    print("  identity(7)      = %\n", identity<Int>(7));
+    print("  factorial(6)     = %\n", factorial(6));
+    print("  square(9)        = %\n", square(9));
+};
+
+// ---------------------------------------------------------------------------
+// Driver.
+// ---------------------------------------------------------------------------
+
+let flush = () { fflush(null); };
+
+let main = () -> Int {
+    section_literals();         flush();
+    section_struct();           flush();
+    section_generic_struct();   flush();
+    section_enum_match();       flush();
+    section_result();           flush();
+    section_tree();             flush();
+    section_loops();            flush();
+    section_defer();            flush();
+    section_overload();         flush();
+    section_comptime();         flush();
+    section_vec();              flush();
+    section_string();           flush();
+    section_map();              flush();
+    section_heap();             flush();
+    section_extern_io();        flush();
+    section_misc();             flush();
+    print("=== all sections finished ===\n");
+    flush();
+    0
+};
