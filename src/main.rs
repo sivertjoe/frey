@@ -12,6 +12,20 @@ use std::process::ExitCode;
 use lexer::types::Span;
 
 fn main() -> ExitCode {
+    // Compiler passes recurse through deeply nested AST nodes and
+    // `lower_expr_with_hint_inner` has a giant match whose stack frame is
+    // tens of KB in debug builds. Windows' default 1 MB thread stack
+    // overflows on moderately deep programs (~9 frames). Run the
+    // compiler on a dedicated thread with a generous stack — release
+    // builds collapse the frame but debug builds need the headroom.
+    let h = std::thread::Builder::new()
+        .stack_size(32 * 1024 * 1024)
+        .spawn(real_main)
+        .expect("spawn compiler worker");
+    h.join().unwrap_or(ExitCode::FAILURE)
+}
+
+fn real_main() -> ExitCode {
     let args = match cli::parse() {
         cli::ParseOutcome::Run(a) => a,
         cli::ParseOutcome::Help => {

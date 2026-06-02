@@ -871,17 +871,22 @@ impl Lower {
     /// closure's code field without a trampoline. No-op for non-Function
     /// values or non-Closure targets.
     pub(super) fn coerce_to_closure(&mut self, value: Expr, target_ty: &Ty, span: Span) -> Expr {
-        let Ty::Closure {
-            params: target_params,
-            return_ty: target_return,
-        } = target_ty
-        else {
+        if !matches!(target_ty, Ty::Closure { .. }) {
             return value;
-        };
-        match value.ty {
-            Ty::Function { varargs: false, .. } => {}
-            _ => return value,
         }
+        // Take the source function's concrete params/return — using the
+        // target's would erase the inferred types (e.g., coercing a
+        // `(Int)->Int` to a `(T)->U` hint must produce `Ty::Closure { (Int)->Int }`,
+        // not `Ty::Closure { (T)->U }`, so the caller's unification still
+        // learns T=Int and U=Int).
+        let (src_params, src_return) = match &value.ty {
+            Ty::Function {
+                params,
+                return_ty,
+                varargs: false,
+            } => (params.clone(), return_ty.clone()),
+            _ => return value,
+        };
         let env_ty = Ty::Ptr(Box::new(Ty::U8));
         let null_env = Expr {
             span,
@@ -891,8 +896,8 @@ impl Lower {
         Expr {
             span,
             ty: Ty::Closure {
-                params: target_params.clone(),
-                return_ty: target_return.clone(),
+                params: src_params,
+                return_ty: src_return,
             },
             kind: ExprKind::MakeClosure {
                 env: Box::new(null_env),
@@ -1732,8 +1737,15 @@ fn collect_typevars_in_block(block: &Block, out: &mut Vec<TypeVarId>) {
     collect_typevars_in_expr(&block.tail, out);
 }
 
+/// Walks an expression collecting type-vars from explicit type annotations
+/// (cast targets, `ZeroInit` types, intrinsic element types) and recurses
+/// through children — but DOES NOT walk `e.ty` itself. The type of a
+/// `Local(template_id)` expression is the template's signature, whose
+/// type-vars belong to the template, not to the surrounding closure body.
+/// Including them would leak nested-template type-vars into the closure
+/// template's signature, blocking specialization when the outer
+/// substitution doesn't know about them.
 fn collect_typevars_in_expr(e: &Expr, out: &mut Vec<TypeVarId>) {
-    collect_typevars(&e.ty, out);
     match &e.kind {
         ExprKind::Cast { target, expr } => {
             collect_typevars(target, out);

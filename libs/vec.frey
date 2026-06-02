@@ -33,24 +33,20 @@ let destroy = (v: *Vec<$T>) {
 
 
 // --- iter adaptor ----------------------------------------------------------
-// Yields each element by value. The state borrows the vec — the caller must
-// keep it alive until the iterator is exhausted.
-
-let VecIterState = struct<$T> {
-    vec: *Vec<T>,
-    i: Int,
-};
-
-let _vec_iter_step = <$T>(state: *u8) -> Option<T> {
-    let s = state as *VecIterState<T>;
-    if s.i >= s.vec.len { return None; }
-    let v = s.vec.data[s.i];
-    s.i = s.i + 1;
-    Some(v)
-};
+// Yields each element by value. The closure captures the vec pointer and a
+// cursor — the caller must keep the vec alive until the iterator is
+// exhausted.
 
 let iter = <$T>(v: *Vec<T>) -> Iter<T> {
-    let st = alloc<VecIterState<T>>(1);
-    st[0] = VecIterState<T> { vec: v, i: 0 };
-    Iter<T> { state: st as *u8, next_fn: _vec_iter_step<T> }
+    let i = 0;
+    Iter<T> {
+        next: { : {
+            let r: Option<T> = None;
+            if i < v.len {
+                r = Some(v.data[i]);
+                i = i + 1;
+            }
+            r
+        }},
+    }
 };

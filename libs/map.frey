@@ -272,37 +272,30 @@ let eq = <$K>(a: K, b: K) -> Int {
 
 // --- iter adaptor ----------------------------------------------------------
 // Walks the bucket array, yielding `(K, V)` for each Filled slot and
-// skipping Empty / Tombstone. The state borrows the map — the caller must
-// keep it alive until the iterator is exhausted.
-
-let MapIterState = struct<$K, $V> {
-    map: *Map<K, V>,
-    i: Int,
-};
-
-let _map_iter_step = <$K, $V>(state: *u8) -> Option<(K, V)> {
-    let s = state as *MapIterState<K, V>;
-    let cap = s.map.vec.len;
-    while s.i < cap {
-        let idx = s.i;
-        s.i = s.i + 1;
-        match s.map.vec.get(idx) {
-            Filled(k, v) -> {
-                return Some((k, v));
-            },
-            Empty -> {
-                // skip
-            },
-            Tombstone -> {
-                // skip
-            }
-        };
-    }
-    None
-};
+// skipping Empty / Tombstone. The closure captures the map pointer and a
+// cursor — the caller must keep the map alive until the iterator is
+// exhausted.
 
 let iter = <$K, $V>(m: *Map<K, V>) -> Iter<(K, V)> {
-    let st = alloc<MapIterState<K, V>>(1);
-    st[0] = MapIterState<K, V> { map: m, i: 0 };
-    Iter<(K, V)> { state: st as *u8, next_fn: _map_iter_step<K, V> }
+    let i = 0;
+    Iter<(K, V)> {
+        next: { : {
+            let r: Option<(K, V)> = None;
+            let cap = m.vec.len;
+            let done = 0;
+            while done == 0 {
+                if i >= cap { done = 1; }
+                else {
+                    let idx = i;
+                    i = i + 1;
+                    match m.vec.get(idx) {
+                        Filled(k, v) -> { r = Some((k, v)); done = 1; },
+                        Empty -> {},
+                        Tombstone -> {},
+                    };
+                }
+            }
+            r
+        }},
+    }
 };

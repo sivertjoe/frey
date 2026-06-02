@@ -130,6 +130,36 @@ pub fn unify(
             }
             unify(rp, ra, span, subst, struct_origins, enum_origins)
         }
+        // A plain function type unifies with a closure type — the function
+        // value is wrappable as `MakeClosure { env: null, code: fn }` at the
+        // call boundary via `coerce_to_closure`.
+        (
+            Ty::Closure {
+                params: ps,
+                return_ty: rp,
+            },
+            Ty::Function {
+                params: as_,
+                return_ty: ra,
+                ..
+            },
+        )
+        | (
+            Ty::Function {
+                params: as_,
+                return_ty: ra,
+                ..
+            },
+            Ty::Closure {
+                params: ps,
+                return_ty: rp,
+            },
+        ) if ps.len() == as_.len() => {
+            for (p, a) in ps.iter().zip(as_.iter()) {
+                unify(p, a, span, subst, struct_origins, enum_origins)?;
+            }
+            unify(rp, ra, span, subst, struct_origins, enum_origins)
+        }
         (Ty::GenericStruct { name: n1, args: a1 }, Ty::GenericStruct { name: n2, args: a2 })
             if n1 == n2 && a1.len() == a2.len() =>
         {

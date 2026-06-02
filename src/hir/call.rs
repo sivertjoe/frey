@@ -44,10 +44,22 @@ impl Lower {
 
         // Coerce int literals against the (possibly generic) param type;
         // coerce_int_literal is a no-op when the target is a TypeVar.
+        // Also wrap raw function values as closures when the param expects a
+        // closure (e.g. an `(Int)->Int` arg flowing into a `(T)->U` closure
+        // param): the dispatch path for multi-overload calls lowers args
+        // without hints, so coercion has to happen here once we know which
+        // overload was picked.
         let mut coerced = Vec::with_capacity(args.len());
         for (i, arg) in args.into_iter().enumerate() {
             let arg = match params.get(i) {
                 Some(pty) => coerce_int_literal(arg, pty)?,
+                None => arg,
+            };
+            let arg = match params.get(i) {
+                Some(pty) => {
+                    let span = arg.span;
+                    self.coerce_to_closure(arg, pty, span)
+                }
                 None => arg,
             };
             coerced.push(arg);
