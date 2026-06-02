@@ -16,7 +16,7 @@ use crate::{
         },
         types::{
             Block, BlockItem, Const, Declaration, Expr, ExprKind, Function,
-            IntrinsicKind, Param, Statement, StatementKind,
+            IntrinsicKind, LocalId, Param, Statement, StatementKind,
             StructDef, Ty,
         },
     },
@@ -32,6 +32,14 @@ impl Lower {
     /// for nullary variants like `None` where neither explicit type args nor
     /// argument unification can pin the enum's type parameters.
     pub(super) fn lower_expr_with_hint(
+        &mut self,
+        e: ast::Expr,
+        hint: Option<&Ty>,
+    ) -> Result<Expr, Error> {
+        self.lower_expr_with_hint_inner(e, hint)
+    }
+
+    fn lower_expr_with_hint_inner(
         &mut self,
         e: ast::Expr,
         hint: Option<&Ty>,
@@ -93,6 +101,28 @@ impl Lower {
                     .get(&local_id)
                     .expect("resolved name must have a recorded type")
                     .clone();
+
+                // Inside a closure body: if `local_id` was bound in a
+                // non-global enclosing scope, it's a free variable — record
+                // it as a capture. The Local expr is left in place; a
+                // post-walk in `lower_closure` rewrites it to an env-field
+                // load once the env tuple's layout is known.
+                let depth = self
+                    .scopes
+                    .iter()
+                    .enumerate()
+                    .find_map(|(d, s)| s.values().any(|&v| v == local_id).then_some(d));
+                if let Some(ctx) = self.closure_capture_ctx.as_mut()
+                    && let Some(depth) = depth
+                    && depth > 0
+                    && depth < ctx.threshold_depth
+                {
+                    ctx.captures_by_id.entry(local_id).or_insert_with(|| {
+                        let idx = ctx.captures.len();
+                        ctx.captures.push((local_id, ty.clone()));
+                        idx
+                    });
+                }
 
                 Ok(Expr {
                     span: e.span,
@@ -824,6 +854,7 @@ impl Lower {
             params: hir_params,
             return_ty,
             body,
+            env_param_id: None,
         };
         Ok(self.lift_function_value(func, ty, span))
     }
@@ -833,19 +864,62 @@ impl Lower {
     /// non-closure args can extend the substitution first — without this
     /// step, `map<Int, Int>(Some(10), {x: x*2})` wouldn't see `Int` for `x`.
 
+    /// Coerces a Frey-function value (`Ty::Function`) into a closure value
+    /// (`Ty::Closure`) — wraps it as `{env: null, code: fn}`. Under the
+    /// uniform calling convention, every Frey fn takes `env: *u8` as its
+    /// first LLVM param, so the fn pointer is directly usable as a
+    /// closure's code field without a trampoline. No-op for non-Function
+    /// values or non-Closure targets.
+    pub(super) fn coerce_to_closure(&mut self, value: Expr, target_ty: &Ty, span: Span) -> Expr {
+        let Ty::Closure {
+            params: target_params,
+            return_ty: target_return,
+        } = target_ty
+        else {
+            return value;
+        };
+        match value.ty {
+            Ty::Function { varargs: false, .. } => {}
+            _ => return value,
+        }
+        let env_ty = Ty::Ptr(Box::new(Ty::U8));
+        let null_env = Expr {
+            span,
+            ty: env_ty.clone(),
+            kind: ExprKind::ZeroInit(env_ty),
+        };
+        Expr {
+            span,
+            ty: Ty::Closure {
+                params: target_params.clone(),
+                return_ty: target_return.clone(),
+            },
+            kind: ExprKind::MakeClosure {
+                env: Box::new(null_env),
+                code: Box::new(value),
+            },
+        }
+    }
+
     pub(super) fn lift_function_value(&mut self, func: Function, fn_ty: Ty, span: Span) -> Expr {
         let synth_id = self.id_gen.fresh();
         let synth_name = format!("__lambda_{}", synth_id.raw());
         self.bindings.insert(synth_id, fn_ty.clone());
 
+        // Closure code fns can have typevars in the body (via captured-tuple
+        // casts) that aren't in the signature. Walk the body too so the
+        // template's type_var_ids covers every typevar specialization needs.
+        let body_has_tv = block_has_typevars(&func.body);
         let is_generic = func.params.iter().any(|p| ty_has_typevars(&p.ty))
-            || ty_has_typevars(&func.return_ty);
+            || ty_has_typevars(&func.return_ty)
+            || body_has_tv;
         if is_generic {
             let mut type_var_ids = Vec::new();
             for p in &func.params {
                 collect_typevars(&p.ty, &mut type_var_ids);
             }
             collect_typevars(&func.return_ty, &mut type_var_ids);
+            collect_typevars_in_block(&func.body, &mut type_var_ids);
             self.templates.insert(
                 synth_id,
                 GenericTemplate {
@@ -855,6 +929,7 @@ impl Lower {
                     params: func.params,
                     return_ty: func.return_ty,
                     body: func.body,
+                    env_param_id: func.env_param_id,
                 },
             );
         } else {
@@ -879,8 +954,11 @@ impl Lower {
     }
 
     /// Lowers a closure literal `{x, y : body}` using `hint` as the expected
-    /// function type. The body is lowered in a globals-only scope to forbid
-    /// captures, then the result is lifted to a synthesized top-level fn.
+    /// closure type. The body lowers with enclosing scopes visible so free
+    /// variables can be captured. The synthesized code fn takes
+    /// `env: *u8` as its first LLVM param (added uniformly by codegen);
+    /// captures live in a heap-allocated env tuple and are rewritten in
+    /// the body as loads from `*env`.
     pub(super) fn lower_closure(
         &mut self,
         params: Vec<String>,
@@ -888,16 +966,20 @@ impl Lower {
         hint: Option<&Ty>,
         span: Span,
     ) -> Result<Expr, Error> {
-        let Some(Ty::Function {
-            params: hint_params,
-            return_ty: hint_return,
-            ..
-        }) = hint
-        else {
-            return Err(Error {
-                span,
-                kind: ErrorKind::ClosureTypeUnknown,
-            });
+        // Zero-param closures don't need a hint — there's nothing to infer
+        // for params, and the return type falls out of the body.
+        let (hint_params, hint_return): (&[Ty], Option<&Ty>) = match hint {
+            Some(Ty::Closure { params, return_ty }) => (params.as_slice(), Some(return_ty.as_ref())),
+            Some(Ty::Function {
+                params, return_ty, ..
+            }) => (params.as_slice(), Some(return_ty.as_ref())),
+            _ if params.is_empty() => (&[][..], None),
+            _ => {
+                return Err(Error {
+                    span,
+                    kind: ErrorKind::ClosureTypeUnknown,
+                });
+            }
         };
         if hint_params.len() != params.len() {
             return Err(Error {
@@ -915,11 +997,15 @@ impl Lower {
             });
         }
 
-        // Save scopes; lower the body seeing only globals + closure params.
-        let saved_scopes = std::mem::replace(&mut self.scopes, Vec::new());
-        let global_scope = saved_scopes[0].clone();
-        self.scopes.push(global_scope);
-        self.scopes.push(HashMap::new());
+        // Synthesize the env param up front so the body can refer to it
+        // after capture rewriting.
+        let env_ty = Ty::Ptr(Box::new(Ty::U8));
+        let env_param_id = self.id_gen.fresh();
+        self.bindings.insert(env_param_id, env_ty.clone());
+
+        // Push a scope for the closure's own params. The body will see
+        // this AND all enclosing scopes — captures fall out naturally.
+        self.enter_scope();
 
         let mut hir_params = Vec::with_capacity(params.len());
         for (name, ty) in params.into_iter().zip(hint_params.iter()) {
@@ -934,34 +1020,213 @@ impl Lower {
             });
         }
 
-        let return_hint = if !ty_has_typevars(hint_return) {
-            Some((**hint_return).clone())
-        } else {
-            None
+        // Activate capture detection — the Identifier-lowering path checks
+        // here and records free vars from depths 1..threshold_depth.
+        // `threshold_depth` is the closure's own param scope's depth, so
+        // strictly-less-than excludes the closure's own params from
+        // capture (they're depth == threshold_depth).
+        let prev_ctx = self.closure_capture_ctx.take();
+        self.closure_capture_ctx = Some(crate::hir::lower::ClosureCaptureCtx {
+            threshold_depth: self.scopes.len() - 1,
+            captures: Vec::new(),
+            captures_by_id: HashMap::new(),
+        });
+
+        let return_hint = match hint_return {
+            Some(t) if !ty_has_typevars(t) => Some(t.clone()),
+            _ => None,
         };
         let body_result = self.lower_expr_with_hint(body, return_hint.as_ref());
-        self.scopes = saved_scopes;
+
+        let ctx = std::mem::replace(&mut self.closure_capture_ctx, prev_ctx)
+            .expect("ctx was set above");
+        self.leave_scope();
         let body_expr = body_result?;
 
         let return_ty = body_expr.ty.clone();
-        // Wrap the body expression in a single-tail block so codegen can
-        // reuse its function-lowering path verbatim.
+
+        // Build the env tuple type from captures (empty captures → unit-ish,
+        // but we keep env = null in that case to skip allocation entirely).
+        let captures = ctx.captures;
+        let captures_by_id = ctx.captures_by_id;
+        let has_captures = !captures.is_empty();
+        let env_tuple_ty = if has_captures {
+            Ty::Tuple(captures.iter().map(|(_, t)| t.clone()).collect())
+        } else {
+            Ty::Unit
+        };
+
+        // Rewrite the body: each Local(captured_id) becomes a load from
+        // `*(env as *EnvTuple)`'s tuple field at the capture's index.
+        let mut body_expr = body_expr;
+        if has_captures {
+            rewrite_captures_in_expr(
+                &mut body_expr,
+                &captures_by_id,
+                env_param_id,
+                &env_tuple_ty,
+                span,
+            );
+        }
+
+        // Wrap body as the synth code fn's body block.
         let body_block = Block {
             span,
             items: Vec::new(),
             tail: Box::new(body_expr),
         };
-        let fn_ty = Ty::Function {
-            params: hir_params.iter().map(|p| p.ty.clone()).collect(),
+        let mut all_params: Vec<Param> = Vec::with_capacity(hir_params.len());
+        all_params.extend(hir_params.iter().cloned());
+        let code_fn_ty = Ty::Function {
+            params: all_params.iter().map(|p| p.ty.clone()).collect(),
             return_ty: Box::new(return_ty.clone()),
             varargs: false,
         };
+        // Only flag env_param_id when there are captures — capture-free
+        // closures don't read env, so codegen can skip registering it.
+        let env_param_id_for_func = if has_captures { Some(env_param_id) } else { None };
         let func = Function {
-            params: hir_params,
-            return_ty,
+            params: all_params,
+            return_ty: return_ty.clone(),
             body: body_block,
+            env_param_id: env_param_id_for_func,
         };
-        Ok(self.lift_function_value(func, fn_ty, span))
+        let code_expr = self.lift_function_value(func, code_fn_ty, span);
+
+        let closure_ty = Ty::Closure {
+            params: hint_params.to_vec(),
+            return_ty: Box::new(return_ty),
+        };
+
+        // env construction expression: null for capture-free, otherwise a
+        // block that allocs the env tuple on the heap, writes captures
+        // into each field, and casts the *EnvTuple back to *u8.
+        let env_expr = if has_captures {
+            self.build_env_alloc_expr(&captures, &env_tuple_ty, span)
+        } else {
+            Expr {
+                span,
+                ty: env_ty.clone(),
+                kind: ExprKind::ZeroInit(env_ty),
+            }
+        };
+
+        Ok(Expr {
+            span,
+            ty: closure_ty,
+            kind: ExprKind::MakeClosure {
+                env: Box::new(env_expr),
+                code: Box::new(code_expr),
+            },
+        })
+    }
+
+    /// Builds the env-allocation expression for a capturing closure:
+    /// ```text
+    /// {
+    ///     let __env = alloc<EnvTuple>(1);
+    ///     (*__env).0 = cap_0;
+    ///     (*__env).1 = cap_1;
+    ///     ...
+    ///     __env as *u8
+    /// }
+    /// ```
+    fn build_env_alloc_expr(
+        &mut self,
+        captures: &[(LocalId, Ty)],
+        env_tuple_ty: &Ty,
+        span: Span,
+    ) -> Expr {
+        let env_ptr_ty = Ty::Ptr(Box::new(env_tuple_ty.clone()));
+        let u8_ptr_ty = Ty::Ptr(Box::new(Ty::U8));
+
+        // let __env = alloc<EnvTuple>(1);
+        let env_local_id = self.id_gen.fresh();
+        self.bindings.insert(env_local_id, env_ptr_ty.clone());
+        let alloc_call = Expr {
+            span,
+            ty: env_ptr_ty.clone(),
+            kind: ExprKind::Intrinsic {
+                kind: crate::hir::types::IntrinsicKind::Alloc,
+                elem_ty: env_tuple_ty.clone(),
+                args: vec![Expr {
+                    span,
+                    ty: Ty::Int,
+                    kind: ExprKind::Const(Const::Int(1)),
+                }],
+            },
+        };
+        let env_decl = Declaration {
+            id: env_local_id,
+            span,
+            name: "__env".to_string(),
+            ty: env_ptr_ty.clone(),
+            value: alloc_call,
+        };
+
+        // (*__env).i = cap_i  for each capture
+        let mut items: Vec<BlockItem> = Vec::with_capacity(captures.len() + 1);
+        items.push(BlockItem::Declaration(env_decl));
+        for (i, (cap_id, cap_ty)) in captures.iter().enumerate() {
+            let env_local_expr = Expr {
+                span,
+                ty: env_ptr_ty.clone(),
+                kind: ExprKind::Local(env_local_id),
+            };
+            let env_deref = Expr {
+                span,
+                ty: env_tuple_ty.clone(),
+                kind: ExprKind::Deref(Box::new(env_local_expr)),
+            };
+            let field = Expr {
+                span,
+                ty: cap_ty.clone(),
+                kind: ExprKind::TupleField {
+                    target: Box::new(env_deref),
+                    index: i,
+                },
+            };
+            let value = Expr {
+                span,
+                ty: cap_ty.clone(),
+                kind: ExprKind::Local(*cap_id),
+            };
+            let assign = Expr {
+                span,
+                ty: Ty::Unit,
+                kind: ExprKind::Assign {
+                    target: Box::new(field),
+                    value: Box::new(value),
+                },
+            };
+            items.push(BlockItem::Statement(Statement {
+                span,
+                kind: StatementKind::Expr(assign),
+            }));
+        }
+
+        // tail: __env as *u8
+        let cast_tail = Expr {
+            span,
+            ty: u8_ptr_ty.clone(),
+            kind: ExprKind::Cast {
+                target: u8_ptr_ty,
+                expr: Box::new(Expr {
+                    span,
+                    ty: env_ptr_ty,
+                    kind: ExprKind::Local(env_local_id),
+                }),
+            },
+        };
+        Expr {
+            span,
+            ty: Ty::Ptr(Box::new(Ty::U8)),
+            kind: ExprKind::Block(Block {
+                span,
+                items,
+                tail: Box::new(cast_tail),
+            }),
+        }
     }
 
 
@@ -1118,8 +1383,9 @@ impl Lower {
                     },
                 });
             };
-            let value = self.lower_expr(f.value)?;
+            let value = self.lower_expr_with_hint(f.value, Some(&target_ty))?;
             let value = coerce_int_literal(value, &target_ty)?;
+            let value = self.coerce_to_closure(value, &target_ty, f.span);
             lowered_by_name.insert(f.name, value);
         }
 
@@ -1205,8 +1471,9 @@ impl Lower {
             };
             let field_ty = template_field_ty.clone();
             let target_ty = self.substitute_ty(&field_ty, &subst);
-            let value = self.lower_expr(f.value)?;
+            let value = self.lower_expr_with_hint(f.value, Some(&target_ty))?;
             let value = coerce_int_literal(value, &target_ty)?;
+            let value = self.coerce_to_closure(value, &target_ty, f.span);
             lowered_by_name.insert(f.name, value);
         }
 
@@ -1358,6 +1625,8 @@ impl Lower {
         for (fname, target_ty) in &def.fields {
             let value = lowered_by_name.remove(fname).expect("checked above");
             let value = coerce_int_literal(value, target_ty)?;
+            let field_span = value.span;
+            let value = self.coerce_to_closure(value, target_ty, field_span);
             ordered.push((fname.clone(), value));
         }
 
@@ -1368,4 +1637,325 @@ impl Lower {
         })
     }
 
+}
+
+/// Whether any expression in `block` has a type containing a TypeVar.
+/// Used by `lift_function_value` to detect closure code fns whose body
+/// references parent typevars (via captured-tuple casts) even when the
+/// signature doesn't.
+fn block_has_typevars(block: &Block) -> bool {
+    for item in &block.items {
+        match item {
+            BlockItem::Declaration(d) => {
+                if ty_has_typevars(&d.ty) || expr_has_typevars(&d.value) {
+                    return true;
+                }
+            }
+            BlockItem::Statement(s) => match &s.kind {
+                StatementKind::Expr(e)
+                | StatementKind::Return(e)
+                | StatementKind::Defer(e) => {
+                    if expr_has_typevars(e) {
+                        return true;
+                    }
+                }
+                StatementKind::Break => {}
+            },
+        }
+    }
+    expr_has_typevars(&block.tail)
+}
+
+fn expr_has_typevars(e: &Expr) -> bool {
+    if ty_has_typevars(&e.ty) {
+        return true;
+    }
+    match &e.kind {
+        ExprKind::Cast { target, expr } => {
+            ty_has_typevars(target) || expr_has_typevars(expr)
+        }
+        ExprKind::Unary { operand, .. } => expr_has_typevars(operand),
+        ExprKind::Binary { lhs, rhs, .. } => expr_has_typevars(lhs) || expr_has_typevars(rhs),
+        ExprKind::Block(b) => block_has_typevars(b),
+        ExprKind::If { condition, then_branch, else_branch } => {
+            expr_has_typevars(condition)
+                || expr_has_typevars(then_branch)
+                || expr_has_typevars(else_branch)
+        }
+        ExprKind::While { condition, body } => {
+            expr_has_typevars(condition) || block_has_typevars(body)
+        }
+        ExprKind::Assign { target, value } => {
+            expr_has_typevars(target) || expr_has_typevars(value)
+        }
+        ExprKind::Array(items) => items.iter().any(expr_has_typevars),
+        ExprKind::Subscript { expr, index } => {
+            expr_has_typevars(expr) || expr_has_typevars(index)
+        }
+        ExprKind::Ref(t) | ExprKind::Deref(t) => expr_has_typevars(t),
+        ExprKind::StructLiteral { fields } => fields.iter().any(|(_, v)| expr_has_typevars(v)),
+        ExprKind::Field { target, .. } | ExprKind::TupleField { target, .. } => expr_has_typevars(target),
+        ExprKind::Tuple(es) => es.iter().any(expr_has_typevars),
+        ExprKind::Call(call) => {
+            expr_has_typevars(&call.callee) || call.args.iter().any(expr_has_typevars)
+        }
+        ExprKind::Intrinsic { args, elem_ty, .. } => {
+            ty_has_typevars(elem_ty) || args.iter().any(expr_has_typevars)
+        }
+        ExprKind::EnumConstruct { args, .. } => args.iter().any(expr_has_typevars),
+        ExprKind::Match { scrutinee, arms } => {
+            expr_has_typevars(scrutinee) || arms.iter().any(|a| expr_has_typevars(&a.body))
+        }
+        ExprKind::MakeClosure { env, code } => {
+            expr_has_typevars(env) || expr_has_typevars(code)
+        }
+        ExprKind::ZeroInit(ty) => ty_has_typevars(ty),
+        _ => false,
+    }
+}
+
+fn collect_typevars_in_block(block: &Block, out: &mut Vec<TypeVarId>) {
+    for item in &block.items {
+        match item {
+            BlockItem::Declaration(d) => {
+                collect_typevars(&d.ty, out);
+                collect_typevars_in_expr(&d.value, out);
+            }
+            BlockItem::Statement(s) => match &s.kind {
+                StatementKind::Expr(e)
+                | StatementKind::Return(e)
+                | StatementKind::Defer(e) => collect_typevars_in_expr(e, out),
+                StatementKind::Break => {}
+            },
+        }
+    }
+    collect_typevars_in_expr(&block.tail, out);
+}
+
+fn collect_typevars_in_expr(e: &Expr, out: &mut Vec<TypeVarId>) {
+    collect_typevars(&e.ty, out);
+    match &e.kind {
+        ExprKind::Cast { target, expr } => {
+            collect_typevars(target, out);
+            collect_typevars_in_expr(expr, out);
+        }
+        ExprKind::Unary { operand, .. } => collect_typevars_in_expr(operand, out),
+        ExprKind::Binary { lhs, rhs, .. } => {
+            collect_typevars_in_expr(lhs, out);
+            collect_typevars_in_expr(rhs, out);
+        }
+        ExprKind::Block(b) => collect_typevars_in_block(b, out),
+        ExprKind::If { condition, then_branch, else_branch } => {
+            collect_typevars_in_expr(condition, out);
+            collect_typevars_in_expr(then_branch, out);
+            collect_typevars_in_expr(else_branch, out);
+        }
+        ExprKind::While { condition, body } => {
+            collect_typevars_in_expr(condition, out);
+            collect_typevars_in_block(body, out);
+        }
+        ExprKind::Assign { target, value } => {
+            collect_typevars_in_expr(target, out);
+            collect_typevars_in_expr(value, out);
+        }
+        ExprKind::Array(items) => items.iter().for_each(|i| collect_typevars_in_expr(i, out)),
+        ExprKind::Subscript { expr, index } => {
+            collect_typevars_in_expr(expr, out);
+            collect_typevars_in_expr(index, out);
+        }
+        ExprKind::Ref(t) | ExprKind::Deref(t) => collect_typevars_in_expr(t, out),
+        ExprKind::StructLiteral { fields } => {
+            for (_, v) in fields { collect_typevars_in_expr(v, out); }
+        }
+        ExprKind::Field { target, .. } | ExprKind::TupleField { target, .. } => {
+            collect_typevars_in_expr(target, out);
+        }
+        ExprKind::Tuple(es) => es.iter().for_each(|e| collect_typevars_in_expr(e, out)),
+        ExprKind::Call(call) => {
+            collect_typevars_in_expr(&call.callee, out);
+            for a in &call.args { collect_typevars_in_expr(a, out); }
+        }
+        ExprKind::Intrinsic { args, elem_ty, .. } => {
+            collect_typevars(elem_ty, out);
+            for a in args { collect_typevars_in_expr(a, out); }
+        }
+        ExprKind::EnumConstruct { args, .. } => {
+            for a in args { collect_typevars_in_expr(a, out); }
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_typevars_in_expr(scrutinee, out);
+            for a in arms { collect_typevars_in_expr(&a.body, out); }
+        }
+        ExprKind::MakeClosure { env, code } => {
+            collect_typevars_in_expr(env, out);
+            collect_typevars_in_expr(code, out);
+        }
+        ExprKind::ZeroInit(ty) => collect_typevars(ty, out),
+        _ => {}
+    }
+}
+
+/// Walks `expr` and replaces every `Local(id)` whose `id` appears in
+/// `captures_by_id` with an env-field load. The replacement reads from
+/// `(*(env as *EnvTuple)).index` where `env` is the synth code fn's env
+/// param (`env_param_id`).
+fn rewrite_captures_in_expr(
+    expr: &mut Expr,
+    captures_by_id: &HashMap<LocalId, usize>,
+    env_param_id: LocalId,
+    env_tuple_ty: &Ty,
+    span: Span,
+) {
+    match &mut expr.kind {
+        ExprKind::Local(id) => {
+            if let Some(&index) = captures_by_id.get(id) {
+                let env_ptr_ty = Ty::Ptr(Box::new(env_tuple_ty.clone()));
+                let cap_ty = expr.ty.clone();
+                let env_local = Expr {
+                    span,
+                    ty: Ty::Ptr(Box::new(Ty::U8)),
+                    kind: ExprKind::Local(env_param_id),
+                };
+                let env_cast = Expr {
+                    span,
+                    ty: env_ptr_ty.clone(),
+                    kind: ExprKind::Cast {
+                        target: env_ptr_ty,
+                        expr: Box::new(env_local),
+                    },
+                };
+                let env_deref = Expr {
+                    span,
+                    ty: env_tuple_ty.clone(),
+                    kind: ExprKind::Deref(Box::new(env_cast)),
+                };
+                *expr = Expr {
+                    span,
+                    ty: cap_ty,
+                    kind: ExprKind::TupleField {
+                        target: Box::new(env_deref),
+                        index,
+                    },
+                };
+            }
+        }
+        ExprKind::Const(_)
+        | ExprKind::ZeroInit(_)
+        | ExprKind::CompError(_)
+        | ExprKind::TypeValue(_)
+        | ExprKind::ExternFunction { .. }
+        | ExprKind::DeferredFunctionRef { .. }
+        | ExprKind::Function(_) => {}
+        ExprKind::Unary { operand, .. } => {
+            rewrite_captures_in_expr(operand, captures_by_id, env_param_id, env_tuple_ty, span);
+        }
+        ExprKind::Binary { lhs, rhs, .. } => {
+            rewrite_captures_in_expr(lhs, captures_by_id, env_param_id, env_tuple_ty, span);
+            rewrite_captures_in_expr(rhs, captures_by_id, env_param_id, env_tuple_ty, span);
+        }
+        ExprKind::Cast { expr: inner, .. } => {
+            rewrite_captures_in_expr(inner, captures_by_id, env_param_id, env_tuple_ty, span);
+        }
+        ExprKind::Call(call) => {
+            rewrite_captures_in_expr(&mut call.callee, captures_by_id, env_param_id, env_tuple_ty, span);
+            for a in &mut call.args {
+                rewrite_captures_in_expr(a, captures_by_id, env_param_id, env_tuple_ty, span);
+            }
+        }
+        ExprKind::Block(b) => {
+            for item in &mut b.items {
+                match item {
+                    BlockItem::Declaration(d) => {
+                        rewrite_captures_in_expr(&mut d.value, captures_by_id, env_param_id, env_tuple_ty, span);
+                    }
+                    BlockItem::Statement(s) => match &mut s.kind {
+                        StatementKind::Expr(e)
+                        | StatementKind::Return(e)
+                        | StatementKind::Defer(e) => {
+                            rewrite_captures_in_expr(e, captures_by_id, env_param_id, env_tuple_ty, span);
+                        }
+                        StatementKind::Break => {}
+                    },
+                }
+            }
+            rewrite_captures_in_expr(&mut b.tail, captures_by_id, env_param_id, env_tuple_ty, span);
+        }
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            rewrite_captures_in_expr(condition, captures_by_id, env_param_id, env_tuple_ty, span);
+            rewrite_captures_in_expr(then_branch, captures_by_id, env_param_id, env_tuple_ty, span);
+            rewrite_captures_in_expr(else_branch, captures_by_id, env_param_id, env_tuple_ty, span);
+        }
+        ExprKind::While { condition, body } => {
+            rewrite_captures_in_expr(condition, captures_by_id, env_param_id, env_tuple_ty, span);
+            for item in &mut body.items {
+                match item {
+                    BlockItem::Declaration(d) => {
+                        rewrite_captures_in_expr(&mut d.value, captures_by_id, env_param_id, env_tuple_ty, span);
+                    }
+                    BlockItem::Statement(s) => match &mut s.kind {
+                        StatementKind::Expr(e)
+                        | StatementKind::Return(e)
+                        | StatementKind::Defer(e) => {
+                            rewrite_captures_in_expr(e, captures_by_id, env_param_id, env_tuple_ty, span);
+                        }
+                        StatementKind::Break => {}
+                    },
+                }
+            }
+            rewrite_captures_in_expr(&mut body.tail, captures_by_id, env_param_id, env_tuple_ty, span);
+        }
+        ExprKind::Assign { target, value } => {
+            rewrite_captures_in_expr(target, captures_by_id, env_param_id, env_tuple_ty, span);
+            rewrite_captures_in_expr(value, captures_by_id, env_param_id, env_tuple_ty, span);
+        }
+        ExprKind::Array(items) => {
+            for it in items {
+                rewrite_captures_in_expr(it, captures_by_id, env_param_id, env_tuple_ty, span);
+            }
+        }
+        ExprKind::Subscript { expr: arr, index } => {
+            rewrite_captures_in_expr(arr, captures_by_id, env_param_id, env_tuple_ty, span);
+            rewrite_captures_in_expr(index, captures_by_id, env_param_id, env_tuple_ty, span);
+        }
+        ExprKind::Ref(inner) | ExprKind::Deref(inner) => {
+            rewrite_captures_in_expr(inner, captures_by_id, env_param_id, env_tuple_ty, span);
+        }
+        ExprKind::StructLiteral { fields } => {
+            for (_, v) in fields {
+                rewrite_captures_in_expr(v, captures_by_id, env_param_id, env_tuple_ty, span);
+            }
+        }
+        ExprKind::Field { target, .. } | ExprKind::TupleField { target, .. } => {
+            rewrite_captures_in_expr(target, captures_by_id, env_param_id, env_tuple_ty, span);
+        }
+        ExprKind::Tuple(elems) => {
+            for e in elems {
+                rewrite_captures_in_expr(e, captures_by_id, env_param_id, env_tuple_ty, span);
+            }
+        }
+        ExprKind::Intrinsic { args, .. } => {
+            for a in args {
+                rewrite_captures_in_expr(a, captures_by_id, env_param_id, env_tuple_ty, span);
+            }
+        }
+        ExprKind::EnumConstruct { args, .. } => {
+            for a in args {
+                rewrite_captures_in_expr(a, captures_by_id, env_param_id, env_tuple_ty, span);
+            }
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            rewrite_captures_in_expr(scrutinee, captures_by_id, env_param_id, env_tuple_ty, span);
+            for arm in arms {
+                rewrite_captures_in_expr(&mut arm.body, captures_by_id, env_param_id, env_tuple_ty, span);
+            }
+        }
+        ExprKind::MakeClosure { env, code } => {
+            rewrite_captures_in_expr(env, captures_by_id, env_param_id, env_tuple_ty, span);
+            rewrite_captures_in_expr(code, captures_by_id, env_param_id, env_tuple_ty, span);
+        }
+    }
 }

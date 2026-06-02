@@ -11,6 +11,9 @@ pub fn ty_has_typevars(ty: &Ty) -> bool {
         Ty::Function { params, return_ty, .. } => {
             params.iter().any(ty_has_typevars) || ty_has_typevars(return_ty)
         }
+        Ty::Closure { params, return_ty } => {
+            params.iter().any(ty_has_typevars) || ty_has_typevars(return_ty)
+        }
         Ty::GenericStruct { args, .. } => args.iter().any(ty_has_typevars),
         Ty::GenericEnum { args, .. } => args.iter().any(ty_has_typevars),
         Ty::Tuple(elems) => elems.iter().any(ty_has_typevars),
@@ -28,6 +31,12 @@ pub fn collect_typevars(ty: &Ty, out: &mut Vec<TypeVarId>) {
         Ty::Ptr(inner) => collect_typevars(inner, out),
         Ty::Array { element, .. } => collect_typevars(element, out),
         Ty::Function { params, return_ty, .. } => {
+            for p in params {
+                collect_typevars(p, out);
+            }
+            collect_typevars(return_ty, out);
+        }
+        Ty::Closure { params, return_ty } => {
             for p in params {
                 collect_typevars(p, out);
             }
@@ -99,6 +108,21 @@ pub fn unify(
                 params: as_,
                 return_ty: ra,
                 ..
+            },
+        ) if ps.len() == as_.len() => {
+            for (p, a) in ps.iter().zip(as_.iter()) {
+                unify(p, a, span, subst, struct_origins, enum_origins)?;
+            }
+            unify(rp, ra, span, subst, struct_origins, enum_origins)
+        }
+        (
+            Ty::Closure {
+                params: ps,
+                return_ty: rp,
+            },
+            Ty::Closure {
+                params: as_,
+                return_ty: ra,
             },
         ) if ps.len() == as_.len() => {
             for (p, a) in ps.iter().zip(as_.iter()) {

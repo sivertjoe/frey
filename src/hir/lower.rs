@@ -15,6 +15,20 @@ use crate::{
     lexer::types::Span,
 };
 
+/// State maintained while lowering a closure literal's body so that free
+/// variable references can be identified, recorded, and rewritten as
+/// loads from the closure's env pointer.
+pub(super) struct ClosureCaptureCtx {
+    /// Scope depth at the moment the closure body started lowering. A
+    /// local resolved at a depth strictly between 1 and this is from an
+    /// enclosing non-global scope — i.e., a capture. Depth 0 is global.
+    pub(super) threshold_depth: usize,
+    /// Captures in insertion order. Each becomes a field of the env tuple.
+    pub(super) captures: Vec<(LocalId, Ty)>,
+    /// Reverse lookup: original outer-local id → its index in `captures`.
+    pub(super) captures_by_id: HashMap<LocalId, usize>,
+}
+
 #[derive(Clone)]
 pub(super) struct PendingFnSig {
     pub(super) scope: HashMap<String, TypeVarId>,
@@ -33,6 +47,9 @@ pub(crate) struct GenericTemplate {
     pub params: Vec<Param>,
     pub return_ty: Ty,
     pub body: Block,
+    /// Mirrors `Function::env_param_id` for closure-body templates so the
+    /// specialization carries the env param through to codegen.
+    pub env_param_id: Option<LocalId>,
 }
 
 pub struct Lower {
@@ -44,6 +61,9 @@ pub struct Lower {
     pub(super) type_vars: Vec<TypeVar>,
     pub(super) type_var_scopes: Vec<HashMap<String, TypeVarId>>,
     pub(super) pending_fn_sigs: HashMap<LocalId, PendingFnSig>,
+    /// Active when lowering a closure literal's body — every identifier
+    /// resolution checks here and records captures from outer scopes.
+    pub(super) closure_capture_ctx: Option<ClosureCaptureCtx>,
     /// Declaration-order type-var ids per function, captured during
     /// pre-registration. Outlives `pending_fn_sigs` (which is consumed when
     /// the body lowers) so `register_if_generic_template` can still see the
@@ -103,6 +123,7 @@ impl Lower {
             type_vars: Vec::default(),
             type_var_scopes: Vec::default(),
             pending_fn_sigs: HashMap::default(),
+            closure_capture_ctx: None,
             fn_decl_type_var_ids: HashMap::default(),
             return_ty_stack: Vec::default(),
             templates: HashMap::default(),
@@ -506,6 +527,7 @@ impl Lower {
                 params: func.params.clone(),
                 return_ty: func.return_ty.clone(),
                 body: func.body.clone(),
+                env_param_id: func.env_param_id,
             },
         );
         true
@@ -820,6 +842,7 @@ impl Lower {
                 params: hir_params,
                 return_ty: sig.return_ty,
                 body,
+                env_param_id: None,
             }),
         })
     }
@@ -827,6 +850,7 @@ impl Lower {
     pub(super) fn fn_params(&self, id: LocalId) -> Vec<Ty> {
         match self.bindings.get(&id) {
             Some(Ty::Function { params, .. }) => params.clone(),
+            Some(Ty::Closure { params, .. }) => params.clone(),
             _ => Vec::new(),
         }
     }
@@ -895,6 +919,7 @@ impl Lower {
         }
         None
     }
+
 }
 
 pub(super) fn unit_expr(span: crate::lexer::types::Span) -> Expr {

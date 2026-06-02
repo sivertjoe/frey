@@ -38,7 +38,9 @@ impl<'ctx> Codegen<'ctx> {
                 if let Some(func) = self.functions.get(&id) {
                     return Ok(func.as_global_value().as_pointer_value().into());
                 }
-                let ptr = *self.locals.get(&id).expect("local binding exists");
+                let ptr = *self.locals.get(&id).unwrap_or_else(|| {
+                    panic!("missing local {id:?} ty={:?}", expr.ty)
+                });
                 let llvm_ty = self.lower_ty(&expr.ty);
                 Ok(self.builder.build_load(llvm_ty, ptr, "")?)
             }
@@ -454,17 +456,69 @@ impl<'ctx> Codegen<'ctx> {
                     arg_vals.iter().map(|v| (*v).into()).collect();
 
                 let direct_target = match &callee.kind {
-                    ExprKind::Local(id) => self.functions.get(id).copied(),
+                    ExprKind::Local(id) => self.functions.get(id).copied().map(|f| (*id, f)),
                     _ => None,
                 };
 
                 let call_site = match direct_target {
-                    Some(func) => self.builder.build_direct_call(func, &arg_metadata, "")?,
+                    Some((id, func)) => {
+                        // Non-extern Frey fns take env: *u8 as their first
+                        // LLVM param — prepend a null env for direct calls
+                        // by name. Extern C fns keep their declared C ABI.
+                        let mut full_args: Vec<BasicMetadataValueEnum<'ctx>> =
+                            Vec::with_capacity(arg_metadata.len() + 1);
+                        if !self.extern_fn_ids.contains(&id) {
+                            let null_env = self
+                                .context
+                                .ptr_type(inkwell::AddressSpace::default())
+                                .const_null();
+                            full_args.push(null_env.into());
+                        }
+                        full_args.extend(arg_metadata.iter().copied());
+                        self.builder.build_direct_call(func, &full_args, "")?
+                    }
                     None => {
-                        let fn_ty = self.fn_type_for_function_ty(&callee.ty);
-                        let fn_ptr = self.lower_expr(*callee)?.into_pointer_value();
-                        self.builder
-                            .build_indirect_call(fn_ty, fn_ptr, &arg_metadata, "")?
+                        // Closure call: lower the callee to a `{env, code}`
+                        // struct value, extract both, then call
+                        // `code(env, original_args...)`. The code function
+                        // always takes env as its first parameter.
+                        if let Ty::Closure { params, return_ty } = &callee.ty {
+                            use crate::hir::types::{LocalId, Param as HirParam};
+                            let mut param_tys: Vec<Ty> =
+                                Vec::with_capacity(params.len() + 1);
+                            param_tys.push(Ty::Ptr(Box::new(Ty::U8)));
+                            param_tys.extend(params.iter().cloned());
+                            let placeholder_id = LocalId::placeholder();
+                            let code_params: Vec<HirParam> = param_tys
+                                .iter()
+                                .map(|t| HirParam {
+                                    id: placeholder_id,
+                                    span: callee.span,
+                                    name: String::new(),
+                                    ty: t.clone(),
+                                })
+                                .collect();
+                            let fn_ty = self.lower_fn_type(&code_params, return_ty, false);
+                            let closure_val = self.lower_expr(*callee)?.into_struct_value();
+                            let env_val = self
+                                .builder
+                                .build_extract_value(closure_val, 0, "")?;
+                            let code_val = self
+                                .builder
+                                .build_extract_value(closure_val, 1, "")?
+                                .into_pointer_value();
+                            let mut full_args: Vec<BasicMetadataValueEnum<'ctx>> =
+                                Vec::with_capacity(arg_metadata.len() + 1);
+                            full_args.push(env_val.into());
+                            full_args.extend(arg_metadata.iter().copied());
+                            self.builder
+                                .build_indirect_call(fn_ty, code_val, &full_args, "")?
+                        } else {
+                            let fn_ty = self.fn_type_for_function_ty(&callee.ty);
+                            let fn_ptr = self.lower_expr(*callee)?.into_pointer_value();
+                            self.builder
+                                .build_indirect_call(fn_ty, fn_ptr, &arg_metadata, "")?
+                        }
                     }
                 };
 
@@ -531,6 +585,16 @@ impl<'ctx> Codegen<'ctx> {
             ),
             ExprKind::TypeValue(_) | ExprKind::CompError(_) => {
                 unreachable!("comptime-only nodes are eliminated during specialization")
+            }
+            ExprKind::MakeClosure { env, code } => {
+                let env_val = self.lower_expr(*env)?;
+                let code_val = self.lower_expr(*code)?;
+                let closure_ty = self.closure_llvm_type();
+                let agg: inkwell::values::AggregateValueEnum<'ctx> =
+                    closure_ty.get_undef().into();
+                let agg = self.builder.build_insert_value(agg, env_val, 0, "")?;
+                let agg = self.builder.build_insert_value(agg, code_val, 1, "")?;
+                Ok(agg.into_struct_value().into())
             }
         }
     }

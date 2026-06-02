@@ -43,16 +43,14 @@ impl Lower {
                 })
             }
             ast::TypeExprKind::Function { params, return_ty } => {
+                // User-written `(T) -> U` is the fat closure type. Extern
+                // declarations build a thin `Ty::Function` directly elsewhere.
                 let params = params
                     .iter()
                     .map(|p| self.lower_type(p))
                     .collect::<Result<Vec<_>, _>>()?;
                 let return_ty = Box::new(self.lower_type(return_ty)?);
-                Ok(Ty::Function {
-                    params,
-                    return_ty,
-                    varargs: false,
-                })
+                Ok(Ty::Closure { params, return_ty })
             }
             ast::TypeExprKind::Ptr(target) => {
                 let target = Box::new(self.lower_type(target)?);
@@ -494,6 +492,14 @@ impl Lower {
                     varargs: *varargs,
                 }
             }
+            Ty::Closure { params, return_ty } => {
+                let params: Vec<Ty> = params
+                    .iter()
+                    .map(|p| self.substitute_ty(p, subst))
+                    .collect();
+                let return_ty = Box::new(self.substitute_ty(return_ty, subst));
+                Ty::Closure { params, return_ty }
+            }
             Ty::GenericStruct { name, args } => {
                 let new_args: Vec<Ty> = args.iter().map(|a| self.substitute_ty(a, subst)).collect();
                 let still_generic = new_args
@@ -685,6 +691,7 @@ impl Lower {
         // mutably calling substitute_block.
         let template_name = template.name.clone();
         let template_span = template.span;
+        let template_env_param_id = template.env_param_id;
         drop(template);
 
         let mangled = mangle_specialization(&template_name, &key_tys);
@@ -695,6 +702,11 @@ impl Lower {
                 params: new_params,
                 return_ty: new_return_ty,
                 body: new_body,
+                // Closure-body code fns carry their env_param_id forward
+                // unchanged — the body's references to it still resolve
+                // since substitute_expr leaves the id alone (it's not in
+                // `local_map`, which only covers template params).
+                env_param_id: template_env_param_id,
             }),
         };
         let decl = Declaration {
@@ -822,6 +834,24 @@ impl Lower {
             ExprKind::Local(id) => {
                 if let Some(&new) = local_map.get(id) {
                     *id = new;
+                } else if self.templates.contains_key(id) {
+                    let template = self.templates.get(id).cloned().unwrap();
+                    let template_args: Vec<Ty> = template
+                        .type_var_ids
+                        .iter()
+                        .map(|tv| {
+                            subst.get(tv).cloned().unwrap_or(Ty::TypeVar(*tv))
+                        })
+                        .collect();
+                    if !template_args.iter().any(ty_has_typevars)
+                        && template_args.len() == template.type_var_ids.len()
+                    {
+                        let new_id = self.specialize_call(*id, &[], &template_args, span)?;
+                        *id = new_id;
+                        if let Some(new_ty) = self.bindings.get(&new_id).cloned() {
+                            e.ty = new_ty;
+                        }
+                    }
                 }
             }
             ExprKind::Function(_) => {
@@ -965,6 +995,10 @@ impl Lower {
                     }
                     self.substitute_expr(&mut arm.body, subst, local_map)?;
                 }
+            }
+            ExprKind::MakeClosure { env, code } => {
+                self.substitute_expr(env, subst, local_map)?;
+                self.substitute_expr(code, subst, local_map)?;
             }
             ExprKind::ZeroInit(ty) => {
                 *ty = self.substitute_ty(ty, subst);

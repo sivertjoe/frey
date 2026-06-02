@@ -17,6 +17,10 @@ impl<'ctx> Codegen<'ctx> {
             Ty::Function { .. } | Ty::Ptr(_) => {
                 self.context.ptr_type(AddressSpace::default()).into()
             }
+            // Closure value: `{env: ptr, code: ptr}` (16 bytes). Calling
+            // does `code(env, args)`. The code pointer's underlying fn
+            // always takes env as its first parameter.
+            Ty::Closure { .. } => self.closure_llvm_type().into(),
             Ty::Array { element, count } => self.lower_ty(element).array_type(*count as u32).into(),
             Ty::Struct(name) => self.struct_llvm[name].into(),
             Ty::Tuple(elems) => self.tuple_llvm_type(elems).into(),
@@ -30,6 +34,15 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
 
+    /// LLVM struct layout for a closure value, shared by every closure
+    /// regardless of signature: `{env: ptr, code: ptr}`. The `code` field's
+    /// actual fn type is recovered from `Ty::Closure { params, return_ty }`
+    /// at the call site (env is prepended).
+    pub fn closure_llvm_type(&self) -> inkwell::types::StructType<'ctx> {
+        let ptr = self.context.ptr_type(AddressSpace::default());
+        self.context.struct_type(&[ptr.into(), ptr.into()], false)
+    }
+
     /// Natural alignment of a type, matching LLVM's default layout rules.
     pub fn align_bytes(&self, ty: &Ty) -> usize {
         match ty {
@@ -38,6 +51,7 @@ impl<'ctx> Codegen<'ctx> {
             Ty::Int | Ty::UInt | Ty::I32 | Ty::U32 | Ty::Float | Ty::F32 => 4,
             Ty::I64 | Ty::U64 | Ty::F64 => 8,
             Ty::Ptr(_) | Ty::Function { .. } => 8,
+            Ty::Closure { .. } => 8,
             Ty::Array { element, .. } => self.align_bytes(element),
             Ty::Tuple(elems) => elems.iter().map(|e| self.align_bytes(e)).max().unwrap_or(1),
             Ty::Struct(name) => {
@@ -67,6 +81,8 @@ impl<'ctx> Codegen<'ctx> {
             Ty::Int | Ty::UInt | Ty::I32 | Ty::U32 | Ty::Float | Ty::F32 => 4,
             Ty::I64 | Ty::U64 | Ty::F64 => 8,
             Ty::Ptr(_) | Ty::Function { .. } => 8,
+            // Closure: env + code = 16 bytes.
+            Ty::Closure { .. } => 16,
             Ty::Array { element, count } => self.approx_size_bytes(element) * count,
             Ty::Tuple(elems) => self.aligned_fields_size(elems),
             Ty::Struct(name) => {
@@ -144,6 +160,23 @@ impl<'ctx> Codegen<'ctx> {
         self.fn_type_with_return(&param_types, return_ty, varargs)
     }
 
+    /// Like `lower_fn_type` but prepends `env: *u8` as the first parameter.
+    /// Used for every Frey fn under the closure-uniform calling convention.
+    pub fn lower_fn_type_with_env(
+        &self,
+        params: &[Param],
+        return_ty: &Ty,
+    ) -> FunctionType<'ctx> {
+        let ptr = self.context.ptr_type(AddressSpace::default());
+        let mut param_types: Vec<BasicMetadataTypeEnum<'ctx>> =
+            Vec::with_capacity(params.len() + 1);
+        param_types.push(ptr.into());
+        for p in params {
+            param_types.push(self.lower_ty(&p.ty).into());
+        }
+        self.fn_type_with_return(&param_types, return_ty, false)
+    }
+
     pub fn fn_type_for_function_ty(&self, fn_ty: &Ty) -> FunctionType<'ctx> {
         let Ty::Function {
             params,
@@ -176,6 +209,9 @@ impl<'ctx> Codegen<'ctx> {
             Ty::Function { .. } | Ty::Ptr(_) => self
                 .context
                 .ptr_type(AddressSpace::default())
+                .fn_type(param_types, varargs),
+            Ty::Closure { .. } => self
+                .closure_llvm_type()
                 .fn_type(param_types, varargs),
             Ty::Array { element, count } => self
                 .lower_ty(element)

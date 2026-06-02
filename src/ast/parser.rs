@@ -426,15 +426,23 @@ impl Parser {
         })
     }
 
-    /// True when the upcoming `{ ident (, ident)* :` shape is a closure
-    /// literal — `{x : expr}` or `{x, y, z : expr}`. The `{` must be the
-    /// current token. Blocks never start with `ident :` (a declaration would
-    /// require `let`), so the check is non-ambiguous.
+    /// True when the upcoming `{ ident (, ident)* :` or `{ :` shape is a
+    /// closure literal — `{x : expr}`, `{x, y : expr}`, or the zero-param
+    /// `{ : expr}`. The `{` must be the current token. Blocks never start
+    /// with `:` or `ident :` (a declaration would require `let`), so this
+    /// check is non-ambiguous.
     fn looks_like_closure(&self) -> bool {
         debug_assert!(matches!(
             self.iter.peek().map(|t| &t.kind),
             Some(TokenKind::LeftBrace)
         ));
+        // Zero-param form: `{ : ... }`.
+        if matches!(
+            self.iter.peek_nth(1).map(|t| &t.kind),
+            Some(TokenKind::Colon)
+        ) {
+            return true;
+        }
         let mut at = 1;
         loop {
             if !matches!(
@@ -455,12 +463,15 @@ impl Parser {
     fn parse_closure(&mut self) -> Result<Expr, Error> {
         let left = self.expect(TokenKind::LeftBrace)?.span;
         let mut params = Vec::new();
-        loop {
-            params.push(self.ident()?);
-            if self.check(TokenKind::Colon) {
-                break;
+        // Zero-param form `{ : body }` skips the param loop.
+        if !self.check(TokenKind::Colon) {
+            loop {
+                params.push(self.ident()?);
+                if self.check(TokenKind::Colon) {
+                    break;
+                }
+                self.expect(TokenKind::Comma)?;
             }
-            self.expect(TokenKind::Comma)?;
         }
         self.expect(TokenKind::Colon)?;
         let body = self.parse_expr()?;

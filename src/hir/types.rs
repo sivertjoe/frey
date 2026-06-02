@@ -13,6 +13,12 @@ impl LocalId {
     pub fn raw(self) -> u32 {
         self.0
     }
+
+    /// A throwaway id, used by codegen helpers that need to fill the field
+    /// but never look at it (e.g. building a fn-type from a Vec<Ty>).
+    pub fn placeholder() -> Self {
+        LocalId(u32::MAX)
+    }
 }
 
 #[derive(Default)]
@@ -54,12 +60,21 @@ pub enum Ty {
     U64,
     F32,
     F64,
+    /// Thin function pointer — produced by `extern (...)` declarations,
+    /// also used internally for the underlying LLVM type of top-level fns
+    /// (which get exposed to the user as `Ty::Closure`). Carries varargs
+    /// for C interop.
     Function {
         params: Vec<Ty>,
         return_ty: Box<Ty>,
-        /// True when the function was declared `extern (..., ...)` — call
-        /// sites may pass extra args after the fixed params.
         varargs: bool,
+    },
+    /// Fat callable value — the user-facing `(T) -> U` type. Stored as
+    /// `{env: *u8, code: *fn}` (16 bytes). Calling: `code(env, args...)`.
+    /// Top-level fns auto-wrap with `env = null` when used as values.
+    Closure {
+        params: Vec<Ty>,
+        return_ty: Box<Ty>,
     },
     Array { element: Box<Ty>, count: usize },
     Ptr(Box<Ty>),
@@ -284,6 +299,14 @@ pub enum ExprKind {
         scrutinee: Box<Expr>,
         arms: Vec<MatchArm>,
     },
+    /// Constructs a closure value: pairs an env pointer (null for top-level
+    /// fn wrappers and capture-free closures, heap-allocated for capturing
+    /// closures) with a code pointer. The code pointer's underlying
+    /// function takes `env: *u8` as its first parameter.
+    MakeClosure {
+        env: Box<Expr>,
+        code: Box<Expr>,
+    },
 }
 
 #[derive(Clone)]
@@ -362,6 +385,10 @@ pub struct Function {
     pub params: Vec<Param>,
     pub return_ty: Ty,
     pub body: Block,
+    /// LocalId for the implicit `env: *u8` first LLVM parameter when this
+    /// function is a closure-body code fn that reads captures from env.
+    /// `None` for ordinary top-level fns whose bodies never touch env.
+    pub env_param_id: Option<LocalId>,
 }
 
 #[derive(Clone)]
@@ -421,7 +448,7 @@ impl fmt::Debug for Ty {
                 return_ty,
                 varargs,
             } => {
-                write!(f, "(")?;
+                write!(f, "extern (")?;
                 for (i, p) in params.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
@@ -433,6 +460,16 @@ impl fmt::Debug for Ty {
                         write!(f, ", ")?;
                     }
                     write!(f, "...")?;
+                }
+                write!(f, ") -> {return_ty:?}")
+            }
+            Ty::Closure { params, return_ty } => {
+                write!(f, "(")?;
+                for (i, p) in params.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{p:?}")?;
                 }
                 write!(f, ") -> {return_ty:?}")
             }
@@ -575,6 +612,9 @@ impl fmt::Debug for ExprKind {
                 .field("scrutinee", scrutinee)
                 .field("arms", arms)
                 .finish(),
+            ExprKind::MakeClosure { env, code } => {
+                write!(f, "MakeClosure(env: {env:?}, code: {code:?})")
+            }
         }
     }
 }

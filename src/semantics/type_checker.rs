@@ -260,6 +260,11 @@ impl Typechecker {
             ExprKind::ZeroInit(_) => Ok(()),
             ExprKind::ExternFunction { .. } => Ok(()),
             ExprKind::DeferredFunctionRef { .. } => Ok(()),
+            ExprKind::MakeClosure { env, code } => {
+                self.check_expr(env)?;
+                self.check_expr(code)?;
+                Ok(())
+            }
         }
     }
 
@@ -448,17 +453,18 @@ impl Typechecker {
             self.check_expr(arg)?;
         }
 
-        let Ty::Function {
-            params, varargs, ..
-        } = &call.callee.ty
-        else {
-            unreachable!("lowering ensures the callee has a function type");
+        let (params, varargs): (&[Ty], bool) = match &call.callee.ty {
+            Ty::Function {
+                params, varargs, ..
+            } => (params.as_slice(), *varargs),
+            Ty::Closure { params, .. } => (params.as_slice(), false),
+            _ => unreachable!("lowering ensures the callee has a function type"),
         };
 
         // Variadic (extern) calls require at least the fixed params; extras
         // are accepted unchecked. Non-varargs calls require an exact match.
         let too_few = call.args.len() < params.len();
-        let too_many = !*varargs && call.args.len() > params.len();
+        let too_many = !varargs && call.args.len() > params.len();
         if too_few || too_many {
             return Err(Error {
                 span: call_expr.span,
@@ -492,6 +498,7 @@ fn is_addressable(e: &Expr) -> bool {
             | ExprKind::Subscript { .. }
             | ExprKind::Deref(_)
             | ExprKind::Field { .. }
+            | ExprKind::TupleField { .. }
     )
 }
 

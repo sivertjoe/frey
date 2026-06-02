@@ -27,13 +27,19 @@ impl Lower {
         explicit_type_args: Vec<Ty>,
         span: Span,
     ) -> Result<Expr, Error> {
-        let Ty::Function { params, return_ty, .. } = callee.ty.clone() else {
-            return Err(Error {
-                span: callee.span,
-                kind: ErrorKind::NotCallable {
-                    found: callee.ty.clone(),
-                },
-            });
+        let (params, return_ty) = match callee.ty.clone() {
+            Ty::Function {
+                params, return_ty, ..
+            } => (params, return_ty),
+            Ty::Closure { params, return_ty } => (params, return_ty),
+            _ => {
+                return Err(Error {
+                    span: callee.span,
+                    kind: ErrorKind::NotCallable {
+                        found: callee.ty.clone(),
+                    },
+                });
+            }
         };
 
         // Coerce int literals against the (possibly generic) param type;
@@ -153,7 +159,7 @@ impl Lower {
         // through to UFCS instead, so `s.len()` can call a top-level `len`
         // that takes `s` as its receiver.
         if let Some((index, field_ty)) = self.resolve_field(&recv.ty, &name)
-            && matches!(field_ty, Ty::Function { .. })
+            && matches!(field_ty, Ty::Function { .. } | Ty::Closure { .. })
         {
             let target = self.autoderef_to_struct(recv);
             let callee = Expr {
@@ -619,6 +625,7 @@ impl Lower {
     ) -> Result<Vec<Expr>, Error> {
         let param_types: Vec<Ty> = match &callee.ty {
             Ty::Function { params, .. } => params.clone(),
+            Ty::Closure { params, .. } => params.clone(),
             _ => return self.lower_args_no_hints(args),
         };
 
@@ -659,9 +666,13 @@ impl Lower {
             // constructors can emit a deferred (GenericEnum-typed)
             // EnumConstruct, and everyone else ignores the hint anyway.
             let v = self.lower_expr_with_hint(arg, hint.as_ref())?;
+            let v = if let Some(p) = hint.as_ref() {
+                let span = v.span;
+                self.coerce_to_closure(v, p, span)
+            } else {
+                v
+            };
             if let Some(p) = &param_ty {
-                // Best-effort: don't error here — finish_call/specialize_call
-                // will produce the real diagnostic if the types don't fit.
                 let _ = crate::hir::generics::unify(
                     p,
                     &v.ty,
@@ -683,6 +694,12 @@ impl Lower {
             let param_ty = param_types.get(i).cloned();
             let hint = param_ty.as_ref().map(|p| self.substitute_ty(p, &subst));
             let v = self.lower_expr_with_hint(arg, hint.as_ref())?;
+            let v = if let Some(p) = hint.as_ref() {
+                let span = v.span;
+                self.coerce_to_closure(v, p, span)
+            } else {
+                v
+            };
             lowered[i] = Some(v);
         }
 

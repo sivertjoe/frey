@@ -21,7 +21,12 @@ pub struct Codegen<'ctx> {
     module: Module<'ctx>,
     builder: Builder<'ctx>,
     locals: HashMap<LocalId, PointerValue<'ctx>>,
-    functions: HashMap<LocalId, FunctionValue<'ctx>>,
+    pub(crate) functions: HashMap<LocalId, FunctionValue<'ctx>>,
+    /// Function ids whose LLVM signature does NOT include the implicit
+    /// `env: *u8` first param — extern C ABI functions only. Every other
+    /// Frey function carries env as its first LLVM param so that any fn
+    /// value can flow into a `Ty::Closure` slot without a trampoline.
+    pub(crate) extern_fn_ids: std::collections::HashSet<LocalId>,
     pub(crate) struct_defs: HashMap<String, StructDef>,
     pub(crate) struct_llvm: HashMap<String, StructType<'ctx>>,
     pub(crate) enum_defs: HashMap<String, EnumDef>,
@@ -45,6 +50,7 @@ impl<'ctx> Codegen<'ctx> {
             builder: context.create_builder(),
             locals: HashMap::new(),
             functions: HashMap::new(),
+            extern_fn_ids: std::collections::HashSet::new(),
             struct_defs: HashMap::new(),
             struct_llvm: HashMap::new(),
             enum_defs: HashMap::new(),

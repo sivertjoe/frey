@@ -8,7 +8,10 @@ impl<'ctx> Codegen<'ctx> {
     pub fn declare_top_level(&mut self, decl: &Declaration) {
         match &decl.value.kind {
             ExprKind::Function(func) => {
-                let fn_type = self.lower_fn_type(&func.params, &func.return_ty, false);
+                // Every Frey fn's LLVM signature has `env: *u8` prepended
+                // so any fn pointer can be wrapped as `{env: null, code: fn}`
+                // and called through the closure ABI without a trampoline.
+                let fn_type = self.lower_fn_type_with_env(&func.params, &func.return_ty);
                 let llvm_fn = self.module.add_function(&decl.name, fn_type, None);
                 self.functions.insert(decl.id, llvm_fn);
             }
@@ -27,6 +30,7 @@ impl<'ctx> Codegen<'ctx> {
                         .add_function(c_name, fn_type, Some(inkwell::module::Linkage::External))
                 });
                 self.functions.insert(decl.id, llvm_fn);
+                self.extern_fn_ids.insert(decl.id);
             }
             // Top-level non-function declarations become LLVM globals.
             _ => {
@@ -83,10 +87,23 @@ impl<'ctx> Codegen<'ctx> {
         let entry = self.context.append_basic_block(llvm_fn, "entry");
         self.builder.position_at_end(entry);
 
+        // User param i is at LLVM position i+1 — slot 0 is the implicit
+        // env: *u8 the closure ABI prepends. The body references env only
+        // for closures that read captures; we register env's LocalId iff
+        // the Function carries one.
+        if let Some(env_id) = func.env_param_id {
+            let env_ty = self
+                .context
+                .ptr_type(inkwell::AddressSpace::default());
+            let slot = self.builder.build_alloca(env_ty, "__env")?;
+            let arg = llvm_fn.get_nth_param(0).unwrap();
+            self.builder.build_store(slot, arg)?;
+            self.locals.insert(env_id, slot);
+        }
         for (i, param) in func.params.iter().enumerate() {
             let llvm_ty = self.lower_ty(&param.ty);
             let slot = self.builder.build_alloca(llvm_ty, &param.name)?;
-            let arg = llvm_fn.get_nth_param(i as u32).unwrap();
+            let arg = llvm_fn.get_nth_param((i as u32) + 1).unwrap();
             self.builder.build_store(slot, arg)?;
             self.locals.insert(param.id, slot);
         }
