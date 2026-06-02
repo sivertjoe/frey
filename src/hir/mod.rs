@@ -1,8 +1,12 @@
+mod call;
 mod coerce;
 pub mod comptime;
 pub mod error;
+mod expr;
 mod generics;
 mod lower;
+mod pattern;
+mod specialize;
 pub mod types;
 
 pub use error::Error;
