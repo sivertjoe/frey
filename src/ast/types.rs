@@ -137,6 +137,9 @@ pub struct Expr {
 pub enum ExprKind {
     Const(Const),
     Identifier(String),
+    /// `@NAME` — a compiler-provided intrinsic constant, resolved at HIR
+    /// lowering. Currently used for build-time facts like `@TARGET_OS`.
+    Intrinsic(String),
     /// A type used in expression position (only meaningful inside a
     /// `#comptime` function), e.g. the `Int` in `T == Int`.
     TypeValue(TypeExpr),

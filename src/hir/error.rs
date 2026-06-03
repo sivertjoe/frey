@@ -144,6 +144,8 @@ pub enum ErrorKind {
     },
     /// `let x;` — no value and no `: T`, nothing to zero-initialize against.
     MissingTypeForZeroInit,
+    /// `@NAME` referenced an intrinsic the compiler doesn't recognize.
+    UnknownIntrinsic { name: String },
     /// `extern (...)` was used outside a top-level `let name = extern (...);`.
     ExternMustBeTopLevel,
     /// `null` was used in a position where the expected pointer type isn't
@@ -353,6 +355,9 @@ impl fmt::Display for ErrorKind {
                     f,
                     "`let name;` requires a `: T` annotation so the zero-initializer has a layout"
                 )
+            }
+            ErrorKind::UnknownIntrinsic { name } => {
+                write!(f, "unknown compiler intrinsic `@{name}`")
             }
             ErrorKind::ExternMustBeTopLevel => {
                 write!(

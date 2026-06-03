@@ -1,0 +1,59 @@
+// Time utilities: a monotonic millisecond clock and a blocking sleep.
+//
+// Cross-platform via `@TARGET_OS` static-if dispatch. The dead branch is
+// folded away at HIR lowering, so calls into the wrong-OS extern never
+// reach codegen — only its declaration remains, and unreferenced extern
+// declarations are linker-safe.
+
+let Sleep = extern (ms: u32);                       // Windows kernel32
+let GetTickCount64 = extern () -> i64;              // Windows kernel32
+
+let usleep = extern (us: u32) -> Int;               // POSIX libc
+let clock_gettime = extern (id: Int, ts: *u8) -> Int; // POSIX libc
+
+
+// Current monotonic time in milliseconds. Only deltas are meaningful;
+// the absolute value is the OS-specific epoch offset.
+let now_ms = () -> i64 {
+    if @TARGET_OS == "windows" {
+        GetTickCount64()
+    } else {
+        // POSIX: read CLOCK_MONOTONIC (id=1 on Linux). `timespec` is
+        // `{ time_t tv_sec; long tv_nsec; }` — 16 bytes on 64-bit Linux,
+        // both fields i64. We read it as two i64 slots.
+        let ts = alloc<i64>(2);
+        clock_gettime(1, ts as *u8);
+        let sec = ts[0];
+        let ns  = ts[1];
+        free(ts);
+        sec * 1000 + ns / 1000000
+    }
+};
+
+// Block the current thread for at least `ms` milliseconds.
+let sleep_ms = (ms: Int) {
+    if @TARGET_OS == "windows" {
+        Sleep(ms as u32);
+    } else {
+        usleep((ms * 1000) as u32);
+    }
+};
+
+
+// A one-shot stopwatch: capture the start point with `start()`, read the
+// delta with `elapsed_ms`. `reset` rebases to "now" without allocating.
+let Stopwatch = struct {
+    started_ms: i64,
+};
+
+let start = (s: *Stopwatch) {
+    *s = Stopwatch { started_ms: now_ms() };
+};
+
+let elapsed_ms = (s: *Stopwatch) -> i64 {
+    now_ms() - s.started_ms
+};
+
+let reset = (s: *Stopwatch) {
+    s.started_ms = now_ms();
+};

@@ -83,6 +83,9 @@ pub fn tokenize_at(src: &str, base: usize) -> Result<Vec<Token>, Error> {
             '#' => {
                 tokens.push(cursor.single(TokenKind::Hash));
             }
+            '@' => {
+                tokens.push(cursor.single(TokenKind::At));
+            }
             '!' => match cursor.peek_second() {
                 Some('=') => tokens.push(cursor.double(TokenKind::NotEqual)),
                 _ => tokens.push(cursor.single(TokenKind::Not)),

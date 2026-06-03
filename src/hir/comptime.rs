@@ -24,12 +24,14 @@ pub enum CtValue {
     Type(crate::hir::types::Ty),
     Int(i32),
     Bool(bool),
+    Str(String),
 }
 
 pub fn eval(e: &Expr) -> Option<CtValue> {
     match &e.kind {
         ExprKind::TypeValue(ty) if !ty_has_typevars(ty) => Some(CtValue::Type(ty.clone())),
         ExprKind::Const(Const::Int(n)) => Some(CtValue::Int(*n)),
+        ExprKind::Const(Const::Str(s)) => Some(CtValue::Str(s.clone())),
         _ => None,
     }
 }
@@ -40,6 +42,8 @@ pub fn eval_binary(op: BinaryOperator, lhs: &Expr, rhs: &Expr) -> Option<CtValue
     match (op, l, r) {
         (BinaryOperator::Eq, CtValue::Type(a), CtValue::Type(b)) => Some(CtValue::Bool(a == b)),
         (BinaryOperator::Ne, CtValue::Type(a), CtValue::Type(b)) => Some(CtValue::Bool(a != b)),
+        (BinaryOperator::Eq, CtValue::Str(a), CtValue::Str(b)) => Some(CtValue::Bool(a == b)),
+        (BinaryOperator::Ne, CtValue::Str(a), CtValue::Str(b)) => Some(CtValue::Bool(a != b)),
         _ => None,
     }
 }

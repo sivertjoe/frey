@@ -66,6 +66,7 @@ pub enum TokenKind {
 
     Dollar,
     Hash,
+    At,
 
     Equal,
     Minus,
@@ -172,6 +173,7 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Import => write!(f, "`import`"),
             TokenKind::Dollar => write!(f, "`$`"),
             TokenKind::Hash => write!(f, "`#`"),
+            TokenKind::At => write!(f, "`@`"),
 
             TokenKind::Eof => write!(f, "end of input"),
         }

@@ -66,6 +66,7 @@ impl Lower {
                 kind: ExprKind::Const(Const::Char(b)),
             }),
             ast::ExprKind::Identifier(name) => self.lower_identifier(name, e.span, hint),
+            ast::ExprKind::Intrinsic(name) => self.lower_intrinsic_value(name, e.span),
             ast::ExprKind::TypeValue(type_expr) => {
                 if !self.in_comptime {
                     return Err(Error {
@@ -450,6 +451,27 @@ impl Lower {
     // reserves stack for all match arms' locals up front, so collapsing each
     // arm into a one-line dispatch keeps the parent frame from ballooning.
 
+    /// Resolves a compiler-intrinsic constant like `@TARGET_OS`. These lower
+    /// to plain `Const::Str` values so the rest of the pipeline (and the
+    /// `#comptime` evaluator) treats them as literals.
+    fn lower_intrinsic_value(
+        &mut self,
+        name: String,
+        span: crate::lexer::types::Span,
+    ) -> Result<Expr, Error> {
+        match name.as_str() {
+            "TARGET_OS" => Ok(Expr {
+                span,
+                ty: Ty::Ptr(Box::new(Ty::U8)),
+                kind: ExprKind::Const(Const::Str(std::env::consts::OS.to_string())),
+            }),
+            _ => Err(Error {
+                span,
+                kind: ErrorKind::UnknownIntrinsic { name },
+            }),
+        }
+    }
+
     fn lower_identifier(
         &mut self,
         name: String,
@@ -829,6 +851,14 @@ impl Lower {
         } else {
             (then_expr, else_expr)
         };
+
+        // Static-if: when the condition is a compile-time constant (e.g.
+        // `@TARGET_OS == "windows"`), drop the dead branch entirely. Calls
+        // in the dead branch never reach codegen, so the wrong-OS extern is
+        // never referenced — even though its declaration remains.
+        if let Some(pick_then) = static_if_condition(&condition) {
+            return Ok(if pick_then { then_expr } else { else_expr });
+        }
 
         let if_ty = then_expr.ty.clone();
         Ok(Expr {
@@ -1686,6 +1716,21 @@ impl Lower {
         })
     }
 
+}
+
+/// If `cond` is a compile-time constant boolean (e.g. `@TARGET_OS == "x"`
+/// or a literal int), return whether it's truthy. Returns `None` for runtime
+/// conditions so they keep their dynamic branches.
+fn static_if_condition(cond: &Expr) -> Option<bool> {
+    use crate::hir::comptime::{CtValue, eval_binary};
+    match &cond.kind {
+        ExprKind::Const(Const::Int(n)) => Some(*n != 0),
+        ExprKind::Binary { op, lhs, rhs } => match eval_binary(*op, lhs, rhs)? {
+            CtValue::Bool(b) => Some(b),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Whether any expression in `block` has a type containing a TypeVar.

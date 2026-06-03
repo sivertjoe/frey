@@ -1281,6 +1281,21 @@ impl Parser {
                     kind: ExprKind::Null,
                 });
             }
+            TokenKind::At => {
+                let start = tok.span;
+                self.iter.consume();
+                let name_span = self
+                    .iter
+                    .peek()
+                    .expect("lexer emits eof")
+                    .span;
+                let name = self.ident()?;
+                return Ok(Expr {
+                    id: self.id_gen.fresh(),
+                    span: start.join(name_span),
+                    kind: ExprKind::Intrinsic(name),
+                });
+            }
             // A leading generic parameter list introduces a generic function
             // literal: `<$K, $V>(params) -> ret { body }`.
             TokenKind::LessThan => {
