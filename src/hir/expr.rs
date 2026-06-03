@@ -65,71 +65,7 @@ impl Lower {
                 ty: Ty::U8,
                 kind: ExprKind::Const(Const::Char(b)),
             }),
-            ast::ExprKind::Identifier(name) => {
-                // Inside a `#comptime` body, a bare type-variable name used in
-                // expression position (e.g. `T` in `T == Int`) denotes a
-                // reified type value rather than a runtime binding.
-                if self.in_comptime
-                    && self.resolve(&name).is_none()
-                    && let Some(tv) = self.lookup_type_var(&name)
-                {
-                    return Ok(Expr {
-                        span: e.span,
-                        ty: Ty::Unit,
-                        kind: ExprKind::TypeValue(Ty::TypeVar(tv)),
-                    });
-                }
-
-                // Variant names shadow locals — `None` is reserved.
-                if self.variant_constructors.contains_key(&name) {
-                    if let Some(expr) =
-                        self.try_lower_variant_call(&name, &[], Vec::new(), e.span, hint)?
-                    {
-                        return Ok(expr);
-                    }
-                }
-
-                let Some(local_id) = self.resolve(&name) else {
-                    return Err(Error {
-                        span: e.span,
-                        kind: ErrorKind::NameNotFound { name },
-                    });
-                };
-
-                let ty = self
-                    .bindings
-                    .get(&local_id)
-                    .expect("resolved name must have a recorded type")
-                    .clone();
-
-                // Inside a closure body: if `local_id` was bound in a
-                // non-global enclosing scope, it's a free variable — record
-                // it as a capture. The Local expr is left in place; a
-                // post-walk in `lower_closure` rewrites it to an env-field
-                // load once the env tuple's layout is known.
-                let depth = self
-                    .scopes
-                    .iter()
-                    .enumerate()
-                    .find_map(|(d, s)| s.values().any(|&v| v == local_id).then_some(d));
-                if let Some(ctx) = self.closure_capture_ctx.as_mut()
-                    && let Some(depth) = depth
-                    && depth > 0
-                    && depth < ctx.threshold_depth
-                {
-                    ctx.captures_by_id.entry(local_id).or_insert_with(|| {
-                        let idx = ctx.captures.len();
-                        ctx.captures.push((local_id, ty.clone()));
-                        idx
-                    });
-                }
-
-                Ok(Expr {
-                    span: e.span,
-                    ty,
-                    kind: ExprKind::Local(local_id),
-                })
-            }
+            ast::ExprKind::Identifier(name) => self.lower_identifier(name, e.span, hint),
             ast::ExprKind::TypeValue(type_expr) => {
                 if !self.in_comptime {
                     return Err(Error {
@@ -188,190 +124,13 @@ impl Lower {
                 })
             }
             ast::ExprKind::TypedFunctionRef { name, type_args } => {
-                let template_id = self.resolve(&name).ok_or_else(|| Error {
-                    span: e.span,
-                    kind: ErrorKind::NameNotFound { name: name.clone() },
-                })?;
-                let lowered_args: Vec<Ty> = type_args
-                    .iter()
-                    .map(|t| self.lower_type(t))
-                    .collect::<Result<_, _>>()?;
-
-                // The template may already be fully lowered (in self.templates)
-                // or may only have its signature registered (in pending_fn_sigs)
-                // if its body hasn't been lowered yet. Either source gives us
-                // the arity + signature info we need.
-                let (template_name, type_var_ids, param_tys, return_ty) =
-                    if let Some(t) = self.templates.get(&template_id) {
-                        (
-                            t.name.clone(),
-                            t.type_var_ids.clone(),
-                            t.params.iter().map(|p| p.ty.clone()).collect::<Vec<_>>(),
-                            t.return_ty.clone(),
-                        )
-                    } else if let Some(sig) = self.pending_fn_sigs.get(&template_id) {
-                        (
-                            name.clone(),
-                            sig.type_var_ids.clone(),
-                            sig.param_tys.clone(),
-                            sig.return_ty.clone(),
-                        )
-                    } else {
-                        return Err(Error {
-                            span: e.span,
-                            kind: ErrorKind::NotAGenericFunction { name },
-                        });
-                    };
-                if lowered_args.len() != type_var_ids.len() {
-                    return Err(Error {
-                        span: e.span,
-                        kind: ErrorKind::TypeArgArityMismatch {
-                            name: template_name,
-                            expected: type_var_ids.len(),
-                            found: lowered_args.len(),
-                        },
-                    });
-                }
-                // Build the function type with the type args substituted in,
-                // so the resulting expression's type is correct even in the
-                // deferred case.
-                let mut subst = HashMap::new();
-                for (tv, t) in type_var_ids.iter().zip(lowered_args.iter()) {
-                    subst.insert(*tv, t.clone());
-                }
-                let result_param_tys: Vec<Ty> =
-                    param_tys.iter().map(|p| self.substitute_ty(p, &subst)).collect();
-                let result_return_ty = self.substitute_ty(&return_ty, &subst);
-                let fn_ty = Ty::Function {
-                    params: result_param_tys,
-                    return_ty: Box::new(result_return_ty),
-                    varargs: false,
-                };
-                // Specialize now only when both (a) the args are concrete and
-                // (b) the template's body is available. Otherwise emit a
-                // DeferredFunctionRef the substitution pass will resolve.
-                let deferable = lowered_args.iter().any(ty_has_typevars)
-                    || !self.templates.contains_key(&template_id);
-                if deferable {
-                    return Ok(Expr {
-                        span: e.span,
-                        ty: fn_ty,
-                        kind: ExprKind::DeferredFunctionRef {
-                            template_id,
-                            type_args: lowered_args,
-                        },
-                    });
-                }
-                let specialized =
-                    self.specialize_call(template_id, &[], &lowered_args, e.span)?;
-                let final_ty = self.bindings[&specialized].clone();
-                Ok(Expr {
-                    span: e.span,
-                    ty: final_ty,
-                    kind: ExprKind::Local(specialized),
-                })
+                self.lower_typed_function_ref(name, type_args, e.span)
             }
             ast::ExprKind::Call {
                 callee,
                 type_args,
                 args,
-            } => {
-                // `comperror("msg")` inside a comptime body lowers to a
-                // CompError node that aborts compilation if reached during
-                // comptime evaluation.
-                if self.in_comptime
-                    && let ast::ExprKind::Identifier(n) = &callee.kind
-                    && n == "comperror"
-                {
-                    let message = match args.first().map(|a| &a.kind) {
-                        Some(ast::ExprKind::Const(ast::Const::Str(s))) => s.clone(),
-                        _ => {
-                            return Err(Error {
-                                span: e.span,
-                                kind: ErrorKind::ComptimeError {
-                                    message: "comperror expects a single string-literal argument"
-                                        .to_string(),
-                                },
-                            });
-                        }
-                    };
-                    return Ok(Expr {
-                        span: e.span,
-                        ty: Ty::Unit,
-                        kind: ExprKind::CompError(message),
-                    });
-                }
-
-                // Heap intrinsics: `alloc<T>(n)`, `realloc<T>(p, n)`, `free(p)`.
-                if let ast::ExprKind::Identifier(n) = &callee.kind {
-                    let intrinsic = match n.as_str() {
-                        "alloc" => Some(IntrinsicKind::Alloc),
-                        "realloc" => Some(IntrinsicKind::Realloc),
-                        "free" => Some(IntrinsicKind::Free),
-                        _ => None,
-                    };
-                    if let Some(kind) = intrinsic {
-                        return self.lower_intrinsic(kind, type_args, args, e.span);
-                    }
-                }
-
-                // Enum variant constructor: `Some(x)`, `Ok<Int, String>(42)`.
-                if let ast::ExprKind::Identifier(n) = &callee.kind
-                    && self.variant_constructors.contains_key(n)
-                {
-                    let name = n.clone();
-                    if let Some(expr) =
-                        self.try_lower_variant_call(&name, &type_args, args, e.span, hint)?
-                    {
-                        return Ok(expr);
-                    }
-                    unreachable!("variant_constructors entry guarantees Ok(Some)");
-                }
-
-                // Overloaded direct call: pick the overload matching the args.
-                if let ast::ExprKind::Identifier(name) = &callee.kind
-                    && self.overloads.get(name).is_some_and(|c| c.len() > 1)
-                {
-                    let name = name.clone();
-                    let has_closures = args
-                        .iter()
-                        .any(|a| matches!(a.kind, ast::ExprKind::Closure { .. }));
-                    let lowered_args: Vec<Expr> = if has_closures {
-                        self.lower_overloaded_call_args_with_closures(&name, args)?
-                    } else {
-                        args.into_iter()
-                            .map(|a| self.lower_expr(a))
-                            .collect::<Result<_, _>>()?
-                    };
-                    let arg_tys: Vec<Ty> = lowered_args.iter().map(|a| a.ty.clone()).collect();
-                    let explicit_type_args: Vec<Ty> = type_args
-                        .iter()
-                        .map(|t| self.lower_type(t))
-                        .collect::<Result<_, _>>()?;
-                    let fn_id = self.resolve_overload(&name, &arg_tys, e.span)?;
-                    let callee = Expr {
-                        span: e.span,
-                        ty: self.bindings[&fn_id].clone(),
-                        kind: ExprKind::Local(fn_id),
-                    };
-                    return self.finish_call(callee, lowered_args, explicit_type_args, e.span);
-                }
-
-                // Method call / UFCS: `recv.name(args)` becomes a field call
-                // (when `name` is a field holding a function) or the uniform
-                // form `name(recv, args)` otherwise.
-                if matches!(&callee.kind, ast::ExprKind::Field { .. }) {
-                    return self.lower_method_call(*callee, type_args, args, e.span);
-                }
-
-                let callee = self.lower_expr(*callee)?;
-                let explicit_type_args: Vec<Ty> = type_args
-                    .iter()
-                    .map(|t| self.lower_type(t))
-                    .collect::<Result<_, _>>()?;
-                let args = self.lower_call_args(&callee, args, &explicit_type_args, e.span)?;
-                self.finish_call(callee, args, explicit_type_args, e.span)
-            }
+            } => self.lower_call_kind(*callee, type_args, args, e.span, hint),
             ast::ExprKind::Unary { op, expr } => {
                 let operand = self.lower_expr(*expr)?;
                 let op = self.lower_unary(op);
@@ -445,47 +204,7 @@ impl Lower {
                 condition,
                 then_branch,
                 else_branch,
-            } => {
-                let condition = self.lower_expr(*condition)?;
-
-                let then_block = self.lower_block_with_hint(then_branch, hint)?;
-                let then_span = then_block.span;
-                let then_expr = Expr {
-                    span: then_span,
-                    ty: then_block.tail.ty.clone(),
-                    kind: ExprKind::Block(then_block),
-                };
-
-                let else_expr = match else_branch {
-                    Some(else_branch) => self.lower_expr_with_hint(*else_branch, hint)?,
-                    None => unit_expr(end_of(e.span)),
-                };
-
-                let (then_expr, else_expr) = if then_expr.ty != else_expr.ty {
-                    if else_expr.ty.is_number() && else_expr.ty != Ty::Int {
-                        let target = else_expr.ty.clone();
-                        (coerce_through_tails(then_expr, &target)?, else_expr)
-                    } else if then_expr.ty.is_number() && then_expr.ty != Ty::Int {
-                        let target = then_expr.ty.clone();
-                        (then_expr, coerce_through_tails(else_expr, &target)?)
-                    } else {
-                        (then_expr, else_expr)
-                    }
-                } else {
-                    (then_expr, else_expr)
-                };
-
-                let if_ty = then_expr.ty.clone();
-                Ok(Expr {
-                    span: e.span,
-                    ty: if_ty,
-                    kind: ExprKind::If {
-                        condition: Box::new(condition),
-                        then_branch: Box::new(then_expr),
-                        else_branch: Box::new(else_expr),
-                    },
-                })
-            }
+            } => self.lower_if_expr(*condition, then_branch, else_branch, e.span, hint),
             ast::ExprKind::Cast { expr, target } => {
                 let ty = self.lower_type(&target)?;
                 Ok(Expr {
@@ -655,79 +374,7 @@ impl Lower {
                 })
             }
             ast::ExprKind::Field { target, name } => {
-                let mut target = self.lower_expr(*target)?;
-                // Auto-deref through any chain of pointers so `p.x` works
-                // when `p: *T`, `**T`, etc. If the chain doesn't end in a
-                // struct, the NotAStruct check below catches it.
-                while let Ty::Ptr(inner) = target.ty.clone() {
-                    let pointee_ty = *inner;
-                    target = Expr {
-                        span: target.span,
-                        ty: pointee_ty,
-                        kind: ExprKind::Deref(Box::new(target)),
-                    };
-                }
-                let (display_name, fields) = match &target.ty {
-                    Ty::Struct(n) => {
-                        let def = self
-                            .structs
-                            .get(n)
-                            .expect("typed Struct must be registered");
-                        (n.clone(), def.fields.clone())
-                    }
-                    Ty::GenericStruct { name, args } => {
-                        let template = self
-                            .struct_templates
-                            .get(name)
-                            .cloned()
-                            .expect("GenericStruct must reference a known template");
-                        let subst: HashMap<TypeVarId, Ty> = template
-                            .type_var_ids
-                            .iter()
-                            .zip(args.iter())
-                            .map(|(tv, ty)| (*tv, ty.clone()))
-                            .collect();
-                        let substituted_fields: Vec<(String, Ty)> = template
-                            .fields
-                            .iter()
-                            .map(|(fname, fty)| {
-                                let ty = self.substitute_ty(fty, &subst);
-                                (fname.clone(), ty)
-                            })
-                            .collect();
-                        (name.clone(), substituted_fields)
-                    }
-                    other => {
-                        return Err(Error {
-                            span: target.span,
-                            kind: ErrorKind::NotAStruct {
-                                found: other.clone(),
-                            },
-                        });
-                    }
-                };
-
-                let (index, field_ty) = fields
-                    .iter()
-                    .enumerate()
-                    .find_map(|(i, (n, t))| (n == &name).then_some((i, t.clone())))
-                    .ok_or_else(|| Error {
-                        span: e.span,
-                        kind: ErrorKind::UnknownField {
-                            struct_name: display_name,
-                            field: name.clone(),
-                        },
-                    })?;
-
-                Ok(Expr {
-                    span: e.span,
-                    ty: field_ty,
-                    kind: ExprKind::Field {
-                        target: Box::new(target),
-                        name,
-                        index,
-                    },
-                })
+                self.lower_field_access(*target, name, e.span)
             }
             ast::ExprKind::Tuple(elems) => {
                 let lowered: Vec<Expr> = elems
@@ -796,6 +443,403 @@ impl Lower {
                 self.lower_match(*scrutinee, arms, e.span, hint)
             }
         }
+    }
+
+    // Big arms are extracted into their own methods to keep
+    // `lower_expr_with_hint_inner`'s stack frame small. In debug builds Rust
+    // reserves stack for all match arms' locals up front, so collapsing each
+    // arm into a one-line dispatch keeps the parent frame from ballooning.
+
+    fn lower_identifier(
+        &mut self,
+        name: String,
+        span: crate::lexer::types::Span,
+        hint: Option<&Ty>,
+    ) -> Result<Expr, Error> {
+        // Inside a `#comptime` body, a bare type-variable name used in
+        // expression position (e.g. `T` in `T == Int`) denotes a reified
+        // type value rather than a runtime binding.
+        if self.in_comptime
+            && self.resolve(&name).is_none()
+            && let Some(tv) = self.lookup_type_var(&name)
+        {
+            return Ok(Expr {
+                span,
+                ty: Ty::Unit,
+                kind: ExprKind::TypeValue(Ty::TypeVar(tv)),
+            });
+        }
+
+        // Variant names shadow locals — `None` is reserved.
+        if self.variant_constructors.contains_key(&name)
+            && let Some(expr) =
+                self.try_lower_variant_call(&name, &[], Vec::new(), span, hint)?
+        {
+            return Ok(expr);
+        }
+
+        let Some(local_id) = self.resolve(&name) else {
+            return Err(Error {
+                span,
+                kind: ErrorKind::NameNotFound { name },
+            });
+        };
+
+        let ty = self
+            .bindings
+            .get(&local_id)
+            .expect("resolved name must have a recorded type")
+            .clone();
+
+        // Inside a closure body: if `local_id` was bound in a non-global
+        // enclosing scope, it's a free variable — record it as a capture. The
+        // Local expr is left in place; a post-walk in `lower_closure`
+        // rewrites it to an env-field load once the env tuple's layout is
+        // known.
+        let depth = self
+            .scopes
+            .iter()
+            .enumerate()
+            .find_map(|(d, s)| s.values().any(|&v| v == local_id).then_some(d));
+        if let Some(ctx) = self.closure_capture_ctx.as_mut()
+            && let Some(depth) = depth
+            && depth > 0
+            && depth < ctx.threshold_depth
+        {
+            ctx.captures_by_id.entry(local_id).or_insert_with(|| {
+                let idx = ctx.captures.len();
+                ctx.captures.push((local_id, ty.clone()));
+                idx
+            });
+        }
+
+        Ok(Expr {
+            span,
+            ty,
+            kind: ExprKind::Local(local_id),
+        })
+    }
+
+    fn lower_call_kind(
+        &mut self,
+        callee: ast::Expr,
+        type_args: Vec<ast::TypeExpr>,
+        args: Vec<ast::Expr>,
+        span: crate::lexer::types::Span,
+        hint: Option<&Ty>,
+    ) -> Result<Expr, Error> {
+        // `comperror("msg")` inside a comptime body lowers to a CompError
+        // node that aborts compilation if reached during comptime evaluation.
+        if self.in_comptime
+            && let ast::ExprKind::Identifier(n) = &callee.kind
+            && n == "comperror"
+        {
+            let message = match args.first().map(|a| &a.kind) {
+                Some(ast::ExprKind::Const(ast::Const::Str(s))) => s.clone(),
+                _ => {
+                    return Err(Error {
+                        span,
+                        kind: ErrorKind::ComptimeError {
+                            message: "comperror expects a single string-literal argument"
+                                .to_string(),
+                        },
+                    });
+                }
+            };
+            return Ok(Expr {
+                span,
+                ty: Ty::Unit,
+                kind: ExprKind::CompError(message),
+            });
+        }
+
+        // Heap intrinsics: `alloc<T>(n)`, `realloc<T>(p, n)`, `free(p)`.
+        if let ast::ExprKind::Identifier(n) = &callee.kind {
+            let intrinsic = match n.as_str() {
+                "alloc" => Some(IntrinsicKind::Alloc),
+                "realloc" => Some(IntrinsicKind::Realloc),
+                "free" => Some(IntrinsicKind::Free),
+                _ => None,
+            };
+            if let Some(kind) = intrinsic {
+                return self.lower_intrinsic(kind, type_args, args, span);
+            }
+        }
+
+        // Enum variant constructor: `Some(x)`, `Ok<Int, String>(42)`.
+        if let ast::ExprKind::Identifier(n) = &callee.kind
+            && self.variant_constructors.contains_key(n)
+        {
+            let name = n.clone();
+            if let Some(expr) =
+                self.try_lower_variant_call(&name, &type_args, args, span, hint)?
+            {
+                return Ok(expr);
+            }
+            unreachable!("variant_constructors entry guarantees Ok(Some)");
+        }
+
+        // Overloaded direct call: pick the overload matching the args.
+        if let ast::ExprKind::Identifier(name) = &callee.kind
+            && self.overloads.get(name).is_some_and(|c| c.len() > 1)
+        {
+            let name = name.clone();
+            let has_closures = args
+                .iter()
+                .any(|a| matches!(a.kind, ast::ExprKind::Closure { .. }));
+            let lowered_args: Vec<Expr> = if has_closures {
+                self.lower_overloaded_call_args_with_closures(&name, args)?
+            } else {
+                args.into_iter()
+                    .map(|a| self.lower_expr(a))
+                    .collect::<Result<_, _>>()?
+            };
+            let arg_tys: Vec<Ty> = lowered_args.iter().map(|a| a.ty.clone()).collect();
+            let explicit_type_args: Vec<Ty> = type_args
+                .iter()
+                .map(|t| self.lower_type(t))
+                .collect::<Result<_, _>>()?;
+            let fn_id = self.resolve_overload(&name, &arg_tys, span)?;
+            let callee = Expr {
+                span,
+                ty: self.bindings[&fn_id].clone(),
+                kind: ExprKind::Local(fn_id),
+            };
+            return self.finish_call(callee, lowered_args, explicit_type_args, span);
+        }
+
+        // Method call / UFCS: `recv.name(args)` becomes a field call (when
+        // `name` is a field holding a function) or the uniform form
+        // `name(recv, args)` otherwise.
+        if matches!(&callee.kind, ast::ExprKind::Field { .. }) {
+            return self.lower_method_call(callee, type_args, args, span);
+        }
+
+        let callee = self.lower_expr(callee)?;
+        let explicit_type_args: Vec<Ty> = type_args
+            .iter()
+            .map(|t| self.lower_type(t))
+            .collect::<Result<_, _>>()?;
+        let args = self.lower_call_args(&callee, args, &explicit_type_args, span)?;
+        self.finish_call(callee, args, explicit_type_args, span)
+    }
+
+    fn lower_typed_function_ref(
+        &mut self,
+        name: String,
+        type_args: Vec<ast::TypeExpr>,
+        span: crate::lexer::types::Span,
+    ) -> Result<Expr, Error> {
+        let template_id = self.resolve(&name).ok_or_else(|| Error {
+            span,
+            kind: ErrorKind::NameNotFound { name: name.clone() },
+        })?;
+        let lowered_args: Vec<Ty> = type_args
+            .iter()
+            .map(|t| self.lower_type(t))
+            .collect::<Result<_, _>>()?;
+
+        // The template may already be fully lowered (in self.templates) or
+        // may only have its signature registered (in pending_fn_sigs) if its
+        // body hasn't been lowered yet. Either source gives us the arity +
+        // signature info we need.
+        let (template_name, type_var_ids, param_tys, return_ty) =
+            if let Some(t) = self.templates.get(&template_id) {
+                (
+                    t.name.clone(),
+                    t.type_var_ids.clone(),
+                    t.params.iter().map(|p| p.ty.clone()).collect::<Vec<_>>(),
+                    t.return_ty.clone(),
+                )
+            } else if let Some(sig) = self.pending_fn_sigs.get(&template_id) {
+                (
+                    name.clone(),
+                    sig.type_var_ids.clone(),
+                    sig.param_tys.clone(),
+                    sig.return_ty.clone(),
+                )
+            } else {
+                return Err(Error {
+                    span,
+                    kind: ErrorKind::NotAGenericFunction { name },
+                });
+            };
+        if lowered_args.len() != type_var_ids.len() {
+            return Err(Error {
+                span,
+                kind: ErrorKind::TypeArgArityMismatch {
+                    name: template_name,
+                    expected: type_var_ids.len(),
+                    found: lowered_args.len(),
+                },
+            });
+        }
+        // Build the function type with the type args substituted in, so the
+        // resulting expression's type is correct even in the deferred case.
+        let mut subst = HashMap::new();
+        for (tv, t) in type_var_ids.iter().zip(lowered_args.iter()) {
+            subst.insert(*tv, t.clone());
+        }
+        let result_param_tys: Vec<Ty> =
+            param_tys.iter().map(|p| self.substitute_ty(p, &subst)).collect();
+        let result_return_ty = self.substitute_ty(&return_ty, &subst);
+        let fn_ty = Ty::Function {
+            params: result_param_tys,
+            return_ty: Box::new(result_return_ty),
+            varargs: false,
+        };
+        // Specialize now only when both (a) the args are concrete and (b) the
+        // template's body is available. Otherwise emit a DeferredFunctionRef
+        // the substitution pass will resolve.
+        let deferable = lowered_args.iter().any(ty_has_typevars)
+            || !self.templates.contains_key(&template_id);
+        if deferable {
+            return Ok(Expr {
+                span,
+                ty: fn_ty,
+                kind: ExprKind::DeferredFunctionRef {
+                    template_id,
+                    type_args: lowered_args,
+                },
+            });
+        }
+        let specialized = self.specialize_call(template_id, &[], &lowered_args, span)?;
+        let final_ty = self.bindings[&specialized].clone();
+        Ok(Expr {
+            span,
+            ty: final_ty,
+            kind: ExprKind::Local(specialized),
+        })
+    }
+
+    fn lower_field_access(
+        &mut self,
+        target: ast::Expr,
+        name: String,
+        span: crate::lexer::types::Span,
+    ) -> Result<Expr, Error> {
+        let mut target = self.lower_expr(target)?;
+        // Auto-deref through any chain of pointers so `p.x` works when
+        // `p: *T`, `**T`, etc. If the chain doesn't end in a struct, the
+        // NotAStruct check below catches it.
+        while let Ty::Ptr(inner) = target.ty.clone() {
+            let pointee_ty = *inner;
+            target = Expr {
+                span: target.span,
+                ty: pointee_ty,
+                kind: ExprKind::Deref(Box::new(target)),
+            };
+        }
+        let (display_name, fields) = match &target.ty {
+            Ty::Struct(n) => {
+                let def = self
+                    .structs
+                    .get(n)
+                    .expect("typed Struct must be registered");
+                (n.clone(), def.fields.clone())
+            }
+            Ty::GenericStruct { name: gname, args } => {
+                let template = self
+                    .struct_templates
+                    .get(gname)
+                    .cloned()
+                    .expect("GenericStruct must reference a known template");
+                let subst: HashMap<TypeVarId, Ty> = template
+                    .type_var_ids
+                    .iter()
+                    .zip(args.iter())
+                    .map(|(tv, ty)| (*tv, ty.clone()))
+                    .collect();
+                let substituted_fields: Vec<(String, Ty)> = template
+                    .fields
+                    .iter()
+                    .map(|(fname, fty)| {
+                        let ty = self.substitute_ty(fty, &subst);
+                        (fname.clone(), ty)
+                    })
+                    .collect();
+                (gname.clone(), substituted_fields)
+            }
+            other => {
+                return Err(Error {
+                    span: target.span,
+                    kind: ErrorKind::NotAStruct {
+                        found: other.clone(),
+                    },
+                });
+            }
+        };
+
+        let (index, field_ty) = fields
+            .iter()
+            .enumerate()
+            .find_map(|(i, (n, t))| (n == &name).then_some((i, t.clone())))
+            .ok_or_else(|| Error {
+                span,
+                kind: ErrorKind::UnknownField {
+                    struct_name: display_name,
+                    field: name.clone(),
+                },
+            })?;
+
+        Ok(Expr {
+            span,
+            ty: field_ty,
+            kind: ExprKind::Field {
+                target: Box::new(target),
+                name,
+                index,
+            },
+        })
+    }
+
+    fn lower_if_expr(
+        &mut self,
+        condition: ast::Expr,
+        then_branch: ast::Block,
+        else_branch: Option<Box<ast::Expr>>,
+        span: crate::lexer::types::Span,
+        hint: Option<&Ty>,
+    ) -> Result<Expr, Error> {
+        let condition = self.lower_expr(condition)?;
+
+        let then_block = self.lower_block_with_hint(then_branch, hint)?;
+        let then_span = then_block.span;
+        let then_expr = Expr {
+            span: then_span,
+            ty: then_block.tail.ty.clone(),
+            kind: ExprKind::Block(then_block),
+        };
+
+        let else_expr = match else_branch {
+            Some(else_branch) => self.lower_expr_with_hint(*else_branch, hint)?,
+            None => unit_expr(end_of(span)),
+        };
+
+        let (then_expr, else_expr) = if then_expr.ty != else_expr.ty {
+            if else_expr.ty.is_number() && else_expr.ty != Ty::Int {
+                let target = else_expr.ty.clone();
+                (coerce_through_tails(then_expr, &target)?, else_expr)
+            } else if then_expr.ty.is_number() && then_expr.ty != Ty::Int {
+                let target = then_expr.ty.clone();
+                (then_expr, coerce_through_tails(else_expr, &target)?)
+            } else {
+                (then_expr, else_expr)
+            }
+        } else {
+            (then_expr, else_expr)
+        };
+
+        let if_ty = then_expr.ty.clone();
+        Ok(Expr {
+            span,
+            ty: if_ty,
+            kind: ExprKind::If {
+                condition: Box::new(condition),
+                then_branch: Box::new(then_expr),
+                else_branch: Box::new(else_expr),
+            },
+        })
     }
 
     /// Finishes a call once the callee and arguments are lowered: coerces
