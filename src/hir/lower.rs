@@ -723,17 +723,14 @@ impl Lower {
         };
 
         // `let x: T;` — no initializer. Synthesize a zero-pattern value of T.
+        // Generic `T` is fine here: `substitute_expr` rewrites the ZeroInit's
+        // type at specialization. Whether the resulting concrete type actually
+        // supports zero-init (and any later ops on it) is checked then.
         let Some(value_ast) = d.value else {
             let target = expected.ok_or_else(|| Error {
                 span: d.span,
                 kind: ErrorKind::MissingTypeForZeroInit,
             })?;
-            if ty_has_typevars(&target) {
-                return Err(Error {
-                    span: d.span,
-                    kind: ErrorKind::ZeroInitOfGenericType,
-                });
-            }
             let id = self.id_gen.fresh();
             self.current_scope_mut().insert(d.name.clone(), id);
             self.bindings.insert(id, target.clone());

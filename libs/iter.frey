@@ -107,8 +107,8 @@ let count = <$T>(it: Iter<T>) -> Int {
     n
 };
 
-let sum = (it: Iter<Int>) -> Int {
-    let total = 0;
+let sum = (it: Iter<$T>) -> T {
+    let total: T;
     let done = 0;
     while done == 0 {
         match (it.next)() {

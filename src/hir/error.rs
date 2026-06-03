@@ -144,9 +144,6 @@ pub enum ErrorKind {
     },
     /// `let x;` — no value and no `: T`, nothing to zero-initialize against.
     MissingTypeForZeroInit,
-    /// `let x: T;` where `T` still contains a TypeVar (zero pattern needs a
-    /// concrete layout).
-    ZeroInitOfGenericType,
     /// `extern (...)` was used outside a top-level `let name = extern (...);`.
     ExternMustBeTopLevel,
     /// `null` was used in a position where the expected pointer type isn't
@@ -355,12 +352,6 @@ impl fmt::Display for ErrorKind {
                 write!(
                     f,
                     "`let name;` requires a `: T` annotation so the zero-initializer has a layout"
-                )
-            }
-            ErrorKind::ZeroInitOfGenericType => {
-                write!(
-                    f,
-                    "cannot zero-initialize a generic type; provide a concrete `T` in the annotation"
                 )
             }
             ErrorKind::ExternMustBeTopLevel => {
